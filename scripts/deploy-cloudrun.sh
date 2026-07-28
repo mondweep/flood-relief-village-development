@@ -23,6 +23,13 @@
 #
 set -euo pipefail
 
+# Some managed/CI environments preset CLOUDSDK_AUTH_ACCESS_TOKEN to a token
+# minted for a different purpose. gcloud prefers it over the credentials from
+# `gcloud auth login`, so every call fails ACCESS_TOKEN_TYPE_UNSUPPORTED while
+# `gcloud auth list` still shows the account as active — a confusing pairing.
+# Drop it so the logged-in user's credentials are used.
+unset CLOUDSDK_AUTH_ACCESS_TOKEN
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
