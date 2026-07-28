@@ -40,10 +40,19 @@ Only `packages/api` is a running process; everything else is a library.
 
 ```bash
 npm install
-npm test          # 766 tests
+npm test          # 814 tests
 npm run typecheck # tsc --noEmit, strict
-npm run dev       # API on http://localhost:8080, in-memory persistence
+npm run dev       # build + serve on http://localhost:8080, in-memory persistence
 ```
+
+> **`dev` does not watch.** It bundles once, then serves. A build step is
+> mandatory here — Node's type stripping does not rewrite this codebase's `.js`
+> import specifiers, and the dashboard is inlined through an esbuild-only
+> `.html` text loader — so the API cannot be run straight from TypeScript
+> source. The practical consequence: **editing `packages/web/src/index.html` (or
+> any source file) changes nothing until you re-run `npm run dev`.** Refreshing
+> the browser will keep showing the previously bundled page, with no warning
+> that it is stale.
 
 ```bash
 curl localhost:8080/health          # {"status":"ok","persistence":"memory",...}
