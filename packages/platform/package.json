@@ -11,6 +11,10 @@
     "@afrip/ngo-coordination": "*",
     "@afrip/recovery-intelligence": "*",
     "@afrip/issue-tracking": "*",
-    "@afrip/beneficiary-registry": "*"
+    "@afrip/beneficiary-registry": "*",
+    "@afrip/fund-monitoring": "*",
+    "@afrip/volunteer-management": "*",
+    "@afrip/development-planning": "*",
+    "@afrip/social-media-intelligence": "*"
   }
 }

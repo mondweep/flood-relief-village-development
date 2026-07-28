@@ -13,7 +13,10 @@ const TOKEN = "s3cret-relief-token";
  * built `dist/server.js` to prove the markup really was inlined.
  */
 const MARKER = "AFRIP";
-const TITLE_MARKER = "Flood Recovery Dashboard";
+// Matches the <title>. Deliberately a substring rather than the full title, so
+// renaming the product surface does not fail a test about whether HTML is being
+// served at all — but specific enough that an empty or placeholder document does.
+const TITLE_MARKER = "AFRIP";
 
 describe("dashboard document", () => {
   it("is inlined into the bundle as a non-trivial HTML string", () => {

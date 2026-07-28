@@ -1,4 +1,5 @@
 import { json, serviceUnavailable, type HttpResponse } from "../http-result.js";
+import { partialPersistenceOf } from "../persistence.js";
 import type { Router } from "../router.js";
 import type { RouteDeps } from "./deps.js";
 
@@ -8,16 +9,21 @@ import type { RouteDeps } from "./deps.js";
  * cannot be trusted during an incident.
  */
 export function registerHealthRoutes(router: Router, deps: RouteDeps): void {
-  router.get("/health", async (): Promise<HttpResponse> =>
-    json(200, {
+  router.get("/health", async (): Promise<HttpResponse> => {
+    // Present only when the runtime is partly durable. `persistence: "supabase"`
+    // on its own would let an operator assume every context survives a restart;
+    // four of them do not, and a health endpoint is exactly where that belongs.
+    const partial = partialPersistenceOf(deps.runtime);
+    return json(200, {
       status: "ok",
       persistence: deps.runtime.mode,
       version: deps.config.version,
       // Surfaced so an operator can see at a glance that the stopgap token gate
       // is switched off in this revision.
       auth: deps.config.apiToken === null ? "disabled" : "bearer",
-    }),
-  );
+      ...(partial === null ? {} : { partialPersistence: partial }),
+    });
+  });
 
   router.get("/ready", async (): Promise<HttpResponse> => {
     const result = await deps.runtime.checkReady();

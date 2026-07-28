@@ -10,6 +10,41 @@ import type { ApiConfig, PersistenceMode } from "./config.js";
 import { BeneficiaryDirectory } from "./projections.js";
 
 /**
+ * The bounded contexts the composition root wires for which NO Supabase adapter
+ * exists yet — only an in-memory one. Their tables are already in
+ * `supabase/migrations/00001_initial_schema.sql`, so writing the adapters is
+ * additive work; until someone does, `PERSISTENCE=supabase` genuinely means
+ * "supabase for six contexts, process memory for these four".
+ *
+ * Each entry lists the `PlatformRepositories` ports the context owns, so an
+ * operator who injects durable adapters by hand drops off this list instead of
+ * being warned about a problem they have already solved.
+ */
+export const CONTEXTS_WITHOUT_SUPABASE_ADAPTER: ReadonlyArray<{
+  readonly context: string;
+  readonly ports: readonly (keyof NonNullable<PlatformOverrides["repositories"]>)[];
+}> = [
+  { context: "fund-monitoring", ports: ["project"] },
+  { context: "volunteer-management", ports: ["volunteer"] },
+  { context: "development-planning", ports: ["plan"] },
+  { context: "social-media-intelligence", ports: ["signal", "alert"] },
+];
+
+/**
+ * What `GET /health` discloses when the runtime is only partly durable. Absent
+ * from the payload when every wired context is backed by the reported mode.
+ */
+export interface PartialPersistence {
+  /** Always false — the field exists only when something is NOT durable. */
+  readonly durable: false;
+  readonly memoryBackedContexts: readonly string[];
+  readonly detail: string;
+}
+
+export const PARTIAL_PERSISTENCE_DETAIL =
+  "no supabase adapter exists for these contexts yet; their data is held in process memory and is lost on restart";
+
+/**
  * Everything the HTTP layer needs from the storage tier: the wired use cases,
  * the API-owned read models bound to that same platform's event bus, and a
  * liveness probe for `GET /ready`.
@@ -18,8 +53,24 @@ export interface PlatformRuntime {
   readonly mode: PersistenceMode;
   readonly platform: Platform;
   readonly beneficiaryDirectory: BeneficiaryDirectory;
+  /**
+   * Contexts served from process memory DESPITE `mode` saying otherwise. Empty
+   * in memory mode — there the mode already tells the whole truth, and calling
+   * a wholly volatile runtime "partial" would understate it.
+   */
+  readonly memoryBackedContexts: readonly string[];
   /** Resolves ok when the datastore is reachable; err with a reason otherwise. */
   checkReady(): Promise<Result<{ mode: PersistenceMode }>>;
+}
+
+/** The `/health` disclosure for a runtime, or null when it has nothing to disclose. */
+export function partialPersistenceOf(runtime: PlatformRuntime): PartialPersistence | null {
+  if (runtime.memoryBackedContexts.length === 0) return null;
+  return {
+    durable: false,
+    memoryBackedContexts: runtime.memoryBackedContexts,
+    detail: PARTIAL_PERSISTENCE_DETAIL,
+  };
 }
 
 export function createMemoryRuntime(overrides: PlatformOverrides = {}): PlatformRuntime {
@@ -28,6 +79,9 @@ export function createMemoryRuntime(overrides: PlatformOverrides = {}): Platform
     mode: "memory",
     platform,
     beneficiaryDirectory: new BeneficiaryDirectory(platform.bus),
+    // `mode: "memory"` already says every context is volatile; repeating four of
+    // them under a "partial" heading would imply the other six are durable.
+    memoryBackedContexts: [],
     // In-memory adapters live inside this process: if the server answers at all,
     // the datastore is reachable.
     checkReady: async () => ok({ mode: "memory" as const }),
@@ -65,8 +119,15 @@ export function createSupabaseRuntimeFromClient(
       recoveryIndex: new SupabaseRecoveryIndexRepository(client, schema),
       issue: new SupabaseIssueRepository(client, schema),
       beneficiary: new SupabaseBeneficiaryRepository(client, schema),
+      // The remaining five ports (project, volunteer, plan, signal, alert) are
+      // deliberately NOT listed: no Supabase adapter has been written for them,
+      // so the composition root falls back to their in-memory adapters. That
+      // fallback is disclosed on `/health` rather than left to be discovered by
+      // an operator wondering where the volunteer hours went after a restart.
+      //
       // An explicit per-context override still wins, so a test or a future
-      // hybrid deployment can keep one context in memory.
+      // hybrid deployment can keep one context in memory — or supply the
+      // missing durable adapter without touching this file.
       ...overrides.repositories,
     },
   });
@@ -75,6 +136,13 @@ export function createSupabaseRuntimeFromClient(
     mode: "supabase",
     platform,
     beneficiaryDirectory: new BeneficiaryDirectory(platform.bus),
+    // The honest half of the seam above: those four contexts got no Supabase
+    // adapter, so this runtime is only partly durable and says so out loud on
+    // `/health`. A context whose every port the caller overrode is left off —
+    // they supplied their own adapter and we cannot claim it is volatile.
+    memoryBackedContexts: CONTEXTS_WITHOUT_SUPABASE_ADAPTER.filter(
+      (entry) => !entry.ports.every((port) => overrides.repositories?.[port] !== undefined),
+    ).map((entry) => entry.context),
     // A real round trip: an unreachable host, a bad key or an unmigrated schema
     // all surface here as a not-ready Result. It probes the SAME schema the
     // adapters write to, so a project missing `assam_floods` (or not exposing

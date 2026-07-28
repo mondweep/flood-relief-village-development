@@ -4,55 +4,80 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
-<meta name="description" content="AFRIP — Assam Flood Recovery Intelligence Platform. Public recovery transparency and field operations.">
-<title>AFRIP — Flood Recovery Dashboard</title>
+<meta name="description" content="AFRIP — Assam Flood Recovery Intelligence Platform. Public transparency, district operations, NGO coordination and village recovery profiles.">
+<title>AFRIP — Flood Recovery Intelligence Platform</title>
 <!--
-  AFRIP dashboard — single self-contained file. No build step, no framework, no CDN.
-  Everything is served from the same origin as the API, so every request uses a
-  relative path (/health, /public/villages, ...).
+  AFRIP dashboard — ONE self-contained file. No build step for this document, no
+  framework, no CDN, no external font/image/URL. Everything is served from the
+  same origin as the API, so every request uses a relative path.
+
+  The document is a five-view application (PRD §4 Personas, §5 F3.6):
+
+      Public     transparency, no credential          (landing view)
+      District   operational picture for the officer  (token)
+      NGO        the lead NGO's own villages          (token)
+      Village    one village's full profile           (token)
+      Operations every write workflow                 (token)
 
   Layout of this file:
-    1. Styles          — tokens, layout, components, dark mode, reduced motion
-    2. Markup          — public zone (no auth) then operations zone (bearer token)
-    3. Script §1       — helpers (escaping, DOM, fetch wrapper)
-    4. Script §2       — public zone rendering
-    5. Script §3       — token session + operations forms
+    STYLES  1. tokens · 2. shell & nav · 3. components · 4. forms · 5. motion
+    MARKUP  icon sprite · header · nav · five views · footer
+    SCRIPT  §1  helpers (escaping, fetch, formatting, section states)
+            §2  view router + shared state
+            §3  shared renderers (severity, funds, recovery, rules)
+            §4  Public view
+            §5  District view
+            §6  NGO view
+            §7  Village view
+            §8  Operations: token session, workflow specs, form engine
+            §9  boot
+
+  Defensive by design: several endpoints this document reads are still landing.
+  Every section distinguishes "the route is not deployed" (a clean, explanatory
+  degrade) from "the request failed" (an error with a retry) from "there is
+  nothing yet" (a first-run empty state). No section is ever silently blank.
 -->
 <style>
-/* ------------------------------------------------------------------ *
+/* ==================================================================== *
  * 1. Design tokens
  * Restrained, low-chroma palette. This is disaster-recovery tooling:
- * colour is used to classify, never to decorate.
- * ------------------------------------------------------------------ */
+ * colour classifies, it never decorates — and it is never the only signal.
+ * ==================================================================== */
 :root {
-  --bg: #f5f6f4;  --surface: #ffffff;  --surface-2: #eeefec;
-  --ink: #1b1d20; --ink-muted: #5a6069;
-  --line: #dcdedb; --line-strong: #c3c7c2;
-  --accent: #2f5d62; --accent-ink: #ffffff; --ok: #2c6b4f;
-  --warn-bg: #fdf4e3; --warn-line: #d9a441; --warn-ink: #6b4a09;
-  --danger: #a3302c; --danger-bg: #fbeceb;
+  --bg: #f4f6f4; --surface: #ffffff; --surface-2: #ecefec; --surface-3: #e2e6e2;
+  --ink: #1b1d20; --ink-muted: #5a6069; --ink-faint: #838b94;
+  --line: #dcdedb; --line-strong: #c2c7c2;
+  --accent: #2f5d62; --accent-ink: #ffffff; --accent-soft: #d9e6e5; --accent-strong: #234a4e;
+  --ok: #2c6b4f; --ok-bg: #e6f0ea;
+  --warn-bg: #fdf4e3; --warn-line: #b3831f; --warn-ink: #6b4a09;
+  --danger: #a3302c; --danger-bg: #fbeceb; --danger-ink: #7d2320;
+  --fund-spent: #2f5d62; --fund-released: #8fb4b2; --fund-rest: #dfe4e2;
   --sev-minor-ink: #1f5f4a;      --sev-minor-bg: #e3f0ea;
   --sev-moderate-ink: #6f5209;   --sev-moderate-bg: #f7eed8;
   --sev-severe-ink: #8a4318;     --sev-severe-bg: #f9e8dd;
   --sev-critical-ink: #8c2420;   --sev-critical-bg: #f8e2e1;
 
-  --radius: 10px;
+  --radius: 10px; --radius-sm: 8px;
   --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --shadow: 0 1px 2px rgba(16, 22, 26, 0.05);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #15171a; --surface: #1c1f23; --surface-2: #23272c;
-    --ink: #e7e9ea; --ink-muted: #a0a7b0;
-    --line: #2c3138; --line-strong: #3b424a;
-    --accent: #8ab8b6; --accent-ink: #10201f; --ok: #74b892;
-    --warn-bg: #33290f; --warn-line: #c79a3d; --warn-ink: #f0dcaa;
-    --danger: #e79b96; --danger-bg: #3a1e1d;
+    --bg: #14161a; --surface: #1c1f23; --surface-2: #23272c; --surface-3: #2b3037;
+    --ink: #e7e9ea; --ink-muted: #a2a9b2; --ink-faint: #838b94;
+    --line: #2c3138; --line-strong: #3d444d;
+    --accent: #8ab8b6; --accent-ink: #10201f; --accent-soft: #23383a; --accent-strong: #a8cecc;
+    --ok: #74b892; --ok-bg: #1c2a24;
+    --warn-bg: #322810; --warn-line: #c79a3d; --warn-ink: #f0dcaa;
+    --danger: #e79b96; --danger-bg: #391e1d; --danger-ink: #f0b8b4;
+    --fund-spent: #8ab8b6; --fund-released: #4d6f70; --fund-rest: #2b3037;
     --sev-minor-ink: #93cbb2;      --sev-minor-bg: #1d2f28;
     --sev-moderate-ink: #dcc07f;   --sev-moderate-bg: #322a15;
     --sev-severe-ink: #e5a97f;     --sev-severe-bg: #35251a;
     --sev-critical-ink: #eda19c;   --sev-critical-bg: #37201f;
+    --shadow: none;
   }
 }
 
@@ -61,48 +86,83 @@ html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; font-family: var(--font); font-size: 16px; line-height: 1.5;
   color: var(--ink); background: var(--bg);
-  overflow-x: hidden;            /* the page itself never scrolls sideways */
+  overflow-x: hidden;                       /* the page itself never scrolls sideways */
+  padding-bottom: calc(72px + env(safe-area-inset-bottom));   /* room for the tab bar */
 }
-h1, h2, h3 { line-height: 1.25; margin: 0; font-weight: 600; }
+h1, h2, h3, h4 { line-height: 1.25; margin: 0; font-weight: 600; }
 p { margin: 0; }
 a { color: inherit; }
-
-/* Visible focus everywhere — keyboard users are first-class. */
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+.sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
 
-.skip-link {
-  position: absolute; left: -9999px; top: 0; z-index: 20;
-  background: var(--accent); color: var(--accent-ink); padding: var(--s3);
-}
+.skip-link { position: absolute; left: -9999px; top: 0; z-index: 60; background: var(--accent); color: var(--accent-ink); padding: var(--s3); }
 .skip-link:focus { left: 0; }
 
-.wrap { width: 100%; max-width: 900px; margin: 0 auto; padding: 0 var(--s4); }
+.wrap { width: 100%; max-width: 1000px; margin: 0 auto; padding: 0 var(--s4); }
+.hidden { display: none !important; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; border: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
-/* ------------------------------------------------------------------ *
- * Header + connection indicator
- * ------------------------------------------------------------------ */
-.site-header {
-  background: var(--surface); border-bottom: 1px solid var(--line);
-  padding: var(--s4) 0; position: sticky; top: 0; z-index: 10;
-}
-.header-inner { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: baseline; justify-content: space-between; }
-.brand { font-size: 1.25rem; letter-spacing: 0.01em; }
-.brand span { display: block; font-size: 0.8125rem; font-weight: 400; color: var(--ink-muted); letter-spacing: 0; }
-.conn {
-  display: inline-flex; align-items: center; gap: var(--s2); font-size: 0.8125rem;
+/* ==================================================================== *
+ * 2. Shell — header, navigation, view frames
+ * ==================================================================== */
+.site-header { background: var(--surface); border-bottom: 1px solid var(--line); padding: var(--s3) 0; }
+.header-inner { display: flex; flex-wrap: wrap; gap: var(--s2) var(--s3); align-items: center; justify-content: space-between; }
+.brand { font-size: 1.125rem; letter-spacing: 0.01em; }
+.brand span { display: block; font-size: 0.75rem; font-weight: 400; color: var(--ink-muted); letter-spacing: 0; }
+.header-status { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; }
+.pill {
+  display: inline-flex; align-items: center; gap: var(--s2); font-size: 0.75rem;
   color: var(--ink-muted); background: var(--surface-2);
-  border: 1px solid var(--line); border-radius: 999px; padding: 6px var(--s3);
+  border: 1px solid var(--line); border-radius: 999px; padding: 5px 10px; white-space: nowrap;
 }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line-strong); flex: none; }
-.dot.up { background: var(--ok); }
-.dot.down { background: var(--danger); }
-.dot.pending { background: var(--warn-line); }
+.dot.up { background: var(--ok); } .dot.down { background: var(--danger); } .dot.pending { background: var(--warn-line); }
 
-/* ------------------------------------------------------------------ *
- * Banners (readiness, network failure)
- * ------------------------------------------------------------------ */
+/* Tab bar: fixed to the bottom on a phone (thumb reach), a top strip on wider screens. */
+.nav {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
+  background: var(--surface); border-top: 1px solid var(--line);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.nav-inner { display: flex; width: 100%; max-width: 1000px; margin: 0 auto; }
+.nav a {
+  flex: 1 1 0; min-width: 0; min-height: 60px; text-decoration: none; color: var(--ink-muted);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+  font-size: 0.6875rem; font-weight: 500; padding: 6px 2px; border-top: 3px solid transparent;
+}
+.nav a svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.nav a[aria-current="page"] { color: var(--accent-strong); border-top-color: var(--accent); background: var(--surface-2); }
+.nav a .lock { position: absolute; }
+@media (min-width: 760px) {
+  body { padding-bottom: 0; }
+  .nav { position: sticky; top: 0; bottom: auto; border-top: 0; border-bottom: 1px solid var(--line); }
+  .nav-inner { padding: 0 var(--s4); }
+  .nav a { flex: 0 1 auto; flex-direction: row; gap: var(--s2); font-size: 0.875rem; min-height: 52px; padding: 0 var(--s4); border-top: 0; border-bottom: 3px solid transparent; }
+  .nav a[aria-current="page"] { border-bottom-color: var(--accent); background: transparent; }
+}
+
+main { padding-top: var(--s4); padding-bottom: var(--s7); }
+main:focus { outline: none; }
+.view-head { border-top: 2px solid var(--ink); padding-top: var(--s3); margin-bottom: var(--s4); }
+.view-head h2 { font-size: 1.0625rem; }
+.view-head p { font-size: 0.875rem; color: var(--ink-muted); margin-top: var(--s1); max-width: 62ch; }
+.section { margin-top: var(--s5); }
+.section > h3, .subhead {
+  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--ink-muted); margin-bottom: var(--s3); font-weight: 600;
+}
+.section-note { font-size: 0.8125rem; color: var(--ink-muted); margin: calc(-1 * var(--s2)) 0 var(--s3); max-width: 62ch; }
+
+/* ==================================================================== *
+ * 3. Components
+ * ==================================================================== */
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s4); box-shadow: var(--shadow); }
+.card + .card { margin-top: var(--s2); }
+.card-head { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: baseline; justify-content: space-between; margin-bottom: var(--s2); }
+.card-title { font-weight: 600; }
+
 .banners { display: grid; gap: var(--s3); }
-.banners:not(:empty) { margin-top: var(--s4); }
+.banners:not(:empty) { margin-bottom: var(--s4); }
 .banner {
   border: 1px solid var(--line-strong); border-left-width: 4px; border-radius: var(--radius);
   background: var(--surface); padding: var(--s3) var(--s4);
@@ -113,37 +173,22 @@ a { color: inherit; }
 .banner.is-danger { border-left-color: var(--danger); background: var(--danger-bg); }
 .banner.is-warn { border-left-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
 
-/* ------------------------------------------------------------------ *
- * Sections, cards
- * ------------------------------------------------------------------ */
-main { padding-bottom: var(--s7); }
-.zone { margin-top: var(--s6); }
-.zone-head { border-top: 2px solid var(--ink); padding-top: var(--s3); margin-bottom: var(--s4); }
-.zone-head h2 { font-size: 1.0625rem; }
-.zone-head p { font-size: 0.875rem; color: var(--ink-muted); margin-top: var(--s1); }
-.section { margin-top: var(--s5); }
-.section > h3 {
-  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em;
-  color: var(--ink-muted); margin-bottom: var(--s3);
-}
-.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s4); }
-
 /* Summary tiles — 2 up on a phone, 4 up when there is room. */
-.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); }
-@media (min-width: 620px) { .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s3) var(--s4); }
-.tile dt { font-size: 0.75rem; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.06em; }
-.tile dd { margin: var(--s1) 0 0; font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }
-.tile dd small { font-size: 0.8125rem; font-weight: 400; color: var(--ink-muted); }
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s2); }
+@media (min-width: 620px) { .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--s3); } }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s3); }
+.tile dt { font-size: 0.6875rem; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.06em; line-height: 1.3; }
+.tile dd { margin: var(--s1) 0 0; font-size: 1.375rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile dd small { font-size: 0.75rem; font-weight: 400; color: var(--ink-muted); }
+.tile.is-alert { border-color: var(--warn-line); background: var(--warn-bg); }
+.tile.is-alert dt, .tile.is-alert dd { color: var(--warn-ink); }
 
-/* Severity breakdown row */
-.sev-row { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
-
-/* Severity chips: colour + word, never colour alone. */
+/* Severity + status chips: colour and a word, always. */
+.chip-row { display: flex; flex-wrap: wrap; gap: var(--s2); }
 .chip {
   display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
-  font-size: 0.8125rem; font-weight: 600; padding: 4px 10px;
-  border: 1px solid transparent; border-radius: 999px;
+  font-size: 0.75rem; font-weight: 600; padding: 4px 9px;
+  border: 1px solid var(--line-strong); border-radius: 999px; background: var(--surface-2); color: var(--ink-muted);
 }
 .chip .swatch { width: 8px; height: 8px; border-radius: 2px; background: currentColor; flex: none; }
 .chip .count { font-variant-numeric: tabular-nums; font-weight: 500; opacity: 0.85; }
@@ -151,176 +196,345 @@ main { padding-bottom: var(--s7); }
 .chip[data-severity="moderate"] { color: var(--sev-moderate-ink); background: var(--sev-moderate-bg); border-color: var(--sev-moderate-ink); }
 .chip[data-severity="severe"]   { color: var(--sev-severe-ink);   background: var(--sev-severe-bg);   border-color: var(--sev-severe-ink); }
 .chip[data-severity="critical"] { color: var(--sev-critical-ink); background: var(--sev-critical-bg); border-color: var(--sev-critical-ink); }
-.chip[data-severity="unknown"]  { color: var(--ink-muted); background: var(--surface-2); border-color: var(--line-strong); }
+.chip.is-warn { color: var(--warn-ink); background: var(--warn-bg); border-color: var(--warn-line); }
+.chip.is-ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
 
-/* Village list */
-.village-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
-.village {
+/* Village / record lists */
+.list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+.row {
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: var(--s3) var(--s4); display: grid; gap: var(--s2);
+  padding: var(--s3); display: grid; gap: var(--s2); box-shadow: var(--shadow);
 }
-.village-top { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: baseline; justify-content: space-between; }
-.village-name { font-weight: 600; }
-.village-meta { font-size: 0.8125rem; color: var(--ink-muted); }
-.village-id { font-family: var(--mono); font-size: 0.75rem; color: var(--ink-muted); }
+.row.is-flagged { border-left: 4px solid var(--warn-line); background: var(--warn-bg); }
+.row.is-critical { border-left: 4px solid var(--sev-critical-ink); }
+.row-top { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: baseline; justify-content: space-between; }
+.row-name { font-weight: 600; }
+.row-meta { font-size: 0.8125rem; color: var(--ink-muted); }
+.row-meta.wrapall { overflow-wrap: anywhere; }
+.mono, .id { font-family: var(--mono); font-size: 0.75rem; color: var(--ink-muted); overflow-wrap: anywhere; }
+
+/* Recovery bar */
 .recovery { display: flex; align-items: center; gap: var(--s3); }
-.bar { flex: 1 1 auto; height: 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; min-width: 80px; }
+.bar { flex: 1 1 auto; height: 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; min-width: 60px; }
 .bar > i { display: block; height: 100%; background: var(--accent); }
 .recovery-val { font-size: 0.8125rem; font-variant-numeric: tabular-nums; color: var(--ink-muted); min-width: 8.5ch; text-align: right; }
 
-/* Fund table — scrolls inside itself, never widens the page. */
+/* Recovery index — the 11 dimensions */
+.dims { display: grid; gap: 6px; }
+.dim { display: grid; grid-template-columns: 6.4rem minmax(0, 1fr) 2.8rem; gap: var(--s2); align-items: center; font-size: 0.8125rem; }
+.dim .lbl { color: var(--ink-muted); overflow: hidden; text-overflow: ellipsis; }
+.dim .val { text-align: right; font-variant-numeric: tabular-nums; }
+.dim .bar { height: 10px; }
+
+/* Fund ladder — sanctioned ≥ released ≥ spent, drawn so the arithmetic is visible. */
+.fundbar { position: relative; height: 14px; border-radius: 999px; background: var(--fund-rest); border: 1px solid var(--line-strong); overflow: hidden; }
+.fundbar i { position: absolute; top: 0; bottom: 0; left: 0; display: block; }
+.fundbar .f-rel { background-color: var(--fund-released); background-image: repeating-linear-gradient(135deg, rgba(255,255,255,0.30) 0 3px, transparent 3px 7px); }
+.fundbar .f-spent { background: var(--fund-spent); }
+.fundlegend { display: flex; flex-wrap: wrap; gap: var(--s1) var(--s3); margin-top: 6px; font-size: 0.75rem; color: var(--ink-muted); }
+.fundlegend b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.key { width: 10px; height: 10px; border-radius: 3px; display: inline-block; vertical-align: -1px; margin-right: 5px; border: 1px solid var(--line-strong); }
+.key.k-spent { background: var(--fund-spent); }
+.key.k-rel { background-color: var(--fund-released); background-image: repeating-linear-gradient(135deg, rgba(255,255,255,0.30) 0 3px, transparent 3px 7px); }
+.key.k-san { background: var(--fund-rest); }
+
+/* Rule callouts — the four domain rules, stated where they apply. */
+.rule {
+  border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: var(--radius-sm);
+  background: var(--accent-soft); padding: var(--s2) var(--s3); font-size: 0.8125rem; margin-bottom: var(--s3);
+}
+.rule strong { font-weight: 600; }
+.flag {
+  border: 1px solid var(--warn-line); border-left-width: 4px; border-radius: var(--radius-sm);
+  background: var(--warn-bg); color: var(--warn-ink); padding: var(--s2) var(--s3); font-size: 0.8125rem;
+}
+.flag strong { display: block; }
+.flag + .flag { margin-top: var(--s2); }
+
+/* Tables scroll inside themselves; the page never widens. */
 .table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 0.875rem; }
 th, td { text-align: left; padding: var(--s2) var(--s3); border-bottom: 1px solid var(--line); white-space: nowrap; }
-th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 600; }
+th { font-size: 0.6875rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 600; }
 tbody tr:last-child td { border-bottom: 0; }
 td.num { text-align: right; font-variant-numeric: tabular-nums; }
 
-/* Empty / placeholder states are designed, not blank. */
-.empty {
-  border: 1px dashed var(--line-strong); border-radius: var(--radius); background: var(--surface);
-  padding: var(--s5) var(--s4); text-align: center; color: var(--ink-muted);
-}
-.empty strong { display: block; color: var(--ink); font-size: 0.9375rem; }
-.empty p { font-size: 0.875rem; margin-top: var(--s1); }
+/* Designed states: empty, unavailable, error, loading. Never a blank region. */
+.state { border: 1px dashed var(--line-strong); border-radius: var(--radius); background: var(--surface); padding: var(--s5) var(--s4); text-align: center; color: var(--ink-muted); }
+.state strong { display: block; color: var(--ink); font-size: 0.9375rem; }
+.state p { font-size: 0.875rem; margin-top: var(--s1); max-width: 52ch; margin-left: auto; margin-right: auto; }
+.state.is-error { border-style: solid; border-color: var(--danger); background: var(--danger-bg); }
+.state .actions { justify-content: center; }
+.skel-wrap { display: grid; gap: var(--s2); }
+.skel { background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius); height: 62px; animation: pulse 1.5s ease-in-out infinite; }
+.skel.sm { height: 34px; }
+@keyframes pulse { 0%, 100% { opacity: 0.55; } 50% { opacity: 1; } }
 
-/* ------------------------------------------------------------------ *
- * Forms & buttons — 44px minimum tap targets throughout
- * ------------------------------------------------------------------ */
-.field { display: grid; gap: 6px; margin-bottom: var(--s3); }
+/* First-run guide */
+.guide { display: grid; gap: var(--s3); }
+.guide ol { margin: 0; padding-left: 1.25em; display: grid; gap: var(--s2); font-size: 0.9375rem; }
+.guide li strong { font-weight: 600; }
+
+/* ==================================================================== *
+ * 4. Forms & buttons — 44px minimum tap target throughout
+ * ==================================================================== */
+.field { display: grid; gap: 5px; margin-bottom: var(--s3); }
 .field > label { font-size: 0.875rem; font-weight: 500; }
 .hint { font-size: 0.75rem; color: var(--ink-muted); }
 input, select, textarea {
-  font: inherit; color: var(--ink); background: var(--surface); width: 100%;
-  border: 1px solid var(--line-strong); border-radius: 8px; padding: 11px var(--s3); min-height: 44px;
+  font: inherit; color: var(--ink); background: var(--surface); width: 100%; max-width: 100%;
+  border: 1px solid var(--line-strong); border-radius: var(--radius-sm); padding: 11px var(--s3); min-height: 44px;
 }
-textarea { min-height: 88px; resize: vertical; }
+textarea { min-height: 84px; resize: vertical; }
 input:disabled, select:disabled, textarea:disabled { background: var(--surface-2); color: var(--ink-muted); }
+.field.is-invalid > input, .field.is-invalid > select, .field.is-invalid > textarea { border-color: var(--danger); border-width: 2px; }
+.field-error { font-size: 0.8125rem; color: var(--danger-ink); font-weight: 500; }
+.field-error:empty { display: none; }
 .grid-2 { display: grid; gap: var(--s3); grid-template-columns: minmax(0, 1fr); }
-@media (min-width: 560px) { .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid-2 .field { margin-bottom: 0; } }
+@media (min-width: 560px) { .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid-2 > .field { margin-bottom: 0; } }
 
 button {
   font: inherit; font-weight: 600; min-height: 44px; padding: 11px var(--s4); cursor: pointer;
-  border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink);
+  border-radius: var(--radius-sm); border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink);
 }
 button.secondary { background: var(--surface); color: var(--ink); border-color: var(--line-strong); }
+button.link { background: none; border: 0; color: var(--accent-strong); text-decoration: underline; padding: 8px 0; min-height: 44px; font-weight: 500; font-size: 0.875rem; }
+button.tiny { min-height: 44px; padding: 8px var(--s3); font-size: 0.8125rem; }
 button[disabled] { opacity: 0.6; cursor: progress; }
 .actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; margin-top: var(--s3); }
 
-/* Per-form message region (validation, success, duplicate warning) */
-.msg { margin-top: var(--s3); font-size: 0.875rem; border-radius: 8px; }
+.msg { margin-top: var(--s3); font-size: 0.875rem; }
 .msg:empty { display: none; }
-.msg > div { padding: var(--s3); border: 1px solid var(--line-strong); border-left-width: 4px; border-radius: 8px; }
-.msg .m-error { border-left-color: var(--danger); background: var(--danger-bg); color: var(--ink); }
-.msg .m-ok { border-left-color: var(--ok); background: var(--surface-2); }
+.msg > div { padding: var(--s3); border: 1px solid var(--line-strong); border-left-width: 4px; border-radius: var(--radius-sm); }
+.msg .m-error { border-left-color: var(--danger); background: var(--danger-bg); }
+.msg .m-ok { border-left-color: var(--ok); background: var(--ok-bg); }
 .msg .m-dup { border-left-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
+.msg .m-info { border-left-color: var(--line-strong); background: var(--surface-2); }
 .msg strong { display: block; margin-bottom: 2px; }
-.msg code, .id { font-family: var(--mono); font-size: 0.8125rem; word-break: break-all; }
+.msg code { font-family: var(--mono); font-size: 0.8125rem; overflow-wrap: anywhere; }
 
-/* Operations workflows as native disclosure widgets */
+/* Workflows as native disclosure widgets */
 details.work { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: var(--s2); }
 details.work > summary {
-  list-style: none; cursor: pointer; padding: var(--s3) var(--s4); min-height: 44px; display: flex;
+  list-style: none; cursor: pointer; padding: var(--s3); min-height: 48px; display: flex;
   align-items: center; gap: var(--s3); font-weight: 600; font-size: 0.9375rem;
 }
 details.work > summary::-webkit-details-marker { display: none; }
 details.work > summary .caret { margin-left: auto; color: var(--ink-muted); transition: transform 150ms ease; }
 details.work[open] > summary .caret { transform: rotate(90deg); }
 details.work[open] > summary { border-bottom: 1px solid var(--line); }
-.work-body { padding: var(--s4); }
-.work-note { font-size: 0.8125rem; color: var(--ink-muted); margin-bottom: var(--s3); }
+.work-body { padding: var(--s4) var(--s3) var(--s3); }
+.work-note { font-size: 0.8125rem; color: var(--ink-muted); margin-bottom: var(--s3); max-width: 62ch; }
+.work-group { margin-top: var(--s5); }
+.work-group > h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-muted); margin-bottom: var(--s2); }
 
-/* Locked operations zone */
 .locked { display: grid; gap: var(--s3); }
-.locked .cmd {
-  display: block; font-family: var(--mono); font-size: 0.75rem; background: var(--surface-2);
-  border: 1px solid var(--line); border-radius: 8px; padding: var(--s3); overflow-x: auto; white-space: pre;
-}
+.locked code.cmd { display: block; font-family: var(--mono); font-size: 0.75rem; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: var(--s3); overflow-x: auto; white-space: pre; }
 .token-row { display: grid; gap: var(--s3); }
 @media (min-width: 560px) { .token-row { grid-template-columns: 1fr auto; align-items: end; } }
 
-.hidden { display: none !important; }
-.sr-only {
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; border: 0;
-  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
-}
 footer { margin-top: var(--s6); padding-top: var(--s4); border-top: 1px solid var(--line); font-size: 0.8125rem; color: var(--ink-muted); }
+footer p + p { margin-top: var(--s1); }
 
-/* Honour the OS preference for reduced motion. */
+/* ==================================================================== *
+ * 5. Motion — honour the OS preference
+ * ==================================================================== */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
 }
 </style>
 </head>
 <body>
 <a class="skip-link" href="#main">Skip to content</a>
 
+<!-- Icon sprite: inline SVG only, no external asset requests. -->
+<svg class="sprite" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg"><defs>
+  <symbol id="i-public" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.6 3 2.6 15 0 18M12 3c-2.6 3-2.6 15 0 18"/></symbol>
+  <symbol id="i-district" viewBox="0 0 24 24"><path d="M4 20V6a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v14"/><path d="M8 17v-4M12 17V8M16 17v-2"/><path d="M3 20h18"/></symbol>
+  <symbol id="i-ngo" viewBox="0 0 24 24"><path d="M20.8 6.1a4.7 4.7 0 0 0-6.8-.2L12 7.8 10 5.9a4.7 4.7 0 1 0-6.3 7L12 21l8.3-8.1a4.7 4.7 0 0 0 .5-6.8Z"/></symbol>
+  <symbol id="i-village" viewBox="0 0 24 24"><path d="M3 11 12 3l9 8"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></symbol>
+  <symbol id="i-ops" viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h16"/><circle cx="9" cy="6" r="2.1"/><circle cx="15" cy="12" r="2.1"/><circle cx="8" cy="18" r="2.1"/></symbol>
+</defs></svg>
+
 <header class="site-header">
   <div class="wrap header-inner">
     <h1 class="brand">AFRIP <span>Flood Recovery Intelligence Platform</span></h1>
-    <p class="conn" id="conn" aria-live="polite">
-      <span class="dot pending" id="conn-dot" aria-hidden="true"></span>
-      <span id="conn-text">Checking service…</span>
-    </p>
+    <div class="header-status">
+      <p class="pill" id="conn" aria-live="polite">
+        <span class="dot pending" id="conn-dot" aria-hidden="true"></span>
+        <span id="conn-text">Checking service…</span>
+      </p>
+      <p class="pill" id="session-pill" aria-live="polite">
+        <span class="dot" id="session-dot" aria-hidden="true"></span>
+        <span id="session-text">Not connected</span>
+      </p>
+    </div>
   </div>
 </header>
 
-<main id="main" class="wrap">
-  <!-- Readiness / network banners land here -->
+<nav class="nav" aria-label="Dashboards">
+  <div class="nav-inner" id="nav-inner">
+    <a href="#/public"   data-view="public"><svg aria-hidden="true"><use href="#i-public"/></svg>Public</a>
+    <a href="#/district" data-view="district"><svg aria-hidden="true"><use href="#i-district"/></svg>District</a>
+    <a href="#/ngo"      data-view="ngo"><svg aria-hidden="true"><use href="#i-ngo"/></svg>NGO</a>
+    <a href="#/village"  data-view="village"><svg aria-hidden="true"><use href="#i-village"/></svg>Village</a>
+    <a href="#/ops"      data-view="ops"><svg aria-hidden="true"><use href="#i-ops"/></svg>Operations</a>
+  </div>
+</nav>
+
+<main id="main" class="wrap" tabindex="-1">
   <div class="banners" id="banners" role="region" aria-label="Service notices" aria-live="polite"></div>
 
   <!-- ================================================================
-       ZONE 1 — PUBLIC. No credential required; loads on page open.
+       VIEW · PUBLIC — the transparency dashboard. No credential.
        ================================================================ -->
-  <section class="zone" aria-labelledby="public-h">
-    <div class="zone-head">
-      <h2 id="public-h">Public transparency</h2>
-      <p>Open recovery data. No beneficiary details are published here.</p>
+  <section class="view" id="view-public" aria-labelledby="h-public">
+    <div class="view-head">
+      <h2 id="h-public">Public transparency</h2>
+      <p>Open recovery data for every registered village: severity, recovery index and the public
+         money sanctioned, released and spent. No beneficiary is identified here.</p>
     </div>
 
-    <section class="section" aria-labelledby="summary-h">
-      <h3 id="summary-h">Summary</h3>
-      <dl class="tiles" id="tiles">
+    <div id="first-run"></div>
+
+    <section class="section" aria-labelledby="h-pub-summary">
+      <h3 id="h-pub-summary">Summary</h3>
+      <dl class="tiles" id="pub-tiles" aria-live="polite">
         <div class="tile"><dt>Villages</dt><dd id="t-villages">—</dd></div>
         <div class="tile"><dt>Critical or severe</dt><dd id="t-acute">—</dd></div>
         <div class="tile"><dt>With a lead NGO</dt><dd id="t-ngo">—</dd></div>
         <div class="tile"><dt>Avg. recovery</dt><dd id="t-recovery">—</dd></div>
       </dl>
-      <div class="sev-row" id="sev-row"></div>
+      <div class="chip-row" id="sev-row" style="margin-top:12px"></div>
     </section>
 
-    <section class="section" aria-labelledby="villages-h">
-      <h3 id="villages-h">Villages by severity</h3>
-      <div id="villages-out" aria-live="polite" aria-busy="true">
-        <p class="empty">Loading villages…</p>
-      </div>
+    <section class="section" aria-labelledby="h-pub-funds">
+      <h3 id="h-pub-funds">Fund transparency</h3>
+      <p class="section-note">Every project shows the full ladder. The platform enforces
+        <strong>spent ≤ released ≤ sanctioned</strong>; the bar draws all three so the arithmetic is checkable.</p>
+      <div id="pub-funds" aria-live="polite"></div>
     </section>
 
-    <section class="section" aria-labelledby="funds-h">
-      <h3 id="funds-h">Fund transparency</h3>
-      <div id="funds-out" aria-live="polite">
-        <p class="empty">Loading funded projects…</p>
-      </div>
+    <section class="section" aria-labelledby="h-pub-villages">
+      <h3 id="h-pub-villages">Villages by severity</h3>
+      <div id="pub-villages" aria-live="polite"></div>
     </section>
   </section>
 
   <!-- ================================================================
-       ZONE 2 — OPERATIONS. Requires the bearer token.
+       VIEW · DISTRICT — the district officer's operational picture.
        ================================================================ -->
-  <section class="zone" aria-labelledby="ops-h">
-    <div class="zone-head">
-      <h2 id="ops-h">Operations</h2>
-      <p>Field and district workflows. Requires the API token.</p>
+  <section class="view hidden" id="view-district" aria-labelledby="h-district">
+    <div class="view-head">
+      <h2 id="h-district">District officer</h2>
+      <p>Where the gaps are: villages nobody owns, money that has stalled, anomalies raised and
+         issues still open across the district.</p>
+    </div>
+    <div id="district-gate"></div>
+    <div id="district-body" class="hidden">
+      <section class="section" aria-labelledby="h-dist-tiles">
+        <h3 id="h-dist-tiles">District at a glance</h3>
+        <dl class="tiles" id="dist-tiles" aria-live="polite"></dl>
+      </section>
+
+      <section class="section" aria-labelledby="h-dist-unassigned">
+        <h3 id="h-dist-unassigned">Villages with no assigned NGO</h3>
+        <p class="rule"><strong>One Village → One NGO.</strong> Every affected village has exactly one active
+          lead NGO. A village on this list has none — it is nobody's responsibility until it is assigned.</p>
+        <div id="dist-unassigned" aria-live="polite"></div>
+      </section>
+
+      <section class="section" aria-labelledby="h-dist-funds">
+        <h3 id="h-dist-funds">Fund utilisation</h3>
+        <div id="dist-funds" aria-live="polite"></div>
+      </section>
+
+      <section class="section" aria-labelledby="h-dist-anom">
+        <h3 id="h-dist-anom">Flagged anomalies</h3>
+        <div id="dist-anomalies" aria-live="polite"></div>
+      </section>
+
+      <section class="section" aria-labelledby="h-dist-issues">
+        <h3 id="h-dist-issues">Open issues</h3>
+        <p class="rule"><strong>Corruption reports never route to the NGO.</strong> The routing policy sends them
+          to the district administration, and health issues to the health department, regardless of who leads the village.</p>
+        <div id="dist-issues" aria-live="polite"></div>
+      </section>
+
+      <section class="section" aria-labelledby="h-dist-rec">
+        <h3 id="h-dist-rec">Recommendations</h3>
+        <div id="dist-recommendations" aria-live="polite"></div>
+      </section>
+
+      <section class="section" aria-labelledby="h-dist-alerts">
+        <h3 id="h-dist-alerts">Smart alerts</h3>
+        <div id="dist-alerts" aria-live="polite"></div>
+      </section>
+    </div>
+  </section>
+
+  <!-- ================================================================
+       VIEW · NGO — the lead NGO's own villages and workload.
+       ================================================================ -->
+  <section class="view hidden" id="view-ngo" aria-labelledby="h-ngo">
+    <div class="view-head">
+      <h2 id="h-ngo">NGO coordinator</h2>
+      <p>The villages this NGO leads, the projects funding them, the beneficiaries on the registry
+         and the work still pending.</p>
+    </div>
+    <div id="ngo-gate"></div>
+    <div id="ngo-body" class="hidden">
+      <div class="card">
+        <div class="field" style="margin-bottom:0">
+          <label for="ngo-select">Lead NGO</label>
+          <select id="ngo-select"><option value="">Loading NGOs…</option></select>
+          <span class="hint" id="ngo-select-hint">Choose the NGO whose portfolio you want to see.</span>
+        </div>
+      </div>
+      <div id="ngo-content" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <!-- ================================================================
+       VIEW · VILLAGE — one village's full recovery profile.
+       ================================================================ -->
+  <section class="view hidden" id="view-village" aria-labelledby="h-village">
+    <div class="view-head">
+      <h2 id="h-village">Village profile</h2>
+      <p>Demographics, damage, the recovery index across all 11 dimensions, the lead NGO and
+         committee, beneficiaries, issues and the long-term development plan.</p>
+    </div>
+    <div id="village-gate"></div>
+    <div id="village-body" class="hidden">
+      <div class="card">
+        <div class="field" style="margin-bottom:0">
+          <label for="village-select">Village</label>
+          <select id="village-select"><option value="">Loading villages…</option></select>
+          <span class="hint">Pick a village to load its full profile.</span>
+        </div>
+      </div>
+      <div id="village-content" aria-live="polite"></div>
+    </div>
+  </section>
+
+  <!-- ================================================================
+       VIEW · OPERATIONS — every write workflow. Requires the token.
+       ================================================================ -->
+  <section class="view hidden" id="view-ops" aria-labelledby="h-ops">
+    <div class="view-head">
+      <h2 id="h-ops">Operations</h2>
+      <p>Field and district workflows. Everything that changes platform state happens here, and the
+         domain's own rejection message is shown verbatim next to the field that caused it.</p>
     </div>
 
-    <!-- Token entry / session -->
     <div class="card" id="token-card">
       <div class="locked" id="locked-note">
-        <p><strong>Locked.</strong> Registration, assignment, aid and issue workflows need the API bearer token.</p>
+        <p><strong>Locked.</strong> Registration, assignment, aid, fund, volunteer, planning and issue
+           workflows all need the API bearer token — as do the District, NGO and Village dashboards.</p>
         <p class="hint">Operators can read the current token with:</p>
         <code class="cmd">gcloud secrets versions access latest --secret=afrip-api-token --project=e-vidhayak</code>
         <p class="hint">The token is held in <code>sessionStorage</code> for this tab only. It is never written to
-        the URL, never stored in <code>localStorage</code>, and is cleared when you disconnect or close the tab.</p>
+           the URL, never stored in <code>localStorage</code>, and is cleared when you disconnect or close the tab.</p>
       </div>
 
       <form id="token-form" class="token-row" autocomplete="off" novalidate>
@@ -345,208 +559,44 @@ footer { margin-top: var(--s6); padding-top: var(--s4); border-top: 1px solid va
       <div class="msg" id="token-msg" role="status" aria-live="polite"></div>
     </div>
 
-    <!-- Workflows, revealed once a token is present -->
-    <div class="section hidden" id="workflows" aria-label="Operational workflows">
+    <!-- Workflow forms are generated from the WORKFLOW_GROUPS spec in script §8. -->
+    <div class="section hidden" id="workflows" aria-label="Operational workflows"></div>
 
-      <details class="work">
-        <summary>Register a village<span class="caret" aria-hidden="true">›</span></summary>
-        <div class="work-body">
-          <p class="work-note">The registry rejects an assessment where affected families exceed households —
-            that rejection is shown here verbatim.</p>
-          <form id="f-village" novalidate>
-            <div class="field"><label for="v-name">Village name</label><input id="v-name" name="name" required></div>
-            <div class="grid-2">
-              <div class="field"><label for="v-district">District</label><input id="v-district" name="district" required></div>
-              <div class="field"><label for="v-state">State</label><input id="v-state" name="state" required></div>
-            </div>
-            <div class="grid-2">
-              <div class="field"><label for="v-lat">Latitude</label><input id="v-lat" name="lat" type="number" step="any" inputmode="decimal" required></div>
-              <div class="field"><label for="v-lng">Longitude</label><input id="v-lng" name="lng" type="number" step="any" inputmode="decimal" required></div>
-            </div>
-            <div class="grid-2">
-              <div class="field"><label for="v-pop">Population</label><input id="v-pop" name="population" type="number" min="0" inputmode="numeric" required></div>
-              <div class="field"><label for="v-hh">Households</label><input id="v-hh" name="households" type="number" min="0" inputmode="numeric" required></div>
-            </div>
-            <div class="grid-2">
-              <div class="field"><label for="v-af">Affected families</label><input id="v-af" name="affectedFamilies" type="number" min="0" inputmode="numeric" required></div>
-              <div class="field"><label for="v-sev">Severity</label>
-                <select id="v-sev" name="severity">
-                  <option value="minor">minor</option><option value="moderate">moderate</option>
-                  <option value="severe" selected>severe</option><option value="critical">critical</option>
-                </select>
-              </div>
-            </div>
-            <div class="actions"><button type="submit">Register village</button></div>
-            <div class="msg" role="status" aria-live="polite"></div>
-          </form>
-        </div>
-      </details>
-
-      <details class="work">
-        <summary>Register an NGO<span class="caret" aria-hidden="true">›</span></summary>
-        <div class="work-body">
-          <form id="f-ngo" novalidate>
-            <div class="field"><label for="n-name">NGO name</label><input id="n-name" name="name" required></div>
-            <div class="field">
-              <label for="n-focus">Focus areas</label>
-              <input id="n-focus" name="focusAreas" placeholder="water, shelter, health" aria-describedby="n-focus-h">
-              <span class="hint" id="n-focus-h">Comma separated.</span>
-            </div>
-            <div class="field">
-              <label for="n-cap">Capacity</label>
-              <input id="n-cap" name="capacity" type="number" min="1" inputmode="numeric" value="1" aria-describedby="n-cap-h">
-              <span class="hint" id="n-cap-h">Maximum villages this NGO may lead at once.</span>
-            </div>
-            <div class="actions"><button type="submit">Register NGO</button></div>
-            <div class="msg" role="status" aria-live="polite"></div>
-          </form>
-        </div>
-      </details>
-
-      <details class="work">
-        <summary>Assign an NGO to a village<span class="caret" aria-hidden="true">›</span></summary>
-        <div class="work-body">
-          <p class="work-note">One village, one lead NGO. Assigning a new NGO retires the incumbent assignment;
-            the history is kept, never deleted.</p>
-          <form id="f-assign" novalidate>
-            <div class="field">
-              <label for="a-village">Village ID</label>
-              <input id="a-village" name="villageId" list="dl-villages" placeholder="village-1" required>
-            </div>
-            <div class="field">
-              <label for="a-ngo">NGO ID</label>
-              <input id="a-ngo" name="ngoId" list="dl-ngos" placeholder="ngo-1" required>
-            </div>
-            <div class="actions"><button type="submit">Assign lead NGO</button></div>
-            <div class="msg" role="status" aria-live="polite"></div>
-          </form>
-        </div>
-      </details>
-
-      <details class="work">
-        <summary>Register a beneficiary<span class="caret" aria-hidden="true">›</span></summary>
-        <div class="work-body">
-          <form id="f-beneficiary" novalidate>
-            <div class="field">
-              <label for="b-village">Village ID</label>
-              <input id="b-village" name="villageId" list="dl-villages" placeholder="village-1" required>
-            </div>
-            <div class="field"><label for="b-name">Name</label><input id="b-name" name="name" required></div>
-            <div class="field">
-              <label for="b-cat">Vulnerability category</label>
-              <select id="b-cat" name="category">
-                <option value="widow">widow</option><option value="orphan">orphan</option>
-                <option value="senior_citizen">senior_citizen</option><option value="disabled">disabled</option>
-                <option value="pregnant_woman">pregnant_woman</option><option value="farmer">farmer</option>
-                <option value="small_business">small_business</option><option value="daily_wage_worker">daily_wage_worker</option>
-                <option value="student">student</option>
-              </select>
-            </div>
-            <div class="actions"><button type="submit">Register beneficiary</button></div>
-            <div class="msg" role="status" aria-live="polite"></div>
-          </form>
-        </div>
-      </details>
-
-      <details class="work">
-        <summary>Record aid<span class="caret" aria-hidden="true">›</span></summary>
-        <div class="work-body">
-          <p class="work-note">Aid is always recorded, never silently rejected. If the same aid type reached this
-            beneficiary from a different provider inside the 14-day window, the delivery is flagged as a likely duplicate.</p>
-          <form id="f-aid" novalidate>
-            <div class="field">
-              <label for="d-ben">Beneficiary ID</label>
-              <input id="d-ben" name="beneficiaryId" list="dl-beneficiaries" placeholder="beneficiary-1" required>
-            </div>
-            <div class="grid-2">
-              <div class="field"><label for="d-type">Aid type</label>
-                <select id="d-type" name="aidType">
-                  <option value="food">food</option><option value="shelter">shelter</option>
-                  <option value="medical">medical</option><option value="cash">cash</option>
-                  <option value="livelihood">livelihood</option><option value="education">education</option>
-                </select>
-              </div>
-              <div class="field"><label for="d-ptype">Provider type</label>
-                <select id="d-ptype" name="providerType">
-                  <option value="ngo">ngo</option><option value="government">government</option><option value="donor">donor</option>
-                </select>
-              </div>
-            </div>
-            <div class="field"><label for="d-pid">Provider ID</label><input id="d-pid" name="providerId" list="dl-ngos" required></div>
-            <div class="field"><label for="d-notes">Notes <span class="hint">(optional)</span></label><input id="d-notes" name="notes"></div>
-            <div class="actions"><button type="submit">Record aid</button></div>
-            <div class="msg" role="status" aria-live="polite"></div>
-          </form>
-        </div>
-      </details>
-
-      <details class="work">
-        <summary>Report an issue<span class="caret" aria-hidden="true">›</span></summary>
-        <div class="work-body">
-          <form id="f-issue" novalidate>
-            <div class="field">
-              <label for="i-village">Village ID</label>
-              <input id="i-village" name="villageId" list="dl-villages" placeholder="village-1" required>
-            </div>
-            <div class="field"><label for="i-cat">Category</label>
-              <select id="i-cat" name="category">
-                <option value="infrastructure">infrastructure</option><option value="water">water</option>
-                <option value="education">education</option><option value="health">health</option>
-                <option value="food">food</option><option value="corruption">corruption</option>
-                <option value="other">other</option>
-              </select>
-            </div>
-            <div class="field"><label for="i-desc">Description</label><textarea id="i-desc" name="description" required></textarea></div>
-            <div class="grid-2">
-              <div class="field"><label for="i-lat">GPS latitude</label><input id="i-lat" name="lat" type="number" step="any" inputmode="decimal" required></div>
-              <div class="field"><label for="i-lng">GPS longitude</label><input id="i-lng" name="lng" type="number" step="any" inputmode="decimal" required></div>
-            </div>
-            <div class="actions"><button type="submit">Report issue</button></div>
-            <div class="msg" role="status" aria-live="polite"></div>
-          </form>
-        </div>
-      </details>
-
-      <details class="work">
-        <summary>Route an issue<span class="caret" aria-hidden="true">›</span></summary>
-        <div class="work-body">
-          <p class="work-note">Routing sends the issue to the village's lead NGO where one is assigned,
-            otherwise to the responsible government department.</p>
-          <form id="f-route" novalidate>
-            <div class="field">
-              <label for="r-issue">Issue ID</label>
-              <input id="r-issue" name="issueId" list="dl-issues" placeholder="issue-1" required>
-            </div>
-            <div class="actions"><button type="submit">Route issue</button></div>
-            <div class="msg" role="status" aria-live="polite"></div>
-          </form>
-        </div>
-      </details>
-
-      <!-- Identifiers created in this tab, offered back as suggestions. In memory only. -->
-      <datalist id="dl-villages"></datalist>
-      <datalist id="dl-ngos"></datalist>
-      <datalist id="dl-beneficiaries"></datalist>
-      <datalist id="dl-issues"></datalist>
-    </div>
+    <!-- Identifier suggestions. Village/NGO lists come from the API; the rest are ids
+         minted in this tab, held in memory only and never persisted. -->
+    <datalist id="dl-villages"></datalist>
+    <datalist id="dl-ngos"></datalist>
+    <datalist id="dl-beneficiaries"></datalist>
+    <datalist id="dl-issues"></datalist>
+    <datalist id="dl-projects"></datalist>
+    <datalist id="dl-volunteers"></datalist>
+    <datalist id="dl-plans"></datalist>
+    <datalist id="dl-goals"></datalist>
+    <datalist id="dl-milestones"></datalist>
+    <datalist id="dl-signals"></datalist>
+    <datalist id="dl-assignments"></datalist>
+    <datalist id="dl-followups"></datalist>
   </section>
 
   <footer>
     <p>AFRIP · public data is aggregate and pseudonymised · operations data requires authorisation.</p>
+    <p>Four rules made visible: one village one NGO · duplicate aid flagged never dropped ·
+       spent ≤ released ≤ sanctioned · corruption never routes to the NGO.</p>
   </footer>
 </main>
 
 <script>
 "use strict";
-/* ==================================================================
+/* ====================================================================
  * SCRIPT §1 — helpers
- * ================================================================== */
+ * ==================================================================== */
 
 const $ = (sel, root) => (root || document).querySelector(sel);
+const $$ = (sel, root) => Array.prototype.slice.call((root || document).querySelectorAll(sel));
 
-/** Escape anything that came from the API before it can touch innerHTML.
- *  Village names, issue descriptions and error strings are all user-supplied. */
-function escapeHtml(value) {
+/** Escape anything from the API before it can touch innerHTML. Village names,
+ *  issue descriptions, NGO names and error strings are all user-supplied. */
+function esc(value) {
   return String(value === null || value === undefined ? "" : value)
     .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
@@ -554,46 +604,48 @@ function escapeHtml(value) {
 
 const SEVERITIES = ["critical", "severe", "moderate", "minor"];
 const SEVERITY_RANK = { critical: 0, severe: 1, moderate: 2, minor: 3 };
+const DIMENSIONS = ["infrastructure", "education", "health", "livelihood", "agriculture", "housing",
+                    "employment", "water", "sanitation", "road", "electricity"];
 
-function severityChip(severity) {
-  const known = SEVERITIES.indexOf(severity) !== -1 ? severity : "unknown";
-  const label = known === "unknown" ? "unclassified" : known;
-  // The word is always present, so the colour is never the only signal.
-  return '<span class="chip" data-severity="' + escapeHtml(known) + '">'
-    + '<span class="swatch" aria-hidden="true"></span>' + escapeHtml(label) + "</span>";
-}
-
-/** Money arrives as integer minor units; render as whole currency units. */
+/** Plain text (unescaped). Escape at the point of interpolation. */
 function money(minor, currency) {
   if (typeof minor !== "number" || !isFinite(minor)) return "—";
   const major = minor / 100;
   let text;
-  try {
-    text = major.toLocaleString(undefined, { maximumFractionDigits: 0 });
-  } catch (_) {
-    text = String(Math.round(major));
-  }
-  return escapeHtml((currency ? currency + " " : "") + text);
+  try { text = major.toLocaleString(undefined, { maximumFractionDigits: 0 }); }
+  catch (_) { text = String(Math.round(major)); }
+  return (currency ? currency + " " : "") + text;
 }
 
-const state = {
-  token: null,
-  villages: [],
-  /** ids minted in this tab, kept in memory only (never persisted). */
-  recent: { villages: [], ngos: [], beneficiaries: [], issues: [] }
-};
+function when(iso) {
+  if (!iso) return "—";
+  const parsed = new Date(iso);
+  if (isNaN(parsed.getTime())) return String(iso);
+  try { return parsed.toLocaleString(); } catch (_) { return parsed.toISOString(); }
+}
+
+function dateOnly(iso) {
+  if (!iso) return "—";
+  const parsed = new Date(iso);
+  if (isNaN(parsed.getTime())) return String(iso);
+  try { return parsed.toLocaleDateString(); } catch (_) { return parsed.toISOString().slice(0, 10); }
+}
+
+function words(value) { return String(value === null || value === undefined ? "" : value).replace(/_/g, " "); }
+function pct(part, whole) { return whole > 0 ? Math.max(0, Math.min(100, (part / whole) * 100)) : 0; }
+function num1(value) { return Math.round(value * 10) / 10; }
 
 /**
- * Single fetch wrapper. Returns a plain outcome object; it never throws, so
- * every caller can render a specific message instead of a dead button.
- *   { ok, status, data }            — the server answered
- *   { ok:false, network:true }      — the request never completed
+ * Single fetch wrapper. Never throws, so every caller renders a specific state
+ * instead of a dead region.
+ *   { ok, status, data }         — the server answered
+ *   { ok:false, network:true }   — the request never completed
  */
 async function api(path, options) {
   const opts = options || {};
   const headers = { accept: "application/json" };
   if (opts.body !== undefined) headers["content-type"] = "application/json";
-  if (opts.auth && state.token) headers["authorization"] = "Bearer " + state.token;
+  if (opts.auth !== false && state.token) headers["authorization"] = "Bearer " + state.token;
 
   let response;
   try {
@@ -605,46 +657,261 @@ async function api(path, options) {
   } catch (_) {
     return { ok: false, network: true, status: 0, data: null };
   }
-
   let data = null;
   try { data = await response.json(); } catch (_) { data = null; }
   return { ok: response.ok, status: response.status, data: data, network: false };
 }
 
-/** Message region writer. `kind` is "error" | "ok" | "dup". */
+/**
+ * True when a 404 means "this route is not deployed on this revision", as
+ * opposed to "the thing you asked for does not exist". The router answers an
+ * unknown path with `{"error":"not found: GET /projects"}`; the domain answers a
+ * missing aggregate with `{"error":"Village not found: village-1"}`. The
+ * difference decides whether a section degrades or reports an error.
+ */
+function isMissingRoute(res) {
+  if (!res || res.status !== 404) return false;
+  const message = res.data && typeof res.data.error === "string" ? res.data.error : "";
+  return /^not found:\s*(GET|POST|PUT|PATCH|DELETE)\s/i.test(message);
+}
+
+function apiError(res, fallback) {
+  if (res && res.network) return "the request did not reach the service";
+  if (res && res.data && typeof res.data.error === "string") return res.data.error;
+  if (res && res.status) return "the service returned status " + res.status;
+  return fallback || "unknown error";
+}
+
+/* --- Designed section states. Nothing is ever left blank. ---------- */
+
+function skeleton(el, rows, small) {
+  el.innerHTML = '<div class="skel-wrap">'
+    + new Array(rows || 3).fill('<div class="skel' + (small ? " sm" : "") + '"></div>').join("")
+    + "</div>";
+  el.setAttribute("aria-busy", "true");
+}
+
+function stateBlock(el, kind, title, body, retry) {
+  el.setAttribute("aria-busy", "false");
+  el.innerHTML = '<div class="state' + (kind === "error" ? " is-error" : "") + '">'
+    + "<strong>" + esc(title) + "</strong><p>" + esc(body) + "</p></div>";
+  if (retry) {
+    const holder = document.createElement("div");
+    holder.className = "actions";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = "Retry";
+    button.addEventListener("click", retry);
+    holder.appendChild(button);
+    $(".state", el).appendChild(holder);
+  }
+}
+
+const showEmpty = (el, title, body) => stateBlock(el, "empty", title, body);
+const showError = (el, title, body, retry) => stateBlock(el, "error", title, body, retry);
+/** Degrade for a route this deployment does not serve yet. Not an error. */
+const showUnavailable = (el, what) => stateBlock(el, "empty", what + " not available yet",
+  "This deployment does not serve that endpoint on the current revision. Everything else on this page is unaffected.");
+
+function done(el) { el.setAttribute("aria-busy", "false"); }
+
+/** Message region writer. `kind` is "error" | "ok" | "dup" | "info". `detail` is trusted HTML. */
 function setMsg(el, kind, title, detail) {
   if (!el) return;
   if (!kind) { el.innerHTML = ""; return; }
-  el.innerHTML = '<div class="m-' + kind + '">'
-    + "<strong>" + escapeHtml(title) + "</strong>"
-    + (detail ? "<span>" + detail + "</span>" : "")
-    + "</div>";
+  el.innerHTML = '<div class="m-' + kind + '"><strong>' + esc(title) + "</strong>"
+    + (detail ? "<span>" + detail + "</span>" : "") + "</div>";
 }
 
-/* ==================================================================
- * SCRIPT §2 — banners, health, public zone
- * ================================================================== */
+/* ====================================================================
+ * SCRIPT §2 — application state and the view router
+ * ==================================================================== */
+
+const state = {
+  token: null,
+  view: "public",
+  villageId: null,          // selection for the Village view
+  ngoId: null,              // selection for the NGO view
+  villages: [],             // public village summaries
+  stats: null,
+  ngos: [],
+  projects: null,           // null = not loaded / unavailable
+  assignments: null,        // Map villageId -> assignment, or null when unsupported
+  assignmentsSupported: null,
+  /** ids minted in this tab. In memory only — never persisted anywhere. */
+  recent: { villages: [], ngos: [], beneficiaries: [], issues: [], projects: [], volunteers: [],
+            plans: [], goals: [], milestones: [], signals: [], assignments: [], followups: [] }
+};
+
+const VIEWS = ["public", "district", "ngo", "village", "ops"];
+const AUTHED_VIEWS = { district: true, ngo: true, village: true };
+
+function parseHash() {
+  const raw = String(location.hash || "").replace(/^#\/?/, "");
+  const parts = raw.split("/").filter(function (p) { return p.length > 0; });
+  const view = VIEWS.indexOf(parts[0]) !== -1 ? parts[0] : "public";
+  return { view: view, arg: parts[1] ? decodeURIComponent(parts[1]) : null };
+}
+
+function goto(view, arg) {
+  location.hash = "#/" + view + (arg ? "/" + encodeURIComponent(arg) : "");
+}
+
+function applyRoute() {
+  const route = parseHash();
+  state.view = route.view;
+  if (route.view === "village" && route.arg) state.villageId = route.arg;
+  if (route.view === "ngo" && route.arg) state.ngoId = route.arg;
+
+  VIEWS.forEach(function (name) {
+    $("#view-" + name).classList.toggle("hidden", name !== route.view);
+  });
+  $$("#nav-inner a").forEach(function (link) {
+    const current = link.getAttribute("data-view") === route.view;
+    if (current) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
+  });
+  loadView(route.view);
+}
+
+/** Loads the data a view needs. Each loader is independently safe to re-run. */
+function loadView(view) {
+  if (view === "public") { loadPublicView(); return; }
+  if (view === "district") { loadDistrictView(); return; }
+  if (view === "ngo") { loadNgoView(); return; }
+  if (view === "village") { loadVillageView(); return; }
+  if (view === "ops") { applyTokenState(); return; }
+}
+
+/** Re-reads the current view plus the always-on service indicators. */
+function refresh() {
+  checkHealth();
+  checkReady();
+  state.projects = null;
+  state.assignments = null;
+  loadView(state.view);
+}
+
+/* ====================================================================
+ * SCRIPT §3 — shared renderers
+ * ==================================================================== */
+
+function severityChip(severity) {
+  const known = SEVERITIES.indexOf(severity) !== -1 ? severity : "unknown";
+  const label = known === "unknown" ? "unclassified" : known;
+  // The word is always present, so colour is never the only signal.
+  return '<span class="chip" data-severity="' + esc(known) + '">'
+    + '<span class="swatch" aria-hidden="true"></span>' + esc(label) + "</span>";
+}
+
+function statusChip(status, tone) {
+  return '<span class="chip' + (tone ? " is-" + tone : "") + '">' + esc(words(status)) + "</span>";
+}
+
+function recoveryBar(composite) {
+  const scored = typeof composite === "number" && isFinite(composite);
+  const width = scored ? Math.max(0, Math.min(100, composite)) : 0;
+  const shown = scored ? num1(composite) + " / 100" : "not scored";
+  const label = scored ? "Recovery index " + Math.round(composite) + " out of 100" : "No recovery index yet";
+  return '<div class="recovery">'
+    + '<span class="bar" role="img" aria-label="' + esc(label) + '"><i style="width:' + width + '%"></i></span>'
+    + '<span class="recovery-val">' + esc(shown) + "</span></div>";
+}
+
+/**
+ * The fund ladder. `sanctioned ≥ released ≥ spent` is a domain invariant, so the
+ * bar draws all three stages against the same track: the reader can check the
+ * arithmetic rather than take a single percentage on trust. If the numbers ever
+ * violate the invariant the render says so instead of clamping it out of sight.
+ */
+function fundLadder(sanctionedMinor, releasedMinor, spentMinor, currency) {
+  const sanctioned = Number(sanctionedMinor) || 0;
+  const released = Number(releasedMinor) || 0;
+  const spent = Number(spentMinor) || 0;
+  const label = "Sanctioned " + money(sanctioned, currency)
+    + ", released " + money(released, currency) + ", spent " + money(spent, currency);
+  const breach = released > sanctioned || spent > released;
+
+  return '<div class="fundbar" role="img" aria-label="' + esc(label) + '">'
+      + '<i class="f-rel" style="width:' + pct(released, sanctioned) + '%"></i>'
+      + '<i class="f-spent" style="width:' + pct(spent, sanctioned) + '%"></i>'
+    + "</div>"
+    + '<div class="fundlegend">'
+      + '<span><i class="key k-spent" aria-hidden="true"></i>Spent <b>' + esc(money(spent, currency)) + "</b></span>"
+      + '<span><i class="key k-rel" aria-hidden="true"></i>Released <b>' + esc(money(released, currency)) + "</b></span>"
+      + '<span><i class="key k-san" aria-hidden="true"></i>Sanctioned <b>' + esc(money(sanctioned, currency)) + "</b></span>"
+    + "</div>"
+    + (breach
+        ? '<div class="flag" style="margin-top:8px"><strong>Ladder invariant breached</strong>'
+          + "The platform enforces spent ≤ released ≤ sanctioned. These published figures do not satisfy it — "
+          + "treat the project record as suspect and reconcile it at source.</div>"
+        : "");
+}
+
+/** The 11 recovery dimensions, each labelled and valued — never colour alone. */
+function dimensionBars(scores) {
+  return '<div class="dims">' + DIMENSIONS.map(function (dimension) {
+    const raw = scores && typeof scores[dimension] === "number" ? scores[dimension] : null;
+    const width = raw === null ? 0 : Math.max(0, Math.min(100, raw));
+    const shown = raw === null ? "—" : String(num1(raw));
+    return '<div class="dim"><span class="lbl">' + esc(words(dimension)) + "</span>"
+      + '<span class="bar" role="img" aria-label="' + esc(words(dimension) + " " + shown + " out of 100")
+      + '"><i style="width:' + width + '%"></i></span>'
+      + '<span class="val">' + esc(shown) + "</span></div>";
+  }).join("") + "</div>";
+}
+
+function villageRow(village, extraHtml) {
+  const composite = village.recovery && typeof village.recovery.composite === "number"
+    ? village.recovery.composite : null;
+  return '<li class="row' + (village.severity === "critical" ? " is-critical" : "") + '">'
+    + '<div class="row-top"><span class="row-name">' + esc(village.name) + "</span>"
+      + severityChip(village.severity) + "</div>"
+    + '<p class="row-meta">' + esc(village.district) + (village.state ? ", " + esc(village.state) : "")
+      + " · " + esc(String(village.affectedFamilies)) + " of " + esc(String(village.households))
+      + " households affected</p>"
+    + recoveryBar(composite)
+    + '<p class="mono">' + esc(village.id) + "</p>"
+    + (extraHtml || "")
+    + "</li>";
+}
+
+function villageName(villageId) {
+  for (let i = 0; i < state.villages.length; i += 1) {
+    if (state.villages[i].id === villageId) return state.villages[i].name;
+  }
+  return villageId;
+}
+
+/** Buttons rendered into lists carry their intent in data attributes; one
+ *  delegated listener (§9) turns them into navigation or a prefilled workflow. */
+function actionButton(label, action, payload) {
+  return '<button type="button" class="secondary tiny" data-action="' + esc(action)
+    + '" data-payload="' + esc(JSON.stringify(payload || {})) + '">' + esc(label) + "</button>";
+}
+
+/* --- Health and readiness banners ---------------------------------- */
 
 const banners = $("#banners");
-const bannerState = {};   // key -> element, so each condition shows at most once
+const bannerState = {};
 
 function showBanner(key, tone, title, body, retryLabel, onRetry) {
   hideBanner(key);
   const el = document.createElement("div");
   el.className = "banner is-" + tone;
   const text = document.createElement("p");
-  text.innerHTML = "<strong>" + escapeHtml(title) + "</strong>";
+  text.innerHTML = "<strong>" + esc(title) + "</strong>";
   const detail = document.createElement("span");
-  detail.textContent = body;                 // textContent: no interpolation risk
+  detail.textContent = body;                  // textContent: no interpolation risk
   text.appendChild(detail);
   el.appendChild(text);
   if (retryLabel) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "secondary";
-    btn.textContent = retryLabel;
-    btn.addEventListener("click", function () { hideBanner(key); onRetry(); });
-    el.appendChild(btn);
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "secondary";
+    button.textContent = retryLabel;
+    button.addEventListener("click", function () { hideBanner(key); onRetry(); });
+    el.appendChild(button);
   }
   banners.appendChild(el);
   bannerState[key] = el;
@@ -660,18 +927,17 @@ function hideBanner(key) {
 async function checkHealth() {
   const dot = $("#conn-dot");
   const text = $("#conn-text");
-  const res = await api("/health");
+  const res = await api("/health", { auth: false });
   if (res.network || !res.ok || !res.data) {
     dot.className = "dot down";
     text.textContent = "Service unreachable";
     return;
   }
   dot.className = "dot up";
-  const d = res.data;
-  text.textContent = "Live · " + (d.persistence || "unknown") + " persistence"
-    + (d.version ? " · v" + d.version : "");
-  // An unauthenticated revision is an operational fact, not a detail.
-  if (d.auth === "disabled") {
+  const data = res.data;
+  text.textContent = "Live · " + (data.persistence || "unknown")
+    + (data.version ? " · v" + data.version : "");
+  if (data.auth === "disabled") {
     showBanner("auth", "warn", "Authentication is disabled on this revision. ",
       "Every operational route is reachable without a token. Do not use this deployment for real data.");
   } else {
@@ -681,11 +947,10 @@ async function checkHealth() {
 
 /** GET /ready → 200 { status:"ready" } or 503 { status, persistence, error } */
 async function checkReady() {
-  const res = await api("/ready");
+  const res = await api("/ready", { auth: false });
   if (res.network) {
     showBanner("ready", "danger", "Cannot reach the service. ",
-      "The dashboard could not contact the API. Check your connection, then retry.",
-      "Retry", refreshAll);
+      "The dashboard could not contact the API. Check your connection, then retry.", "Retry", refresh);
     return;
   }
   if (res.status === 503) {
@@ -698,111 +963,147 @@ async function checkReady() {
   hideBanner("ready");
 }
 
-/** GET /public/villages → { villages: [{ id,name,district,state,severity,households,affectedFamilies,recovery }] } */
+/* --- Shared loaders reused by more than one view ------------------- */
+
+/** GET /public/villages — the spine of every view; unauthenticated. */
 async function loadVillages() {
-  const out = $("#villages-out");
-  out.setAttribute("aria-busy", "true");
-  const res = await api("/public/villages");
-  out.setAttribute("aria-busy", "false");
-
-  if (res.network) {
-    out.innerHTML = '<div class="empty"><strong>Could not load villages</strong>'
-      + "<p>The request did not reach the service.</p></div>";
-    addRetry(out, loadVillages);
-    return;
+  const res = await api("/public/villages", { auth: false });
+  if (res.ok && res.data && Array.isArray(res.data.villages)) {
+    state.villages = res.data.villages.slice().sort(function (a, b) {
+      const ra = SEVERITY_RANK[a.severity]; const rb = SEVERITY_RANK[b.severity];
+      const da = ra === undefined ? 9 : ra; const db = rb === undefined ? 9 : rb;
+      if (da !== db) return da - db;
+      return String(a.name || "").localeCompare(String(b.name || ""));
+    });
+    renderVillageDatalist();
+    return { ok: true };
   }
-  if (!res.ok || !res.data || !Array.isArray(res.data.villages)) {
-    const why = res.data && res.data.error ? res.data.error : "the service returned status " + res.status;
-    out.innerHTML = '<div class="empty"><strong>Could not load villages</strong><p>' + escapeHtml(why) + "</p></div>";
-    addRetry(out, loadVillages);
-    return;
-  }
-
-  state.villages = res.data.villages;
-  hideBanner("net");
-  renderVillages(state.villages);
-  renderVillageSuggestions(state.villages);
+  return { ok: false, res: res };
 }
 
-function addRetry(container, fn) {
-  const btn = document.createElement("button");
-  btn.type = "button";
-  btn.className = "secondary";
-  btn.textContent = "Retry";
-  btn.style.marginTop = "12px";
-  btn.addEventListener("click", fn);
-  container.appendChild(btn);
-}
-
-function renderVillages(villages) {
-  const out = $("#villages-out");
-  if (villages.length === 0) {
-    out.innerHTML = '<div class="empty"><strong>No villages registered yet</strong>'
-      + "<p>Once a district officer registers a village it appears here with its severity"
-      + " classification and recovery index.</p></div>";
-    return;
+/** GET /projects (auth) with a fall back to the public projection. */
+async function loadProjects() {
+  if (state.projects) return state.projects;
+  let res = state.token ? await api("/projects") : { status: 404, data: null };
+  if (!res.ok || !res.data || !Array.isArray(res.data.projects)) {
+    // /public/funds is the transparency projection and always exists; it is the
+    // honest fallback when the authenticated index is not deployed.
+    const publicRes = await api("/public/funds", { auth: false });
+    if (publicRes.ok && publicRes.data && Array.isArray(publicRes.data.projects)) {
+      state.projects = { ok: true, projects: publicRes.data.projects, source: "public" };
+      return state.projects;
+    }
+    state.projects = { ok: false, missing: isMissingRoute(res) || isMissingRoute(publicRes), res: publicRes };
+    return state.projects;
   }
-
-  const sorted = villages.slice().sort(function (a, b) {
-    const ra = SEVERITY_RANK[a.severity]; const rb = SEVERITY_RANK[b.severity];
-    const da = ra === undefined ? 9 : ra; const db = rb === undefined ? 9 : rb;
-    if (da !== db) return da - db;
-    return String(a.name || "").localeCompare(String(b.name || ""));
-  });
-
-  const rows = sorted.map(function (v) {
-    const composite = v.recovery && typeof v.recovery.composite === "number" ? v.recovery.composite : null;
-    const pct = composite === null ? 0 : Math.max(0, Math.min(100, composite));
-    const shown = composite === null ? "not scored" : Math.round(composite * 10) / 10 + " / 100";
-    const barLabel = composite === null
-      ? "No recovery index yet"
-      : "Recovery index " + Math.round(composite) + " out of 100";
-
-    return "<li class=\"village\">"
-      + '<div class="village-top">'
-        + '<span class="village-name">' + escapeHtml(v.name) + "</span>"
-        + severityChip(v.severity)
-      + "</div>"
-      + '<p class="village-meta">' + escapeHtml(v.district) + (v.state ? ", " + escapeHtml(v.state) : "")
-        + " · " + escapeHtml(String(v.affectedFamilies)) + " of " + escapeHtml(String(v.households))
-        + " households affected</p>"
-      + '<div class="recovery">'
-        + '<span class="bar" role="img" aria-label="' + escapeHtml(barLabel) + '">'
-          + '<i style="width:' + pct + '%"></i></span>'
-        + '<span class="recovery-val">' + escapeHtml(shown) + "</span>"
-      + "</div>"
-      + '<p class="village-id">' + escapeHtml(v.id) + "</p>"
-      + "</li>";
-  }).join("");
-
-  out.innerHTML = '<ul class="village-list">' + rows + "</ul>";
+  state.projects = { ok: true, projects: res.data.projects, source: "operations" };
+  rememberProjects(state.projects.projects);
+  return state.projects;
 }
 
 /**
- * GET /public/stats → { totalVillages, bySeverity{critical,severe,moderate,minor},
- *                       villagesWithActiveNgo, averageRecoveryComposite }
- * Degrades to figures derived from /public/villages if the endpoint is absent.
+ * Assignment index: villageId → active assignment.
+ *
+ * There is no list endpoint for assignments, so this probes the per-village read
+ * once and, if the route exists, fans out over the village list. When the route
+ * is absent the whole index degrades to null and each caller says so plainly
+ * rather than implying that no village has an NGO.
  */
-async function loadStats() {
-  const res = await api("/public/stats");
+async function loadAssignments() {
+  if (state.assignments || state.assignmentsSupported === false) {
+    return state.assignmentsSupported === false ? null : state.assignments;
+  }
+  if (!state.token || state.villages.length === 0) return null;
+
+  const probe = await api("/villages/" + encodeURIComponent(state.villages[0].id) + "/assignment");
+  if (isMissingRoute(probe)) { state.assignmentsSupported = false; return null; }
+  state.assignmentsSupported = true;
+
+  const index = new Map();
+  if (probe.ok && probe.data) index.set(state.villages[0].id, probe.data);
+  else index.set(state.villages[0].id, null);
+
+  // Bounded fan-out: a district dashboard is not a crawler.
+  const rest = state.villages.slice(1, 60);
+  await Promise.all(rest.map(async function (village) {
+    const res = await api("/villages/" + encodeURIComponent(village.id) + "/assignment");
+    index.set(village.id, res.ok && res.data ? res.data : null);
+  }));
+  state.assignments = index;
+  return index;
+}
+
+/** Reads the NGO name out of whatever shape the assignment read returns. */
+function assignmentNgoName(assignment) {
+  if (!assignment) return null;
+  if (assignment.ngo && assignment.ngo.name) return assignment.ngo.name;
+  if (assignment.ngoName) return assignment.ngoName;
+  const id = assignment.ngoId || (assignment.ngo && assignment.ngo.ngoId);
+  for (let i = 0; i < state.ngos.length; i += 1) if (state.ngos[i].id === id) return state.ngos[i].name;
+  return id || null;
+}
+
+/** GET /ngos, degrading to the ids minted in this tab. */
+async function loadNgos() {
+  const res = await api("/ngos");
+  if (res.ok && res.data && Array.isArray(res.data.ngos)) {
+    state.ngos = res.data.ngos;
+    renderNgoDatalist();
+    return { ok: true, source: "api" };
+  }
+  if (isMissingRoute(res)) {
+    state.ngos = state.recent.ngos.map(function (entry) { return { id: entry.id, name: entry.label || entry.id }; });
+    renderNgoDatalist();
+    return { ok: state.ngos.length > 0, source: "session", missing: true };
+  }
+  return { ok: false, res: res };
+}
+
+/* ====================================================================
+ * SCRIPT §4 — Public view (no credential)
+ * ==================================================================== */
+
+async function loadPublicView() {
+  const villagesOut = $("#pub-villages");
+  const fundsOut = $("#pub-funds");
+  skeleton(villagesOut, 3);
+  skeleton(fundsOut, 2);
+
+  const loaded = await loadVillages();
+  if (!loaded.ok) {
+    showError(villagesOut, "Could not load villages", apiError(loaded.res), loadPublicView);
+    renderFirstRun(false);
+  } else {
+    renderPublicVillages();
+  }
+  await loadPublicStats();
+  await renderPublicFunds();
+}
+
+/** GET /public/stats, degrading to figures derived from /public/villages. */
+async function loadPublicStats() {
+  const res = await api("/public/stats", { auth: false });
   if (res.ok && res.data && typeof res.data.totalVillages === "number") {
+    state.stats = res.data;
     renderStats(res.data, true);
   } else {
-    renderStats(deriveStats(state.villages), false);
+    state.stats = deriveStats(state.villages);
+    renderStats(state.stats, false);
   }
+  renderFirstRun(state.stats && state.stats.totalVillages === 0);
 }
 
 function deriveStats(villages) {
   const bySeverity = { critical: 0, severe: 0, moderate: 0, minor: 0 };
   let sum = 0, scored = 0;
-  villages.forEach(function (v) {
-    if (Object.prototype.hasOwnProperty.call(bySeverity, v.severity)) bySeverity[v.severity] += 1;
-    if (v.recovery && typeof v.recovery.composite === "number") { sum += v.recovery.composite; scored += 1; }
+  villages.forEach(function (village) {
+    if (Object.prototype.hasOwnProperty.call(bySeverity, village.severity)) bySeverity[village.severity] += 1;
+    if (village.recovery && typeof village.recovery.composite === "number") {
+      sum += village.recovery.composite; scored += 1;
+    }
   });
   return {
-    totalVillages: villages.length,
-    bySeverity: bySeverity,
-    villagesWithActiveNgo: null,
+    totalVillages: villages.length, bySeverity: bySeverity, villagesWithActiveNgo: null,
     averageRecoveryComposite: scored === 0 ? null : sum / scored
   };
 }
@@ -810,121 +1111,915 @@ function deriveStats(villages) {
 function renderStats(stats, hasNgoFigure) {
   const bySeverity = stats.bySeverity || {};
   const total = typeof stats.totalVillages === "number" ? stats.totalVillages : state.villages.length;
-  const acute = (bySeverity.critical || 0) + (bySeverity.severe || 0);
-
   $("#t-villages").textContent = String(total);
-  $("#t-acute").textContent = String(acute);
+  $("#t-acute").textContent = String((bySeverity.critical || 0) + (bySeverity.severe || 0));
 
   const ngoEl = $("#t-ngo");
   if (hasNgoFigure && typeof stats.villagesWithActiveNgo === "number") {
-    ngoEl.innerHTML = escapeHtml(String(stats.villagesWithActiveNgo))
-      + " <small>of " + escapeHtml(String(total)) + "</small>";
+    ngoEl.innerHTML = esc(String(stats.villagesWithActiveNgo)) + " <small>of " + esc(String(total)) + "</small>";
   } else {
-    ngoEl.innerHTML = '<small>not published</small>';
+    ngoEl.innerHTML = "<small>not published</small>";
   }
 
-  const avg = stats.averageRecoveryComposite;
-  $("#t-recovery").innerHTML = typeof avg === "number"
-    ? escapeHtml(String(Math.round(avg * 10) / 10)) + ' <small>/ 100</small>'
-    : '<small>not scored yet</small>';
+  const average = stats.averageRecoveryComposite;
+  $("#t-recovery").innerHTML = typeof average === "number"
+    ? esc(String(num1(average))) + " <small>/ 100</small>"
+    : "<small>not scored yet</small>";
 
-  $("#sev-row").innerHTML = SEVERITIES.map(function (sev) {
-    const n = bySeverity[sev] || 0;
-    return '<span class="chip" data-severity="' + sev + '">'
-      + '<span class="swatch" aria-hidden="true"></span>' + sev
-      + ' <span class="count">' + n + "</span></span>";
+  $("#sev-row").innerHTML = SEVERITIES.map(function (severity) {
+    return '<span class="chip" data-severity="' + severity + '"><span class="swatch" aria-hidden="true"></span>'
+      + severity + ' <span class="count">' + (bySeverity[severity] || 0) + "</span></span>";
   }).join("");
 }
 
-/**
- * GET /public/funds → { projects: [{ id, villageId, name, category, fundSource,
- *   currency, sanctionedMinor, releasedMinor, spentMinor, status }] }
- * The fund-monitoring context is not yet wired into the platform, so this may be
- * absent (404) or legitimately empty. Both are handled without breaking the page.
- */
-async function loadFunds() {
-  const out = $("#funds-out");
-  const res = await api("/public/funds");
+function renderPublicVillages() {
+  const out = $("#pub-villages");
+  done(out);
+  if (state.villages.length === 0) {
+    showEmpty(out, "No villages registered yet",
+      "Once a district officer registers a village it appears here with its severity classification and recovery index.");
+    return;
+  }
+  out.innerHTML = '<ul class="list">'
+    + state.villages.map(function (village) {
+        return villageRow(village, '<div class="actions">'
+          + actionButton("Open profile", "village", { villageId: village.id }) + "</div>");
+      }).join("")
+    + "</ul>";
+}
 
-  if (res.network) {
-    out.innerHTML = '<div class="empty"><strong>Fund data unavailable</strong>'
-      + "<p>The request did not reach the service.</p></div>";
-    addRetry(out, loadFunds);
-    return;
-  }
-  if (res.status === 404 || !res.data || !Array.isArray(res.data.projects)) {
-    out.innerHTML = '<div class="empty"><strong>Fund transparency not available</strong>'
-      + "<p>This deployment does not publish the fund-monitoring projection yet."
-      + " Village recovery data above is unaffected.</p></div>";
-    return;
-  }
+async function renderPublicFunds() {
+  const out = $("#pub-funds");
+  const res = await api("/public/funds", { auth: false });
+  done(out);
+
+  if (res.network) { showError(out, "Fund data unavailable", "The request did not reach the service.", renderPublicFunds); return; }
+  if (!res.data || !Array.isArray(res.data.projects)) { showUnavailable(out, "Fund transparency"); return; }
 
   const projects = res.data.projects;
   if (projects.length === 0) {
-    out.innerHTML = '<div class="empty"><strong>No funded projects published yet</strong>'
-      + "<p>Sanctioned projects, releases and expenditure appear here once fund monitoring"
-      + " is reporting for this deployment.</p></div>";
+    showEmpty(out, "No funded projects published yet",
+      "Sanctioned projects, releases and expenditure appear here as soon as fund monitoring reports for this deployment.");
+    return;
+  }
+  out.innerHTML = fundSummary(projects) + fundTable(projects);
+}
+
+/** Aggregate ladder + tiles shared by the Public and District views. */
+function fundSummary(projects) {
+  let sanctioned = 0, released = 0, spent = 0;
+  const currency = projects[0] && projects[0].currency ? projects[0].currency : "";
+  projects.forEach(function (project) {
+    sanctioned += project.sanctionedMinor || 0;
+    released += project.releasedMinor || 0;
+    spent += project.spentMinor || 0;
+  });
+  return '<div class="card"><div class="card-head"><span class="card-title">All projects</span>'
+    + '<span class="row-meta">' + esc(String(projects.length)) + " project" + (projects.length === 1 ? "" : "s") + "</span></div>"
+    + fundLadder(sanctioned, released, spent, currency) + "</div>";
+}
+
+function fundTable(projects) {
+  const rows = projects.map(function (project) {
+    return "<tr><td>" + esc(project.name) + "</td>"
+      + "<td>" + esc(words(project.category)) + "</td>"
+      + "<td>" + esc(words(project.fundSource)) + "</td>"
+      + '<td class="num">' + esc(money(project.sanctionedMinor, project.currency)) + "</td>"
+      + '<td class="num">' + esc(money(project.releasedMinor, project.currency)) + "</td>"
+      + '<td class="num">' + esc(money(project.spentMinor, project.currency)) + "</td>"
+      + "<td>" + esc(words(project.status)) + "</td></tr>";
+  }).join("");
+  return '<div class="table-scroll" style="margin-top:8px"><table>'
+    + '<caption class="sr-only">Funded projects with sanctioned, released and spent amounts</caption>'
+    + '<thead><tr><th scope="col">Project</th><th scope="col">Category</th><th scope="col">Source</th>'
+    + '<th scope="col">Sanctioned</th><th scope="col">Released</th><th scope="col">Spent</th>'
+    + '<th scope="col">Status</th></tr></thead><tbody>' + rows + "</tbody></table></div>";
+}
+
+/** First-run guide. The deployed database starts empty; say what to do about it. */
+function renderFirstRun(isEmpty) {
+  const out = $("#first-run");
+  if (!isEmpty) { out.innerHTML = ""; return; }
+  out.innerHTML = '<div class="card guide">'
+    + "<h3>Nothing has been registered yet</h3>"
+    + "<p class=\"row-meta\">This deployment's database is empty. Four steps put a village on the map:</p>"
+    + "<ol>"
+      + "<li><strong>Connect.</strong> Open Operations and paste the API bearer token — it unlocks every write workflow and the three internal dashboards.</li>"
+      + "<li><strong>Register a village</strong> with its demographics and severity. It appears on this page immediately.</li>"
+      + "<li><strong>Register an NGO, then assign it</strong> as the village's lead. One village, one NGO — the District view lists every village still without one.</li>"
+      + "<li><strong>Record damage, aid, funds and issues.</strong> The recovery index recalculates from damage assessments, and the Village view shows all 11 dimensions.</li>"
+    + "</ol>"
+    + '<div class="actions">'
+      + actionButton("Open Operations", "ops", {})
+      + actionButton("Register a village", "workflow", { workflow: "w-village" })
+    + "</div></div>";
+}
+
+/* ====================================================================
+ * SCRIPT §5 — District view
+ * ==================================================================== */
+
+function requireToken(gateId, bodyId, what) {
+  const gate = $("#" + gateId);
+  const body = $("#" + bodyId);
+  if (state.token) { gate.innerHTML = ""; body.classList.remove("hidden"); return true; }
+  body.classList.add("hidden");
+  gate.innerHTML = '<div class="state"><strong>Sign in to see the ' + esc(what) + "</strong>"
+    + "<p>This dashboard reads authorised endpoints. Connect the API bearer token in Operations to unlock it. "
+    + "The Public view needs no credential and is available now.</p>"
+    + '<div class="actions">' + actionButton("Open Operations", "ops", {})
+    + actionButton("View public dashboard", "public", {}) + "</div></div>";
+  return false;
+}
+
+async function loadDistrictView() {
+  if (!requireToken("district-gate", "district-body", "district dashboard")) return;
+
+  const unassignedOut = $("#dist-unassigned");
+  skeleton(unassignedOut, 3);
+  skeleton($("#dist-funds"), 2);
+  skeleton($("#dist-anomalies"), 1, true);
+  skeleton($("#dist-issues"), 2, true);
+  skeleton($("#dist-recommendations"), 2, true);
+  skeleton($("#dist-alerts"), 1, true);
+
+  const loaded = await loadVillages();
+  if (!loaded.ok) {
+    showError(unassignedOut, "Could not load villages", apiError(loaded.res), loadDistrictView);
+  }
+  await loadPublicStats();
+
+  const unassigned = await renderUnassigned();
+  await renderDistrictFunds();
+  await renderAnomalies();
+  await renderDistrictIssues();
+  await renderRecommendations();
+  await renderAlerts();
+  renderDistrictTiles(unassigned);
+}
+
+function renderDistrictTiles(unassigned) {
+  const stats = state.stats || deriveStats(state.villages);
+  const bySeverity = stats.bySeverity || {};
+  const acute = (bySeverity.critical || 0) + (bySeverity.severe || 0);
+  const unassignedCount = unassigned === null ? null : unassigned.length;
+  const funds = state.projects && state.projects.ok ? state.projects.projects : null;
+  let utilisation = null;
+  if (funds && funds.length > 0) {
+    let sanctioned = 0, spent = 0;
+    funds.forEach(function (p) { sanctioned += p.sanctionedMinor || 0; spent += p.spentMinor || 0; });
+    utilisation = sanctioned > 0 ? Math.round(pct(spent, sanctioned)) : null;
+  }
+  $("#dist-tiles").innerHTML =
+      '<div class="tile"><dt>Villages</dt><dd>' + esc(String(stats.totalVillages || 0)) + "</dd></div>"
+    + '<div class="tile"><dt>Critical or severe</dt><dd>' + esc(String(acute)) + "</dd></div>"
+    + '<div class="tile' + (unassignedCount ? " is-alert" : "") + '"><dt>No lead NGO</dt><dd>'
+      + (unassignedCount === null ? "<small>unknown</small>" : esc(String(unassignedCount))) + "</dd></div>"
+    + '<div class="tile"><dt>Funds spent</dt><dd>'
+      + (utilisation === null ? "<small>no projects</small>" : esc(String(utilisation)) + " <small>% of sanctioned</small>")
+      + "</dd></div>";
+}
+
+/**
+ * The flagship gap: villages nobody owns.
+ *
+ * Three sources, in order of directness — a dedicated list route, the
+ * recommendation feed (which raises `assign_ngo` for exactly this condition),
+ * then the per-village assignment index. If none is deployed the panel says so
+ * rather than rendering an empty list that would read as "no gaps".
+ * Returns the array, or null when it could not be determined.
+ */
+async function renderUnassigned() {
+  const out = $("#dist-unassigned");
+
+  const direct = await api("/villages/unassigned");
+  if (direct.ok && direct.data && Array.isArray(direct.data.villages)) {
+    return paintUnassigned(out, direct.data.villages.map(function (v) { return v.villageId || v.id; }), "the registry");
+  }
+
+  const recommended = await api("/recommendations");
+  if (recommended.ok && recommended.data && Array.isArray(recommended.data.recommendations)) {
+    const ids = recommended.data.recommendations
+      .filter(function (r) { return r.type === "assign_ngo"; })
+      .map(function (r) { return r.villageId; });
+    return paintUnassigned(out, ids, "the recommendation engine");
+  }
+
+  const index = await loadAssignments();
+  if (index) {
+    const ids = [];
+    state.villages.forEach(function (village) { if (!index.get(village.id)) ids.push(village.id); });
+    return paintUnassigned(out, ids, "the assignment index");
+  }
+
+  done(out);
+  showUnavailable(out, "The unassigned-village list is");
+  return null;
+}
+
+function paintUnassigned(out, ids, source) {
+  done(out);
+  const byId = {};
+  state.villages.forEach(function (village) { byId[village.id] = village; });
+  const villages = ids.map(function (id) {
+    return byId[id] || { id: id, name: id, district: "unknown", state: "", severity: "unknown",
+                         households: 0, affectedFamilies: 0, recovery: null };
+  }).sort(function (a, b) {
+    const ra = SEVERITY_RANK[a.severity]; const rb = SEVERITY_RANK[b.severity];
+    return (ra === undefined ? 9 : ra) - (rb === undefined ? 9 : rb);
+  });
+
+  if (villages.length === 0) {
+    out.innerHTML = '<div class="card"><strong>Every village has a lead NGO.</strong>'
+      + '<p class="row-meta" style="margin-top:4px">All ' + esc(String(state.villages.length))
+      + " registered village" + (state.villages.length === 1 ? " has" : "s have")
+      + " an active assignment. Source: " + esc(source) + ".</p></div>";
+    return villages;
+  }
+
+  out.innerHTML = '<ul class="list">' + villages.map(function (village) {
+      return villageRow(village, '<div class="actions">'
+        + actionButton("Assign a lead NGO", "workflow", { workflow: "w-assign", prefill: { villageId: village.id } })
+        + actionButton("Open profile", "village", { villageId: village.id }) + "</div>");
+    }).join("") + "</ul>"
+    + '<p class="section-note" style="margin-top:12px">Source: ' + esc(source)
+    + ". Ordered by severity — the most acute village without an owner is first.</p>";
+  return villages;
+}
+
+async function renderDistrictFunds() {
+  const out = $("#dist-funds");
+  const loaded = await loadProjects();
+  done(out);
+  if (!loaded.ok) {
+    if (loaded.missing) { showUnavailable(out, "Fund monitoring"); return; }
+    showError(out, "Could not load projects", apiError(loaded.res), function () { state.projects = null; renderDistrictFunds(); });
+    return;
+  }
+  const projects = loaded.projects;
+  if (projects.length === 0) {
+    showEmpty(out, "No projects sanctioned yet",
+      "Sanction a project in Operations and its sanctioned, released and spent ladder appears here.");
+    return;
+  }
+  out.innerHTML = fundSummary(projects)
+    + '<ul class="list" style="margin-top:8px">' + projects.map(function (project) {
+        return '<li class="row"><div class="row-top"><span class="row-name">' + esc(project.name) + "</span>"
+          + statusChip(project.status) + "</div>"
+          + '<p class="row-meta">' + esc(words(project.category)) + " · funded by " + esc(words(project.fundSource))
+          + " · " + esc(villageName(project.villageId)) + "</p>"
+          + fundLadder(project.sanctionedMinor, project.releasedMinor, project.spentMinor, project.currency)
+          + '<p class="mono">' + esc(project.id) + "</p></li>";
+      }).join("") + "</ul>"
+    + (loaded.source === "public"
+        ? '<p class="section-note" style="margin-top:12px">Read from the public transparency projection —'
+          + " the authorised project index is not deployed on this revision.</p>"
+        : "");
+}
+
+async function renderAnomalies() {
+  const out = $("#dist-anomalies");
+  const loaded = await loadProjects();
+  done(out);
+  if (!loaded.ok) { showUnavailable(out, "Fund anomalies are"); return; }
+
+  const flagged = [];
+  loaded.projects.forEach(function (project) {
+    const anomalies = Array.isArray(project.anomalies) ? project.anomalies : [];
+    anomalies.forEach(function (anomaly) { flagged.push({ project: project, anomaly: anomaly }); });
+  });
+
+  if (loaded.source === "public") {
+    showEmpty(out, "Anomaly flags are not published publicly",
+      "The public projection carries the fund ladder but not the anomaly list. Connect to a deployment serving the authorised project index to review flags here.");
+    return;
+  }
+  if (flagged.length === 0) {
+    showEmpty(out, "No anomalies flagged",
+      "Run \"Detect fund anomalies\" in Operations against a project to check it for overspend against comparable work, a stall since the last release, or duplicate funding.");
+    return;
+  }
+  out.innerHTML = flagged.map(function (entry) {
+    return '<div class="flag"><strong>' + esc(words(entry.anomaly.type)) + " · " + esc(entry.project.name) + "</strong>"
+      + esc(entry.anomaly.details) + '<p class="mono" style="margin-top:4px">' + esc(entry.project.id)
+      + " · detected " + esc(when(entry.anomaly.detectedAt)) + "</p></div>";
+  }).join("");
+}
+
+async function renderDistrictIssues() {
+  const out = $("#dist-issues");
+  const res = await api("/issues");
+  done(out);
+  if (isMissingRoute(res)) { showUnavailable(out, "The issue index is"); return; }
+  if (!res.ok || !res.data || !Array.isArray(res.data.issues)) {
+    showError(out, "Could not load issues", apiError(res), renderDistrictIssues);
+    return;
+  }
+  const open = res.data.issues.filter(function (issue) { return issue.status !== "verified"; });
+  if (open.length === 0) {
+    showEmpty(out, "No open issues", "Every reported issue has been resolved and verified.");
+    return;
+  }
+  out.innerHTML = '<ul class="list">' + open.map(issueRow).join("") + "</ul>";
+}
+
+/** Renders one issue, always naming who it routed to and why. */
+function issueRow(issue) {
+  const routed = issue.routedTo || (issue.partyType ? { partyType: issue.partyType, party: issue.party } : null);
+  const corruption = issue.category === "corruption";
+  return '<li class="row' + (corruption ? " is-flagged" : "") + '">'
+    + '<div class="row-top"><span class="row-name">' + esc(words(issue.category)) + "</span>"
+      + statusChip(issue.status, issue.status === "resolved" || issue.status === "verified" ? "ok" : null) + "</div>"
+    + '<p class="row-meta wrapall">' + esc(issue.description || "") + "</p>"
+    + '<p class="row-meta">' + esc(villageName(issue.villageId))
+      + (issue.reportedAt ? " · reported " + esc(when(issue.reportedAt)) : "") + "</p>"
+    + (routed
+        ? '<p class="row-meta">Routed to the <strong>' + esc(words(routed.partyType)) + "</strong> "
+          + '<span class="mono">' + esc(routed.party) + "</span>" + routingReason(issue.category) + "</p>"
+        : '<p class="row-meta">Not routed yet.</p>')
+    + '<p class="mono">' + esc(issue.id) + "</p>"
+    + '<div class="actions">'
+      + (routed ? "" : actionButton("Route it", "workflow", { workflow: "w-route", prefill: { issueId: issue.id } }))
+      + actionButton("Open village", "village", { villageId: issue.villageId })
+    + "</div></li>";
+}
+
+/** The routing policy, stated in words so the decision is legible, not implicit. */
+function routingReason(category) {
+  if (category === "corruption") {
+    return " — corruption reports never route to the lead NGO; they go to the district administration"
+      + " because the NGO may be the subject of the complaint.";
+  }
+  if (category === "health") return " — health issues route to the health department.";
+  if (["infrastructure", "water", "food", "education"].indexOf(category) !== -1) {
+    return " — this category routes to the village's lead NGO where one is assigned, otherwise to the district administration.";
+  }
+  return " — categories with no NGO owner route to the district administration.";
+}
+
+async function renderRecommendations() {
+  const out = $("#dist-recommendations");
+  const res = await api("/recommendations");
+  done(out);
+  if (isMissingRoute(res)) { showUnavailable(out, "Recommendations are"); return; }
+  if (!res.ok || !res.data || !Array.isArray(res.data.recommendations)) {
+    showError(out, "Could not load recommendations", apiError(res), renderRecommendations);
+    return;
+  }
+  const items = res.data.recommendations;
+  if (items.length === 0) {
+    showEmpty(out, "No recommendations",
+      "No village currently matches an urgent-help, unassigned, ignored or monitor rule.");
+    return;
+  }
+  const PRIORITY = { 1: "priority 1 — act now", 2: "priority 2 — this week", 3: "priority 3 — observe" };
+  out.innerHTML = '<ul class="list">' + items.map(function (item) {
+    return '<li class="row' + (item.priority === 1 ? " is-flagged" : "") + '">'
+      + '<div class="row-top"><span class="row-name">' + esc(words(item.type)) + "</span>"
+        + '<span class="chip' + (item.priority === 1 ? " is-warn" : "") + '">'
+        + esc(PRIORITY[item.priority] || "priority " + item.priority) + "</span></div>"
+      + '<p class="row-meta">' + esc(villageName(item.villageId)) + " — " + esc(item.reason) + "</p>"
+      + '<div class="actions">' + actionButton("Open village", "village", { villageId: item.villageId })
+      + (item.type === "assign_ngo"
+          ? actionButton("Assign a lead NGO", "workflow", { workflow: "w-assign", prefill: { villageId: item.villageId } })
+          : "")
+      + "</div></li>";
+  }).join("") + "</ul>";
+}
+
+async function renderAlerts() {
+  const out = $("#dist-alerts");
+  const res = await api("/alerts");
+  done(out);
+  if (isMissingRoute(res)) { showUnavailable(out, "Smart alerts are"); return; }
+  if (!res.ok || !res.data || !Array.isArray(res.data.alerts)) {
+    showError(out, "Could not load alerts", apiError(res), renderAlerts);
+    return;
+  }
+  if (res.data.alerts.length === 0) {
+    showEmpty(out, "No smart alerts raised",
+      "Ingest a field report or social post in Operations, then evaluate it — alerts appear here when a rule matches.");
+    return;
+  }
+  out.innerHTML = res.data.alerts.map(function (alert) {
+    return '<div class="flag"><strong>' + esc(words(alert.type))
+      + (alert.villageName ? " · " + esc(alert.villageName) : "") + "</strong>"
+      + esc(alert.details) + '<p class="mono" style="margin-top:4px">' + esc(alert.id)
+      + " · raised " + esc(when(alert.raisedAt)) + "</p></div>";
+  }).join("");
+}
+
+/* ====================================================================
+ * SCRIPT §6 — NGO view
+ * ==================================================================== */
+
+async function loadNgoView() {
+  if (!requireToken("ngo-gate", "ngo-body", "NGO dashboard")) return;
+  const content = $("#ngo-content");
+  skeleton(content, 3);
+
+  await loadVillages();
+  const loaded = await loadNgos();
+  const select = $("#ngo-select");
+  const hint = $("#ngo-select-hint");
+
+  if (state.ngos.length === 0) {
+    select.innerHTML = '<option value="">No NGOs available</option>';
+    select.disabled = true;
+    hint.textContent = loaded.missing
+      ? "The NGO index is not deployed on this revision, and no NGO has been registered in this tab yet."
+      : "No NGO is registered yet.";
+    done(content);
+    showEmpty(content, "No NGO to show",
+      "Register an NGO in Operations, then assign it to a village. Its portfolio appears here.");
     return;
   }
 
-  let sanctioned = 0, released = 0, spent = 0;
-  const currency = projects[0] && projects[0].currency ? projects[0].currency : "";
-  const rows = projects.map(function (p) {
-    sanctioned += p.sanctionedMinor || 0;
-    released += p.releasedMinor || 0;
-    spent += p.spentMinor || 0;
-    return "<tr>"
-      + "<td>" + escapeHtml(p.name) + "</td>"
-      + "<td>" + escapeHtml(p.category) + "</td>"
-      + "<td>" + escapeHtml(p.fundSource) + "</td>"
-      + '<td class="num">' + money(p.sanctionedMinor, p.currency) + "</td>"
-      + '<td class="num">' + money(p.releasedMinor, p.currency) + "</td>"
-      + '<td class="num">' + money(p.spentMinor, p.currency) + "</td>"
-      + "<td>" + escapeHtml(String(p.status || "").replace(/_/g, " ")) + "</td>"
-      + "</tr>";
+  select.disabled = false;
+  hint.textContent = loaded.source === "session"
+    ? "The NGO index is not deployed on this revision — this list is the NGOs registered in this tab."
+    : "Choose the NGO whose portfolio you want to see.";
+  if (!state.ngoId || !state.ngos.some(function (n) { return n.id === state.ngoId; })) {
+    state.ngoId = state.ngos[0].id;
+  }
+  select.innerHTML = state.ngos.map(function (ngo) {
+    return '<option value="' + esc(ngo.id) + '"' + (ngo.id === state.ngoId ? " selected" : "") + ">"
+      + esc(ngo.name || ngo.id) + "</option>";
   }).join("");
 
-  out.innerHTML = '<div class="tiles" style="margin-bottom:12px">'
-      + '<div class="tile"><dt>Projects</dt><dd>' + projects.length + "</dd></div>"
-      + '<div class="tile"><dt>Sanctioned</dt><dd style="font-size:1.05rem">' + money(sanctioned, currency) + "</dd></div>"
-      + '<div class="tile"><dt>Released</dt><dd style="font-size:1.05rem">' + money(released, currency) + "</dd></div>"
-      + '<div class="tile"><dt>Spent</dt><dd style="font-size:1.05rem">' + money(spent, currency) + "</dd></div>"
+  await renderNgoPortfolio();
+}
+
+async function renderNgoPortfolio() {
+  const out = $("#ngo-content");
+  skeleton(out, 3);
+  const ngoId = state.ngoId;
+  const ngo = state.ngos.filter(function (n) { return n.id === ngoId; })[0] || { id: ngoId, name: ngoId };
+
+  // Assigned villages: a dedicated route if one exists, else the assignment index.
+  let villages = null;
+  let sourceNote = "";
+  const direct = await api("/ngos/" + encodeURIComponent(ngoId) + "/villages");
+  if (direct.ok && direct.data && Array.isArray(direct.data.villages)) {
+    villages = direct.data.villages.map(function (v) { return v.villageId || v.id; });
+  } else {
+    const index = await loadAssignments();
+    if (index) {
+      villages = [];
+      index.forEach(function (assignment, villageId) {
+        const id = assignment && (assignment.ngoId || (assignment.ngo && assignment.ngo.ngoId));
+        if (id === ngoId) villages.push(villageId);
+      });
+      sourceNote = "Derived from the per-village assignment index.";
+    }
+  }
+
+  done(out);
+  let html = '<div class="section"><h3>' + esc(ngo.name || ngoId) + "</h3>"
+    + '<div class="card"><p class="row-meta">'
+      + (Array.isArray(ngo.focusAreas) && ngo.focusAreas.length
+          ? "Focus: " + esc(ngo.focusAreas.join(", ")) + " · " : "")
+      + (typeof ngo.capacity === "number" ? "Capacity " + esc(String(ngo.capacity)) + " villages · " : "")
+      + '</p><p class="mono">' + esc(ngoId) + "</p></div></div>";
+
+  html += '<div class="section"><h3>Assigned villages</h3>'
+    + '<p class="rule"><strong>One Village → One NGO.</strong> Each village below has this NGO as its single '
+    + "active lead. Assigning a different NGO retires this assignment; the history is kept, never deleted.</p>";
+
+  if (villages === null) {
+    html += '<div class="state"><strong>Assignment index not available yet</strong>'
+      + "<p>This deployment serves neither an NGO-to-village route nor a per-village assignment read, so the "
+      + "portfolio cannot be listed. Register and assign workflows in Operations are unaffected.</p></div></div>";
+    out.innerHTML = html;
+    return;
+  }
+  if (villages.length === 0) {
+    html += '<div class="state"><strong>No villages assigned</strong>'
+      + "<p>This NGO leads no village yet. Assign it one from Operations or from the District dashboard's "
+      + "list of villages with no lead NGO.</p>"
+      + '<div class="actions">'
+      + actionButton("Assign a village", "workflow", { workflow: "w-assign", prefill: { ngoId: ngoId } })
+      + "</div></div></div>";
+    out.innerHTML = html;
+    return;
+  }
+
+  const byId = {};
+  state.villages.forEach(function (village) { byId[village.id] = village; });
+  html += '<ul class="list">' + villages.map(function (villageId) {
+      const village = byId[villageId] || { id: villageId, name: villageId, district: "unknown", state: "",
+        severity: "unknown", households: 0, affectedFamilies: 0, recovery: null };
+      return villageRow(village, '<div class="actions">'
+        + actionButton("Open profile", "village", { villageId: villageId }) + "</div>");
+    }).join("") + "</ul>"
+    + (sourceNote ? '<p class="section-note" style="margin-top:12px">' + esc(sourceNote) + "</p>" : "")
+    + "</div>";
+
+  out.innerHTML = html;
+
+  // Per-village detail loads after the list paints, so the page is useful immediately.
+  await renderNgoWorkload(out, villages);
+}
+
+async function renderNgoWorkload(out, villageIds) {
+  const holder = document.createElement("div");
+  holder.className = "section";
+  holder.innerHTML = "<h3>Projects, beneficiaries and pending work</h3>";
+  const body = document.createElement("div");
+  skeleton(body, 2);
+  holder.appendChild(body);
+  out.appendChild(holder);
+
+  const loadedProjects = await loadProjects();
+  const projectsByVillage = {};
+  if (loadedProjects.ok) {
+    loadedProjects.projects.forEach(function (project) {
+      (projectsByVillage[project.villageId] = projectsByVillage[project.villageId] || []).push(project);
+    });
+  }
+
+  const issuesRes = await api("/issues");
+  const issuesByVillage = {};
+  if (issuesRes.ok && issuesRes.data && Array.isArray(issuesRes.data.issues)) {
+    issuesRes.data.issues.forEach(function (issue) {
+      (issuesByVillage[issue.villageId] = issuesByVillage[issue.villageId] || []).push(issue);
+    });
+  }
+
+  const blocks = await Promise.all(villageIds.slice(0, 20).map(async function (villageId) {
+    const roster = await api("/villages/" + encodeURIComponent(villageId) + "/beneficiaries");
+    const beneficiaries = roster.ok && roster.data && Array.isArray(roster.data.beneficiaries)
+      ? roster.data.beneficiaries : [];
+    const duplicates = beneficiaries.reduce(function (total, entry) { return total + (entry.duplicateFlags || 0); }, 0);
+    const deliveries = beneficiaries.reduce(function (total, entry) { return total + (entry.aidDeliveries || 0); }, 0);
+    const projects = projectsByVillage[villageId] || [];
+    const openIssues = (issuesByVillage[villageId] || []).filter(function (i) { return i.status !== "verified"; });
+
+    return '<div class="card"><div class="card-head"><span class="card-title">' + esc(villageName(villageId)) + "</span>"
+      + actionButton("Open profile", "village", { villageId: villageId }) + "</div>"
+      + '<div class="tiles" style="margin-bottom:8px">'
+        + '<div class="tile"><dt>Projects</dt><dd>' + esc(String(projects.length)) + "</dd></div>"
+        + '<div class="tile"><dt>Beneficiaries</dt><dd>' + esc(String(beneficiaries.length)) + "</dd></div>"
+        + '<div class="tile"><dt>Aid deliveries</dt><dd>' + esc(String(deliveries)) + "</dd></div>"
+        + '<div class="tile' + (openIssues.length ? " is-alert" : "") + '"><dt>Open issues</dt><dd>'
+          + esc(String(openIssues.length)) + "</dd></div>"
+      + "</div>"
+      + (duplicates > 0
+          ? '<div class="flag"><strong>' + esc(String(duplicates)) + " duplicate-aid flag"
+            + (duplicates === 1 ? "" : "s") + " on this village's registry</strong>"
+            + "Aid is recorded and flagged, never dropped. Verify with the other provider before the next delivery.</div>"
+          : "")
+      + projects.map(function (project) {
+          return '<div style="margin-top:12px"><p class="row-meta"><strong>' + esc(project.name) + "</strong> · "
+            + esc(words(project.status)) + "</p>"
+            + fundLadder(project.sanctionedMinor, project.releasedMinor, project.spentMinor, project.currency) + "</div>";
+        }).join("")
+      + "</div>";
+  }));
+
+  body.innerHTML = blocks.join("");
+  done(body);
+  if (blocks.length === 0) showEmpty(body, "Nothing to show", "No assigned village produced any records yet.");
+}
+
+/* ====================================================================
+ * SCRIPT §7 — Village view
+ * ==================================================================== */
+
+async function loadVillageView() {
+  if (!requireToken("village-gate", "village-body", "village profile")) return;
+  const content = $("#village-content");
+  skeleton(content, 4);
+
+  const loaded = await loadVillages();
+  const select = $("#village-select");
+  if (!loaded.ok) {
+    select.innerHTML = '<option value="">Could not load villages</option>';
+    select.disabled = true;
+    done(content);
+    showError(content, "Could not load villages", apiError(loaded.res), loadVillageView);
+    return;
+  }
+  if (state.villages.length === 0) {
+    select.innerHTML = '<option value="">No villages registered</option>';
+    select.disabled = true;
+    done(content);
+    showEmpty(content, "No village to show",
+      "Register a village in Operations. Its profile, damage assessments and recovery index appear here.");
+    return;
+  }
+  select.disabled = false;
+  if (!state.villageId || !state.villages.some(function (v) { return v.id === state.villageId; })) {
+    state.villageId = state.villages[0].id;
+  }
+  select.innerHTML = state.villages.map(function (village) {
+    return '<option value="' + esc(village.id) + '"' + (village.id === state.villageId ? " selected" : "") + ">"
+      + esc(village.name) + " — " + esc(village.district) + "</option>";
+  }).join("");
+
+  await renderVillageProfile();
+}
+
+const DAMAGE_FIELDS = [
+  ["housesDamaged", "Houses damaged"], ["schoolsDamaged", "Schools damaged"],
+  ["healthCentresDamaged", "Health centres damaged"], ["waterSourcesDamaged", "Water sources damaged"],
+  ["agricultureHectaresLost", "Agriculture hectares lost"], ["livestockLost", "Livestock lost"]
+];
+
+async function renderVillageProfile() {
+  const out = $("#village-content");
+  const villageId = state.villageId;
+  skeleton(out, 4);
+
+  const res = await api("/villages/" + encodeURIComponent(villageId));
+  done(out);
+  if (res.status === 401) { handleUnauthorized(null); showError(out, "Token rejected", "Re-enter the API token in Operations.", null); return; }
+  if (!res.ok || !res.data) {
+    showError(out, "Could not load the village profile", apiError(res), renderVillageProfile);
+    return;
+  }
+  const village = res.data;
+
+  let html = '<div class="section"><h3>Profile</h3><div class="card">'
+    + '<div class="card-head"><span class="card-title" style="font-size:1.125rem">' + esc(village.name) + "</span>"
+      + severityChip(village.severity) + "</div>"
+    + '<p class="row-meta">' + esc(village.district) + (village.state ? ", " + esc(village.state) : "") + "</p>"
+    + '<div class="tiles" style="margin-top:12px">'
+      + '<div class="tile"><dt>Population</dt><dd>' + esc(String(village.population)) + "</dd></div>"
+      + '<div class="tile"><dt>Households</dt><dd>' + esc(String(village.households)) + "</dd></div>"
+      + '<div class="tile' + (village.affectedFamilies > 0 ? " is-alert" : "") + '"><dt>Affected families</dt><dd>'
+        + esc(String(village.affectedFamilies)) + "</dd></div>"
+      + '<div class="tile"><dt>Location</dt><dd style="font-size:0.9375rem">'
+        + esc(village.geo ? num1(village.geo.lat) + ", " + num1(village.geo.lng) : "—") + "</dd></div>"
     + "</div>"
-    + '<div class="table-scroll"><table><caption class="sr-only">Funded projects with sanctioned, released and spent amounts</caption>'
-    + "<thead><tr><th scope=\"col\">Project</th><th scope=\"col\">Category</th><th scope=\"col\">Source</th>"
-    + "<th scope=\"col\">Sanctioned</th><th scope=\"col\">Released</th><th scope=\"col\">Spent</th>"
-    + "<th scope=\"col\">Status</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
+    + '<p class="mono" style="margin-top:12px">' + esc(village.id) + "</p></div></div>";
+
+  out.innerHTML = html;
+
+  // Each panel loads independently: one missing route never blanks the profile.
+  await Promise.all([
+    appendPanel(out, "Recovery index", renderRecoveryPanel(villageId)),
+    appendPanel(out, "Lead NGO and committee", renderAssignmentPanel(villageId)),
+    appendPanel(out, "Damage assessments", Promise.resolve(renderDamagePanel(village))),
+    appendPanel(out, "Funded projects", renderVillageProjects(villageId)),
+    appendPanel(out, "Beneficiaries and aid", renderVillageBeneficiaries(villageId)),
+    appendPanel(out, "Issues", renderVillageIssues(villageId)),
+    appendPanel(out, "Development plan", renderVillagePlan(villageId))
+  ]);
 }
 
-/** Suggestions for the village ID inputs, built from public data. */
-function renderVillageSuggestions(villages) {
-  const dl = $("#dl-villages");
-  if (!dl) return;
-  dl.innerHTML = villages.map(function (v) {
-    return '<option value="' + escapeHtml(v.id) + '">' + escapeHtml(v.name) + " — "
-      + escapeHtml(v.district) + "</option>";
-  }).join("");
+/** Appends a titled section whose body is produced by a promise. */
+async function appendPanel(out, title, bodyPromise) {
+  const section = document.createElement("div");
+  section.className = "section";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  section.appendChild(heading);
+  const body = document.createElement("div");
+  skeleton(body, 1);
+  section.appendChild(body);
+  out.appendChild(section);
+  const html = await bodyPromise;
+  done(body);
+  body.innerHTML = html;
 }
 
-function rememberId(kind, id, label) {
-  const list = state.recent[kind];
-  if (!list || !id || list.some(function (e) { return e.id === id; })) return;
-  list.push({ id: id, label: label || "" });
-  const dl = $("#dl-" + kind);
-  if (!dl) return;
-  dl.innerHTML = list.map(function (e) {
-    return '<option value="' + escapeHtml(e.id) + '">' + escapeHtml(e.label) + "</option>";
-  }).join("");
+async function renderRecoveryPanel(villageId) {
+  const res = await api("/villages/" + encodeURIComponent(villageId) + "/recovery-index");
+  if (isMissingRoute(res)) return unavailableHtml("The recovery index endpoint is");
+  if (res.status === 404) {
+    return stateHtml("No recovery index yet",
+      "The index is calculated when a damage assessment is recorded, or set directly with the "
+      + "\"Set recovery dimension scores\" workflow. All 11 dimensions appear here once it exists.");
+  }
+  if (!res.ok || !res.data) return errorHtml("Could not load the recovery index", apiError(res));
+  const data = res.data;
+  return '<div class="card">'
+    + '<div class="card-head"><span class="card-title">Composite ' + esc(String(num1(data.composite))) + " / 100</span>"
+      + '<span class="row-meta">' + (data.calculatedAt ? "calculated " + esc(when(data.calculatedAt)) : "never calculated") + "</span></div>"
+    + recoveryBar(data.composite)
+    + '<p class="subhead" style="margin:16px 0 8px">The 11 dimensions</p>'
+    + dimensionBars(data.scores) + "</div>";
 }
 
-/** Reload everything the public zone shows. Called on load and after each write. */
-async function refreshAll() {
-  await Promise.all([checkHealth(), checkReady(), loadVillages().then(loadStats), loadFunds()]);
+async function renderAssignmentPanel(villageId) {
+  const res = await api("/villages/" + encodeURIComponent(villageId) + "/assignment");
+  if (isMissingRoute(res)) {
+    return unavailableHtml("The village assignment read is")
+      + '<p class="section-note" style="margin-top:8px">One village has exactly one active lead NGO — but this '
+      + "revision publishes no route to read it back. Assignment itself works from Operations.</p>";
+  }
+  if (res.status === 404) {
+    return '<div class="state"><strong>No lead NGO assigned</strong>'
+      + "<p>This village is nobody's responsibility until an NGO is assigned to lead it. One village, one NGO.</p>"
+      + '<div class="actions">'
+      + actionButton("Assign a lead NGO", "workflow", { workflow: "w-assign", prefill: { villageId: villageId } })
+      + "</div></div>";
+  }
+  if (!res.ok || !res.data) return errorHtml("Could not load the assignment", apiError(res));
+
+  const assignment = res.data;
+  const committee = Array.isArray(assignment.committee) ? assignment.committee
+    : (Array.isArray(assignment.committeeMembers) ? assignment.committeeMembers : []);
+  return '<div class="card">'
+    + '<div class="card-head"><span class="card-title">' + esc(assignmentNgoName(assignment) || "Lead NGO") + "</span>"
+      + '<span class="chip is-ok">active lead</span></div>'
+    + '<p class="row-meta">Assigned ' + esc(when(assignment.assignedAt)) + ". Reassigning retires this assignment; "
+      + "the history is kept, never deleted.</p>"
+    + '<p class="mono">' + esc(assignment.assignmentId || assignment.id || "") + "</p>"
+    + '<p class="subhead" style="margin:16px 0 8px">Recovery committee</p>'
+    + (committee.length === 0
+        ? '<p class="row-meta">No committee member recorded yet. Roles are unique per assignment.</p>'
+        : '<ul class="list">' + committee.map(function (member) {
+            return '<li class="row" style="padding:8px 12px"><div class="row-top">'
+              + '<span class="row-name">' + esc(member.name) + "</span>"
+              + '<span class="chip">' + esc(words(member.role)) + "</span></div>"
+              + (member.contact ? '<p class="row-meta">' + esc(member.contact) + "</p>" : "") + "</li>";
+          }).join("") + "</ul>")
+    + '<div class="actions">'
+      + actionButton("Add a committee member", "workflow", { workflow: "w-committee", prefill: { villageId: villageId } })
+    + "</div></div>";
 }
 
-/* ==================================================================
- * SCRIPT §3 — token session and operations forms
- * ================================================================== */
+function renderDamagePanel(village) {
+  const assessments = Array.isArray(village.damageAssessments) ? village.damageAssessments : [];
+  if (assessments.length === 0) {
+    return '<div class="state"><strong>No damage assessment recorded</strong>'
+      + "<p>Damage assessments are append-only and drive the recovery index. Record the first one to start scoring this village.</p>"
+      + '<div class="actions">'
+      + actionButton("Record a damage assessment", "workflow", { workflow: "w-damage", prefill: { villageId: village.id } })
+      + "</div></div>";
+  }
+  const ordered = assessments.slice().reverse();
+  return '<ul class="list">' + ordered.map(function (assessment, index) {
+    return '<li class="row">'
+      + '<div class="row-top"><span class="row-name">' + esc(when(assessment.assessedAt)) + "</span>"
+        + (index === 0 ? '<span class="chip is-ok">latest</span>' : "") + "</div>"
+      + '<div class="dims">' + DAMAGE_FIELDS.map(function (field) {
+          const value = assessment[field[0]];
+          if (typeof value !== "number") return "";
+          return '<div class="dim" style="grid-template-columns:minmax(0,1fr) auto">'
+            + '<span class="lbl">' + esc(field[1]) + '</span><span class="val">' + esc(String(value)) + "</span></div>";
+        }).join("") + "</div>"
+      + (assessment.notes ? '<p class="row-meta wrapall">' + esc(assessment.notes) + "</p>" : "")
+      + "</li>";
+  }).join("") + "</ul>"
+  + '<p class="section-note" style="margin-top:12px">Assessments are append-only — a correction is a new record, '
+  + "not an edit of the old one.</p>";
+}
+
+async function renderVillageProjects(villageId) {
+  const res = await api("/villages/" + encodeURIComponent(villageId) + "/projects");
+  if (isMissingRoute(res)) return unavailableHtml("Village fund monitoring is");
+  if (!res.ok || !res.data || !Array.isArray(res.data.projects)) {
+    if (res.status === 404) return stateHtml("No projects for this village", "Nothing has been sanctioned here yet.");
+    return errorHtml("Could not load projects", apiError(res));
+  }
+  const projects = res.data.projects;
+  if (projects.length === 0) {
+    return '<div class="state"><strong>No projects sanctioned</strong>'
+      + "<p>Sanction a project for this village and its sanctioned, released and spent ladder appears here.</p>"
+      + '<div class="actions">'
+      + actionButton("Sanction a project", "workflow", { workflow: "w-project", prefill: { villageId: villageId } })
+      + "</div></div>";
+  }
+  return '<ul class="list">' + projects.map(function (project) {
+    const anomalies = Array.isArray(project.anomalies) ? project.anomalies : [];
+    return '<li class="row"><div class="row-top"><span class="row-name">' + esc(project.name) + "</span>"
+      + statusChip(project.status) + "</div>"
+      + '<p class="row-meta">' + esc(words(project.category)) + " · funded by " + esc(words(project.fundSource)) + "</p>"
+      + fundLadder(project.sanctionedMinor, project.releasedMinor, project.spentMinor, project.currency)
+      + anomalies.map(function (anomaly) {
+          return '<div class="flag" style="margin-top:8px"><strong>' + esc(words(anomaly.type)) + "</strong>"
+            + esc(anomaly.details) + "</div>";
+        }).join("")
+      + '<p class="mono">' + esc(project.id) + "</p></li>";
+  }).join("") + "</ul>";
+}
+
+async function renderVillageBeneficiaries(villageId) {
+  const res = await api("/villages/" + encodeURIComponent(villageId) + "/beneficiaries");
+  if (isMissingRoute(res)) return unavailableHtml("The beneficiary roster is");
+  if (!res.ok || !res.data || !Array.isArray(res.data.beneficiaries)) {
+    return errorHtml("Could not load the beneficiary roster", apiError(res));
+  }
+  const beneficiaries = res.data.beneficiaries;
+  if (beneficiaries.length === 0) {
+    return '<div class="state"><strong>No beneficiary registered</strong>'
+      + "<p>The registry tracks vulnerable people — widows, orphans, senior citizens, daily-wage workers — and "
+      + "every aid delivery made to them.</p>"
+      + '<div class="actions">'
+      + actionButton("Register a beneficiary", "workflow", { workflow: "w-beneficiary", prefill: { villageId: villageId } })
+      + "</div></div>";
+  }
+  const flagged = beneficiaries.filter(function (entry) { return (entry.duplicateFlags || 0) > 0; });
+  return (flagged.length > 0
+      ? '<div class="flag" style="margin-bottom:12px"><strong>Duplicate aid flagged on '
+        + esc(String(flagged.length)) + " beneficiar" + (flagged.length === 1 ? "y" : "ies") + "</strong>"
+        + "The same aid type reached them from a different provider inside the suspicion window. "
+        + "The delivery was recorded, not dropped — verify with the other provider before the next one.</div>"
+      : "")
+    + '<p class="section-note">Names are never published here; the roster carries identifiers, category and counts only.</p>'
+    + '<ul class="list">' + beneficiaries.map(function (entry) {
+        const duplicates = entry.duplicateFlags || 0;
+        return '<li class="row' + (duplicates > 0 ? " is-flagged" : "") + '">'
+          + '<div class="row-top"><span class="row-name">' + esc(words(entry.category)) + "</span>"
+            + (duplicates > 0
+                ? '<span class="chip is-warn">' + esc(String(duplicates)) + " duplicate flag" + (duplicates === 1 ? "" : "s") + "</span>"
+                : '<span class="chip">no flags</span>') + "</div>"
+          + '<p class="row-meta">' + esc(String(entry.aidDeliveries || 0)) + " aid deliver"
+            + ((entry.aidDeliveries || 0) === 1 ? "y" : "ies")
+            + (entry.lastAidAt ? " · last " + esc(when(entry.lastAidAt)) : " · none recorded") + "</p>"
+          + '<p class="mono">' + esc(entry.beneficiaryId) + "</p>"
+          + '<div class="actions">'
+          + actionButton("Record aid", "workflow", { workflow: "w-aid", prefill: { beneficiaryId: entry.beneficiaryId } })
+          + "</div></li>";
+      }).join("") + "</ul>";
+}
+
+async function renderVillageIssues(villageId) {
+  const res = await api("/issues");
+  if (isMissingRoute(res)) return unavailableHtml("The issue index is");
+  if (!res.ok || !res.data || !Array.isArray(res.data.issues)) return errorHtml("Could not load issues", apiError(res));
+  const issues = res.data.issues.filter(function (issue) { return issue.villageId === villageId; });
+  if (issues.length === 0) {
+    return '<div class="state"><strong>No issue reported</strong>'
+      + "<p>Citizens report broken bridges, missing drinking water, closed schools or corruption with GPS and photos. "
+      + "Routing decides who is responsible.</p>"
+      + '<div class="actions">'
+      + actionButton("Report an issue", "workflow", { workflow: "w-issue", prefill: { villageId: villageId } })
+      + "</div></div>";
+  }
+  return '<ul class="list">' + issues.map(issueRow).join("") + "</ul>";
+}
+
+async function renderVillagePlan(villageId) {
+  const res = await api("/villages/" + encodeURIComponent(villageId) + "/plan");
+  if (isMissingRoute(res)) return unavailableHtml("Development planning is");
+  if (res.status === 404) {
+    return '<div class="state"><strong>No development plan yet</strong>'
+      + "<p>The plan is the long-term half of the platform: goals and milestones across education, livelihood, "
+      + "health, infrastructure, women's empowerment and digital literacy — the work that continues after relief ends.</p>"
+      + '<div class="actions">'
+      + actionButton("Create the plan", "workflow", { workflow: "w-plan", prefill: { villageId: villageId } })
+      + "</div></div>";
+  }
+  if (!res.ok || !res.data) return errorHtml("Could not load the development plan", apiError(res));
+
+  const plan = res.data;
+  const goals = Array.isArray(plan.goals) ? plan.goals : [];
+  const overall = plan.progress && typeof plan.progress.overallPercent === "number"
+    ? plan.progress.overallPercent
+    : (typeof plan.overallPercent === "number" ? plan.overallPercent : null);
+  rememberId("plans", plan.planId || plan.id, "plan for " + villageName(villageId));
+
+  return '<div class="card">'
+    + '<div class="card-head"><span class="card-title">Plan progress</span>'
+      + '<span class="row-meta">' + (overall === null ? "not scored" : esc(String(num1(overall))) + "% complete") + "</span></div>"
+    + (overall === null ? "" : '<span class="bar" role="img" aria-label="Plan '
+        + esc(String(Math.round(overall))) + ' per cent complete"><i style="width:'
+        + Math.max(0, Math.min(100, overall)) + '%"></i></span>')
+    + '<p class="mono" style="margin-top:8px">' + esc(plan.planId || plan.id || "") + "</p>"
+    + (goals.length === 0
+        ? '<p class="row-meta" style="margin-top:12px">No goal added yet. Milestones belong to a goal, and '
+          + "completion is monotonic — a completed milestone never reverts.</p>"
+        : '<div style="margin-top:12px">' + goals.map(function (goal) {
+            const milestones = Array.isArray(goal.milestones) ? goal.milestones : [];
+            const completed = milestones.filter(function (m) { return m.completedAt; }).length;
+            return '<div class="card" style="margin-top:8px"><div class="card-head">'
+              + '<span class="card-title">' + esc(words(goal.area)) + "</span>"
+              + '<span class="chip' + (completed === milestones.length && milestones.length > 0 ? " is-ok" : "") + '">'
+              + esc(String(completed)) + " of " + esc(String(milestones.length)) + " milestones</span></div>"
+              + '<p class="row-meta wrapall">' + esc(goal.description) + "</p>"
+              + (milestones.length === 0 ? "" : '<ul class="list" style="margin-top:8px">' + milestones.map(function (milestone) {
+                  return '<li class="row" style="padding:8px 12px"><div class="row-top">'
+                    + '<span class="row-name">' + esc(milestone.title) + "</span>"
+                    + (milestone.completedAt ? '<span class="chip is-ok">completed</span>'
+                                             : '<span class="chip">due ' + esc(dateOnly(milestone.targetDate)) + "</span>")
+                    + "</div></li>";
+                }).join("") + "</ul>")
+              + '<p class="mono" style="margin-top:8px">' + esc(goal.id) + "</p></div>";
+          }).join("") + "</div>")
+    + '<div class="actions">'
+      + actionButton("Add a goal", "workflow", { workflow: "w-goal", prefill: { planId: plan.planId || plan.id || "" } })
+    + "</div></div>";
+}
+
+/* HTML-string variants of the designed states, for panels built as strings. */
+function stateHtml(title, body) {
+  return '<div class="state"><strong>' + esc(title) + "</strong><p>" + esc(body) + "</p></div>";
+}
+function errorHtml(title, body) {
+  return '<div class="state is-error"><strong>' + esc(title) + "</strong><p>" + esc(body) + "</p></div>";
+}
+function unavailableHtml(what) {
+  return stateHtml(what + " not available yet",
+    "This deployment does not serve that endpoint on the current revision. Everything else on this page is unaffected.");
+}
+
+/* ====================================================================
+ * SCRIPT §8 — Operations: token session, workflow specs, form engine
+ * ==================================================================== */
 
 const TOKEN_KEY = "afrip.token";
 const tokenForm = $("#token-form");
@@ -937,11 +2032,13 @@ function applyTokenState() {
   $("#locked-note").classList.toggle("hidden", connected);
   tokenForm.classList.toggle("hidden", connected);
   $("#connected-note").classList.toggle("hidden", !connected);
+  $("#session-dot").className = "dot " + (connected ? "up" : "");
+  $("#session-text").textContent = connected ? "Connected · this tab" : "Not connected";
 }
 
 function setToken(token) {
   state.token = token;
-  try { sessionStorage.setItem(TOKEN_KEY, token); } catch (_) { /* private mode: keep in memory */ }
+  try { sessionStorage.setItem(TOKEN_KEY, token); } catch (_) { /* private mode: memory only */ }
   applyTokenState();
 }
 
@@ -949,10 +2046,11 @@ function clearToken() {
   state.token = null;
   try { sessionStorage.removeItem(TOKEN_KEY); } catch (_) { /* ignore */ }
   tokenInput.value = "";
+  state.assignments = null; state.assignmentsSupported = null; state.projects = null;
   applyTokenState();
 }
 
-/** Verifies a candidate token against an authenticated read before accepting it. */
+/** Verifies a candidate token against an authorised read before accepting it. */
 tokenForm.addEventListener("submit", async function (event) {
   event.preventDefault();
   const candidate = tokenInput.value.trim();
@@ -962,12 +2060,12 @@ tokenForm.addEventListener("submit", async function (event) {
     return;
   }
   const button = $("#token-submit");
+  const label = button.textContent;
   button.disabled = true;
-  const previousLabel = button.textContent;
   button.textContent = "Checking…";
   try {
     state.token = candidate;
-    const res = await api("/villages", { auth: true });
+    const res = await api("/villages");
     if (res.network) {
       state.token = null;
       setMsg(tokenMsg, "error", "Could not reach the service",
@@ -984,16 +2082,17 @@ tokenForm.addEventListener("submit", async function (event) {
     }
     if (!res.ok) {
       state.token = null;
-      const why = res.data && res.data.error ? escapeHtml(res.data.error) : "status " + res.status;
-      setMsg(tokenMsg, "error", "Could not verify the token", why);
+      setMsg(tokenMsg, "error", "Could not verify the token", esc(apiError(res)));
       return;
     }
     setToken(candidate);
     tokenInput.value = "";
-    setMsg(tokenMsg, "ok", "Connected", "Operational workflows are unlocked for this tab.");
+    setMsg(tokenMsg, "ok", "Connected",
+      "Operational workflows are unlocked, and the District, NGO and Village dashboards are now readable.");
+    refresh();
   } finally {
     button.disabled = false;
-    button.textContent = previousLabel;
+    button.textContent = label;
   }
 });
 
@@ -1006,37 +2105,769 @@ $("#disconnect").addEventListener("click", function () {
 /** A 401 mid-session means the token stopped working: drop it and re-lock. */
 function handleUnauthorized(msgEl) {
   clearToken();
-  setMsg(msgEl, "error", "Token rejected",
-    "The API rejected the stored token, so it has been cleared. Re-enter it above to continue.");
+  if (msgEl) {
+    setMsg(msgEl, "error", "Token rejected",
+      "The API rejected the stored token, so it has been cleared. Re-enter it above to continue.");
+  }
   setMsg(tokenMsg, "error", "Token rejected", "Enter the API token again.");
-  tokenInput.focus();
+}
+
+/* --- Identifier suggestions ---------------------------------------- */
+
+function renderDatalist(kind, entries) {
+  const dl = $("#dl-" + kind);
+  if (!dl) return;
+  dl.innerHTML = entries.map(function (entry) {
+    return '<option value="' + esc(entry.id) + '">' + esc(entry.label || "") + "</option>";
+  }).join("");
+}
+
+function renderVillageDatalist() {
+  renderDatalist("villages", state.villages.map(function (village) {
+    return { id: village.id, label: village.name + " — " + village.district };
+  }));
+}
+
+function renderNgoDatalist() {
+  renderDatalist("ngos", state.ngos.map(function (ngo) { return { id: ngo.id, label: ngo.name || "" }; }));
+}
+
+function rememberProjects(projects) {
+  projects.forEach(function (project) { rememberId("projects", project.id, project.name); });
+}
+
+/** Records an id minted in this tab so later forms can suggest it. Memory only. */
+function rememberId(kind, id, label) {
+  const list = state.recent[kind];
+  if (!list || !id || list.some(function (entry) { return entry.id === id; })) return;
+  list.push({ id: id, label: label || "" });
+  renderDatalist(kind, list);
+}
+
+/* --- Field + workflow specification --------------------------------
+ * There are 30-plus write workflows. Spelling every one out as markup would
+ * bury the interesting part — the domain rules each workflow enforces — under
+ * boilerplate, so forms are declared here and rendered to real, labelled,
+ * accessible markup by buildForm(). Every field gets a <label for>, hints are
+ * wired with aria-describedby, and each form has its own aria-live result region.
+ * ------------------------------------------------------------------ */
+
+const t = (name, label, extra) => Object.assign({ name: name, label: label, type: "text" }, extra || {});
+const n = (name, label, extra) => Object.assign({ name: name, label: label, type: "number" }, extra || {});
+const sel = (name, label, options, extra) =>
+  Object.assign({ name: name, label: label, type: "select", options: options }, extra || {});
+const area = (name, label, extra) => Object.assign({ name: name, label: label, type: "textarea" }, extra || {});
+
+const SEVERITY_OPTIONS = ["minor", "moderate", "severe", "critical"];
+const CATEGORY_OPTIONS = ["widow", "orphan", "senior_citizen", "disabled", "pregnant_woman",
+  "farmer", "small_business", "daily_wage_worker", "student"];
+const AID_OPTIONS = ["food", "shelter", "medical", "cash", "livelihood", "education"];
+const PROVIDER_OPTIONS = ["ngo", "government", "donor"];
+const ISSUE_OPTIONS = ["infrastructure", "water", "education", "health", "food", "corruption", "other"];
+const COMMITTEE_OPTIONS = ["leader", "volunteer", "engineer", "teacher", "doctor", "government_rep",
+  "health_worker", "school_rep", "womens_rep"];
+const PROJECT_CATEGORY_OPTIONS = ["bridge", "school", "water_supply", "housing", "road", "health", "other"];
+const FUND_SOURCE_OPTIONS = ["district", "csr", "ngo", "donor", "mla", "mp", "scheme"];
+const PLAN_AREA_OPTIONS = ["education", "livelihood", "health", "infrastructure", "women_empowerment", "digital_literacy"];
+const SIGNAL_SOURCE_OPTIONS = ["facebook", "x", "instagram", "youtube", "news", "whatsapp_field_report", "other"];
+
+/** Shorthand builders for the ids that recur across workflows. */
+const fVillage = t("villageId", "Village ID", { list: "dl-villages", placeholder: "village-1", required: true });
+const fNgo = t("ngoId", "NGO ID", { list: "dl-ngos", placeholder: "ngo-1", required: true });
+const fBeneficiary = t("beneficiaryId", "Beneficiary ID", { list: "dl-beneficiaries", placeholder: "beneficiary-1", required: true });
+const fIssue = t("issueId", "Issue ID", { list: "dl-issues", placeholder: "issue-1", required: true });
+const fProject = t("projectId", "Project ID", { list: "dl-projects", placeholder: "project-1", required: true });
+const fVolunteer = t("volunteerId", "Volunteer ID", { list: "dl-volunteers", placeholder: "volunteer-1", required: true });
+const fPlan = t("planId", "Plan ID", { list: "dl-plans", placeholder: "plan-1", required: true });
+const fGoal = t("goalId", "Goal ID", { list: "dl-goals", placeholder: "goal-1", required: true });
+
+function idLine(label, id, tail) {
+  return esc(label) + ' <code class="id">' + esc(id) + "</code>" + (tail ? " " + tail : "");
 }
 
 /**
- * Wires one workflow form.
- *   build(values) -> { path, method, body } | { error: "message" }
- *   done(data, msgEl, values)  renders the success state.
- * Handles: client validation, 400 (verbatim domain error), 401, 404, 5xx,
- * network failure with a retry affordance, and always restores the button.
+ * Workflow groups. `optional: true` marks a workflow whose route is still
+ * landing: a router-level 404 renders "not available on this deployment yet"
+ * instead of an error, because the operator has done nothing wrong.
  */
-function wireForm(formId, build, done) {
-  const form = $("#" + formId);
-  if (!form) return;
+const WORKFLOW_GROUPS = [
+  {
+    title: "Village registry",
+    workflows: [
+      {
+        id: "w-village", title: "Register a village", submit: "Register village",
+        note: "The registry rejects an assessment where affected families exceed households — that rejection is shown here verbatim.",
+        fields: [
+          t("name", "Village name", { required: true }),
+          t("district", "District", { required: true, half: true }),
+          t("state", "State", { required: true, half: true }),
+          n("lat", "Latitude", { step: "any", required: true, half: true }),
+          n("lng", "Longitude", { step: "any", required: true, half: true }),
+          n("population", "Population", { min: 0, required: true, half: true }),
+          n("households", "Households", { min: 0, required: true, half: true }),
+          n("affectedFamilies", "Affected families", { min: 0, required: true, half: true }),
+          sel("severity", "Severity", SEVERITY_OPTIONS, { value: "severe", half: true })
+        ],
+        build: function (v) {
+          return { path: "/villages", body: {
+            name: v.name, district: v.district, state: v.state,
+            geo: { lat: Number(v.lat), lng: Number(v.lng) },
+            population: Number(v.population), households: Number(v.households),
+            affectedFamilies: Number(v.affectedFamilies), severity: v.severity } };
+        },
+        done: function (data, msg, v) {
+          rememberId("villages", data.villageId, v.name);
+          setMsg(msg, "ok", "Village registered",
+            idLine("Identifier", data.villageId, "— it is on the public dashboard now."));
+        }
+      },
+      {
+        id: "w-damage", title: "Record a damage assessment", submit: "Record assessment",
+        note: "Assessments are append-only and recalculate the village recovery index through a domain event.",
+        fields: [
+          fVillage,
+          n("housesDamaged", "Houses damaged", { min: 0, required: true, half: true }),
+          n("schoolsDamaged", "Schools damaged", { min: 0, required: true, half: true }),
+          n("healthCentresDamaged", "Health centres damaged", { min: 0, required: true, half: true }),
+          n("waterSourcesDamaged", "Water sources damaged", { min: 0, required: true, half: true }),
+          n("agricultureHectaresLost", "Agriculture hectares lost", { min: 0, step: "any", required: true, half: true }),
+          n("livestockLost", "Livestock lost", { min: 0, required: true, half: true }),
+          t("notes", "Notes", { optional: true })
+        ],
+        build: function (v) {
+          const body = { housesDamaged: Number(v.housesDamaged), schoolsDamaged: Number(v.schoolsDamaged),
+            healthCentresDamaged: Number(v.healthCentresDamaged), waterSourcesDamaged: Number(v.waterSourcesDamaged),
+            agricultureHectaresLost: Number(v.agricultureHectaresLost), livestockLost: Number(v.livestockLost) };
+          if (v.notes) body.notes = v.notes;
+          return { path: "/villages/" + encodeURIComponent(v.villageId) + "/damage-assessments", body: body };
+        },
+        done: function (data, msg, v) {
+          setMsg(msg, "ok", "Damage assessment recorded",
+            "The recovery index for " + esc(villageName(v.villageId)) + " has been recalculated from it.");
+        }
+      },
+      {
+        id: "w-severity", title: "Update village severity", submit: "Update severity",
+        fields: [fVillage, sel("severity", "Severity", SEVERITY_OPTIONS, { value: "severe" })],
+        build: function (v) {
+          return { method: "PATCH", path: "/villages/" + encodeURIComponent(v.villageId) + "/severity",
+                   body: { severity: v.severity } };
+        },
+        done: function (data, msg, v) {
+          setMsg(msg, "ok", "Severity updated", esc(villageName(v.villageId)) + " is now classified " + esc(v.severity) + ".");
+        }
+      },
+      {
+        id: "w-scores", title: "Set recovery dimension scores", submit: "Save scores",
+        note: "Each dimension is 0–100. Dimensions left blank keep their current value; the composite is a weighted mean whose weights sum to 1.",
+        fields: DIMENSIONS.map(function (dimension) {
+          return n(dimension, words(dimension).replace(/^./, function (c) { return c.toUpperCase(); }),
+            { min: 0, max: 100, half: true, optional: true });
+        }).concat([fVillage]),
+        build: function (v) {
+          const scores = {};
+          DIMENSIONS.forEach(function (dimension) {
+            if (v[dimension] !== "" && v[dimension] !== undefined) scores[dimension] = Number(v[dimension]);
+          });
+          if (Object.keys(scores).length === 0) return { error: "Enter at least one dimension score", field: DIMENSIONS[0] };
+          return { method: "PUT", path: "/villages/" + encodeURIComponent(v.villageId) + "/recovery-scores",
+                   body: { scores: scores } };
+        },
+        done: function (data, msg) {
+          setMsg(msg, "ok", "Recovery scores saved",
+            "Composite is now <strong>" + esc(String(num1(data.composite))) + " / 100</strong>.");
+        }
+      }
+    ]
+  },
+  {
+    title: "NGO coordination",
+    workflows: [
+      {
+        id: "w-ngo", title: "Register an NGO", submit: "Register NGO",
+        fields: [
+          t("name", "NGO name", { required: true }),
+          t("focusAreas", "Focus areas", { placeholder: "water, shelter, health", hint: "Comma separated." }),
+          n("capacity", "Capacity", { min: 1, value: "1", hint: "Maximum villages this NGO may lead at once." })
+        ],
+        build: function (v) {
+          const focusAreas = (v.focusAreas || "").split(",").map(function (s) { return s.trim(); })
+            .filter(function (s) { return s.length > 0; });
+          return { path: "/ngos", body: { name: v.name, focusAreas: focusAreas, capacity: Number(v.capacity || 1) } };
+        },
+        done: function (data, msg, v) {
+          rememberId("ngos", data.ngoId, v.name);
+          state.ngos = state.ngos.concat([{ id: data.ngoId, name: v.name }]);
+          setMsg(msg, "ok", "NGO registered", idLine("Identifier", data.ngoId, "— use it when assigning a lead NGO."));
+        }
+      },
+      {
+        id: "w-assign", title: "Assign a lead NGO to a village", submit: "Assign lead NGO",
+        note: "One village, one lead NGO. Assigning a new NGO retires the incumbent assignment; the history is kept, never deleted.",
+        fields: [fVillage, fNgo],
+        build: function (v) {
+          return { path: "/villages/" + encodeURIComponent(v.villageId) + "/assignment", body: { ngoId: v.ngoId } };
+        },
+        done: function (data, msg, v) {
+          rememberId("assignments", data.assignmentId, v.villageId);
+          const retired = data.retiredAssignmentId || data.previousAssignmentId
+            || (data.retired && data.retired.assignmentId);
+          setMsg(msg, "ok", "Lead NGO assigned",
+            idLine("Assignment", data.assignmentId, "is now the active lead for " + esc(villageName(v.villageId)) + ".")
+            + (retired
+                ? " " + idLine("Previous assignment", retired, "was retired — its record is kept, not deleted.")
+                : " Any previous assignment for this village has been retired — one village, one lead NGO."));
+          state.assignments = null;
+        }
+      },
+      {
+        id: "w-committee", title: "Add a recovery committee member", submit: "Add member",
+        note: "Roles are unique per assignment: adding a second leader is rejected by the aggregate.",
+        fields: [fVillage, sel("role", "Role", COMMITTEE_OPTIONS), t("name", "Name", { required: true }),
+                 t("contact", "Contact", { optional: true })],
+        build: function (v) {
+          const body = { role: v.role, name: v.name };
+          if (v.contact) body.contact = v.contact;
+          return { path: "/villages/" + encodeURIComponent(v.villageId) + "/committee", body: body };
+        },
+        done: function (data, msg, v) {
+          setMsg(msg, "ok", "Committee member added",
+            esc(v.name) + " is the " + esc(words(v.role)) + " for " + esc(villageName(v.villageId)) + ".");
+        }
+      }
+    ]
+  },
+  {
+    title: "Beneficiary registry",
+    workflows: [
+      {
+        id: "w-beneficiary", title: "Register a beneficiary", submit: "Register beneficiary",
+        note: "The name is never republished on the public dashboard — the public roster carries identifiers and categories only.",
+        fields: [fVillage, t("name", "Name", { required: true }), sel("category", "Vulnerability category", CATEGORY_OPTIONS)],
+        build: function (v) {
+          return { path: "/beneficiaries", body: { villageId: v.villageId, name: v.name, category: v.category } };
+        },
+        done: function (data, msg, v) {
+          rememberId("beneficiaries", data.beneficiaryId, v.category);
+          setMsg(msg, "ok", "Beneficiary registered",
+            idLine("Identifier", data.beneficiaryId, "— record aid against this ID."));
+        }
+      },
+      {
+        id: "w-aid", title: "Record aid", submit: "Record aid",
+        note: "Aid is always recorded, never silently rejected. If the same aid type reached this beneficiary from a different provider inside the suspicion window, the delivery is recorded AND flagged.",
+        fields: [fBeneficiary, sel("aidType", "Aid type", AID_OPTIONS, { half: true }),
+                 sel("providerType", "Provider type", PROVIDER_OPTIONS, { half: true }),
+                 t("providerId", "Provider ID", { list: "dl-ngos", required: true }),
+                 t("notes", "Notes", { optional: true })],
+        build: function (v) {
+          const body = { aidType: v.aidType, providerId: v.providerId, providerType: v.providerType };
+          if (v.notes) body.notes = v.notes;
+          return { path: "/beneficiaries/" + encodeURIComponent(v.beneficiaryId) + "/aid", body: body };
+        },
+        done: function (data, msg, v) {
+          const at = data.deliveredAt ? when(data.deliveredAt) : "now";
+          if (data.duplicate === true) {
+            // The flagship signal: recorded, and flagged. Never hidden in a toast.
+            setMsg(msg, "dup", "Possible duplicate aid",
+              "The delivery was recorded at " + esc(at) + ", and flagged: <strong>" + esc(v.aidType)
+              + "</strong> aid already reached " + '<code class="id">' + esc(data.beneficiaryId) + "</code>"
+              + " from a different provider inside the suspicion window."
+              + " Aid is never silently dropped — verify with the other provider before the next delivery.");
+            return;
+          }
+          setMsg(msg, "ok", "Aid recorded",
+            esc(v.aidType) + " delivered to " + '<code class="id">' + esc(data.beneficiaryId) + "</code> at "
+            + esc(at) + ". No duplicate flag raised.");
+        }
+      },
+      {
+        id: "w-followup", title: "Schedule a follow-up", submit: "Schedule follow-up",
+        fields: [fBeneficiary, t("dueAt", "Due date", { type: "date", required: true })],
+        build: function (v) {
+          return { path: "/beneficiaries/" + encodeURIComponent(v.beneficiaryId) + "/follow-ups",
+                   body: { dueAt: new Date(v.dueAt).toISOString() } };
+        },
+        done: function (data, msg) {
+          rememberId("followups", data.followUpId, "follow-up");
+          setMsg(msg, "ok", "Follow-up scheduled", idLine("Identifier", data.followUpId || "", ""));
+        }
+      },
+      {
+        id: "w-followup-done", title: "Complete a follow-up", submit: "Mark complete",
+        fields: [fBeneficiary, t("followUpId", "Follow-up ID", { list: "dl-followups", required: true })],
+        build: function (v) {
+          return { path: "/beneficiaries/" + encodeURIComponent(v.beneficiaryId)
+            + "/follow-ups/" + encodeURIComponent(v.followUpId) + "/complete" };
+        },
+        done: function (data, msg) { setMsg(msg, "ok", "Follow-up completed", "The beneficiary is off the overdue worklist."); }
+      }
+    ]
+  },
+  {
+    title: "Issue tracking",
+    workflows: [
+      {
+        id: "w-issue", title: "Report an issue", submit: "Report issue",
+        fields: [fVillage, sel("category", "Category", ISSUE_OPTIONS),
+                 area("description", "Description", { required: true }),
+                 n("lat", "GPS latitude", { step: "any", required: true, half: true }),
+                 n("lng", "GPS longitude", { step: "any", required: true, half: true })],
+        build: function (v) {
+          return { path: "/issues", body: { villageId: v.villageId, category: v.category,
+            description: v.description, gps: { lat: Number(v.lat), lng: Number(v.lng) } } };
+        },
+        done: function (data, msg, v) {
+          rememberId("issues", data.issueId, v.category);
+          setMsg(msg, "ok", "Issue reported",
+            idLine("Identifier", data.issueId, "— route it to assign a responsible party.")
+            + (v.category === "corruption"
+                ? " This is a corruption report: routing will send it to the district administration, never to the lead NGO."
+                : ""));
+        }
+      },
+      {
+        id: "w-route", title: "Route an issue", submit: "Route issue",
+        note: "Routing derives the responsible party from the category. Corruption goes to the district administration and health to the health department — never to the village's lead NGO, who may be the subject of the complaint.",
+        fields: [fIssue],
+        build: function (v) { return { path: "/issues/" + encodeURIComponent(v.issueId) + "/route" }; },
+        done: function (data, msg) {
+          const LABELS = { lead_ngo: "lead NGO", government_department: "government department" };
+          const partyType = LABELS[data.partyType] || words(data.partyType);
+          setMsg(msg, "ok", "Issue routed",
+            "Assigned to the <strong>" + esc(partyType) + "</strong> " + '<code class="id">' + esc(data.party) + "</code>."
+            + (data.partyType === "government_department"
+                ? " A government department owns this category — the lead NGO was deliberately not chosen."
+                : " This category routes to the village's lead NGO."));
+        }
+      },
+      {
+        id: "w-issue-start", title: "Start work on an issue", submit: "Start progress",
+        fields: [fIssue],
+        build: function (v) { return { path: "/issues/" + encodeURIComponent(v.issueId) + "/start" }; },
+        done: function (data, msg) { setMsg(msg, "ok", "Issue in progress", "The status machine moved routed → in progress."); }
+      },
+      {
+        id: "w-issue-resolve", title: "Resolve an issue", submit: "Resolve issue",
+        fields: [fIssue, area("resolutionNote", "Resolution note", { required: true })],
+        build: function (v) {
+          return { path: "/issues/" + encodeURIComponent(v.issueId) + "/resolve", body: { resolutionNote: v.resolutionNote } };
+        },
+        done: function (data, msg) { setMsg(msg, "ok", "Issue resolved", "A villager still has to verify the resolution."); }
+      },
+      {
+        id: "w-issue-verify", title: "Verify a resolution", submit: "Verify resolution",
+        note: "Villagers verify that the work was actually done — the last step of the issue status machine.",
+        fields: [fIssue],
+        build: function (v) { return { path: "/issues/" + encodeURIComponent(v.issueId) + "/verify" }; },
+        done: function (data, msg) { setMsg(msg, "ok", "Resolution verified", "The issue is closed."); }
+      }
+    ]
+  },
+  {
+    title: "Fund monitoring",
+    optional: true,
+    workflows: [
+      {
+        id: "w-project", title: "Sanction a funded project", submit: "Sanction project", optional: true,
+        note: "Amounts are in minor units (paise), so ₹50,000 is 5000000. The aggregate enforces spent ≤ released ≤ sanctioned from here on.",
+        fields: [fVillage, t("name", "Project name", { required: true }),
+                 sel("category", "Category", PROJECT_CATEGORY_OPTIONS, { half: true }),
+                 sel("fundSource", "Fund source", FUND_SOURCE_OPTIONS, { half: true }),
+                 n("sanctionedMinor", "Sanctioned amount (minor units)", { min: 1, required: true })],
+        build: function (v) {
+          return { path: "/projects", body: { villageId: v.villageId, name: v.name, category: v.category,
+            fundSource: v.fundSource, sanctionedMinor: Number(v.sanctionedMinor) } };
+        },
+        done: function (data, msg, v) {
+          rememberId("projects", data.projectId, v.name);
+          setMsg(msg, "ok", "Project sanctioned",
+            idLine("Identifier", data.projectId, "— nothing may be spent until funds are released against it."));
+        }
+      },
+      {
+        id: "w-release", title: "Release funds", submit: "Release funds", optional: true,
+        note: "Released may never exceed sanctioned. The first release moves the project to in progress.",
+        fields: [fProject, n("amountMinor", "Amount (minor units)", { min: 1, required: true })],
+        build: function (v) {
+          return { path: "/projects/" + encodeURIComponent(v.projectId) + "/release",
+                   body: { amountMinor: Number(v.amountMinor) } };
+        },
+        done: function (data, msg) {
+          setMsg(msg, "ok", "Funds released",
+            "Total released is now <strong>" + esc(money(data.totalReleasedMinor)) + "</strong>"
+            + (data.status ? " · status " + esc(words(data.status)) : "") + ".");
+        }
+      },
+      {
+        id: "w-expenditure", title: "Record expenditure", submit: "Record expenditure", optional: true,
+        note: "Spent may never exceed released. An over-run is rejected with the exact arithmetic, shown below verbatim.",
+        fields: [fProject, n("amountMinor", "Amount (minor units)", { min: 1, required: true }),
+                 t("description", "Description", { required: true }),
+                 t("evidenceRef", "Evidence reference", { optional: true, hint: "Photo or document reference, if any." })],
+        build: function (v) {
+          const body = { amountMinor: Number(v.amountMinor), description: v.description };
+          if (v.evidenceRef) body.evidenceRef = v.evidenceRef;
+          return { path: "/projects/" + encodeURIComponent(v.projectId) + "/expenditure", body: body };
+        },
+        done: function (data, msg) {
+          setMsg(msg, "ok", "Expenditure recorded",
+            "Total spent is now <strong>" + esc(money(data.totalSpentMinor)) + "</strong>, still within what was released.");
+        }
+      },
+      {
+        id: "w-project-complete", title: "Complete a project", submit: "Mark complete", optional: true,
+        fields: [fProject],
+        build: function (v) { return { path: "/projects/" + encodeURIComponent(v.projectId) + "/complete" }; },
+        done: function (data, msg) { setMsg(msg, "ok", "Project completed", "It now awaits village verification."); }
+      },
+      {
+        id: "w-project-verify", title: "Verify a project", submit: "Verify project", optional: true,
+        fields: [fProject],
+        build: function (v) { return { path: "/projects/" + encodeURIComponent(v.projectId) + "/verify" }; },
+        done: function (data, msg) { setMsg(msg, "ok", "Project verified", "The village confirmed the work was delivered."); }
+      },
+      {
+        id: "w-anomalies", title: "Detect fund anomalies", submit: "Run detection", optional: true,
+        note: "Three rules: overspend against comparable completed work, a stall since the last release, and duplicate funding for the same category in the same village.",
+        fields: [fProject, n("stalledAfterDays", "Stalled after (days)", { min: 1, value: "60",
+                   hint: "Days without expenditure following the last release." })],
+        build: function (v) {
+          return { path: "/projects/" + encodeURIComponent(v.projectId) + "/detect-anomalies",
+                   body: { stalledAfterDays: Number(v.stalledAfterDays || 60) } };
+        },
+        done: function (data, msg) {
+          const findings = Array.isArray(data.findings) ? data.findings : [];
+          if (findings.length === 0) {
+            setMsg(msg, "ok", "No new anomaly", "No rule matched this project on the current state.");
+            return;
+          }
+          setMsg(msg, "dup", findings.length + " anomal" + (findings.length === 1 ? "y" : "ies") + " flagged",
+            findings.map(function (finding) {
+              return "<strong>" + esc(words(finding.type)) + "</strong> " + esc(finding.details);
+            }).join("<br>"));
+        }
+      }
+    ]
+  },
+  {
+    title: "Volunteer management",
+    optional: true,
+    workflows: [
+      {
+        id: "w-volunteer", title: "Register a volunteer", submit: "Register volunteer", optional: true,
+        fields: [t("name", "Name", { required: true }), t("location", "Location", { required: true }),
+                 t("skills", "Skills", { placeholder: "boat handling, first aid", hint: "Comma separated." }),
+                 t("languages", "Languages", { placeholder: "assamese, hindi", hint: "Comma separated." })],
+        build: function (v) {
+          const split = function (value) {
+            return (value || "").split(",").map(function (s) { return s.trim(); })
+              .filter(function (s) { return s.length > 0; });
+          };
+          return { path: "/volunteers", body: { name: v.name, location: v.location,
+            skills: split(v.skills), languages: split(v.languages) } };
+        },
+        done: function (data, msg, v) {
+          rememberId("volunteers", data.volunteerId, v.name);
+          setMsg(msg, "ok", "Volunteer registered", idLine("Identifier", data.volunteerId, ""));
+        }
+      },
+      {
+        id: "w-availability", title: "Set volunteer availability", submit: "Update availability", optional: true,
+        note: "A volunteer who is unavailable cannot be assigned — the aggregate rejects it.",
+        fields: [fVolunteer, sel("availability", "Availability", ["available", "unavailable"])],
+        build: function (v) {
+          return { method: "PATCH", path: "/volunteers/" + encodeURIComponent(v.volunteerId) + "/availability",
+                   body: { availability: v.availability } };
+        },
+        done: function (data, msg, v) { setMsg(msg, "ok", "Availability updated", "Now " + esc(v.availability) + "."); }
+      },
+      {
+        id: "w-vol-assign", title: "Assign a volunteer", submit: "Assign volunteer", optional: true,
+        fields: [fVolunteer, fVillage, t("task", "Task", { required: true })],
+        build: function (v) {
+          return { path: "/volunteers/" + encodeURIComponent(v.volunteerId) + "/assignments",
+                   body: { villageId: v.villageId, task: v.task } };
+        },
+        done: function (data, msg) {
+          rememberId("assignments", data.assignmentId, "volunteer assignment");
+          setMsg(msg, "ok", "Volunteer assigned", idLine("Assignment", data.assignmentId, "— log hours against this ID."));
+        }
+      },
+      {
+        id: "w-hours", title: "Log volunteer hours", submit: "Log hours", optional: true,
+        note: "Hours are logged against an assignment, never in the abstract, and may not be negative.",
+        fields: [fVolunteer, t("assignmentId", "Assignment ID", { list: "dl-assignments", required: true }),
+                 n("hours", "Hours", { min: 0, step: "any", required: true })],
+        build: function (v) {
+          return { path: "/volunteers/" + encodeURIComponent(v.volunteerId) + "/hours",
+                   body: { assignmentId: v.assignmentId, hours: Number(v.hours) } };
+        },
+        done: function (data, msg, v) { setMsg(msg, "ok", "Hours logged", esc(v.hours) + " hours recorded."); }
+      }
+    ]
+  },
+  {
+    title: "Development planning",
+    optional: true,
+    workflows: [
+      {
+        id: "w-plan", title: "Create a development plan", submit: "Create plan", optional: true,
+        note: "One plan per village. The plan is the long-term half of the platform — the work that continues after relief ends.",
+        fields: [fVillage],
+        build: function (v) { return { path: "/villages/" + encodeURIComponent(v.villageId) + "/plan", body: {} }; },
+        done: function (data, msg, v) {
+          rememberId("plans", data.planId, "plan for " + villageName(v.villageId));
+          setMsg(msg, "ok", "Development plan created", idLine("Identifier", data.planId, "— add goals against it."));
+        }
+      },
+      {
+        id: "w-goal", title: "Add a goal", submit: "Add goal", optional: true,
+        fields: [fPlan, sel("area", "Area", PLAN_AREA_OPTIONS), area("description", "Description", { required: true })],
+        build: function (v) {
+          return { path: "/plans/" + encodeURIComponent(v.planId) + "/goals",
+                   body: { area: v.area, description: v.description } };
+        },
+        done: function (data, msg, v) {
+          rememberId("goals", data.goalId, v.area);
+          setMsg(msg, "ok", "Goal added", idLine("Identifier", data.goalId, "— milestones belong to it."));
+        }
+      },
+      {
+        id: "w-milestone", title: "Add a milestone", submit: "Add milestone", optional: true,
+        fields: [fPlan, fGoal, t("title", "Title", { required: true }),
+                 t("targetDate", "Target date", { type: "date", required: true })],
+        build: function (v) {
+          return { path: "/plans/" + encodeURIComponent(v.planId) + "/goals/" + encodeURIComponent(v.goalId) + "/milestones",
+                   body: { title: v.title, targetDate: v.targetDate } };
+        },
+        done: function (data, msg, v) {
+          rememberId("milestones", data.milestoneId, v.title);
+          setMsg(msg, "ok", "Milestone added", idLine("Identifier", data.milestoneId, ""));
+        }
+      },
+      {
+        id: "w-milestone-done", title: "Complete a milestone", submit: "Mark complete", optional: true,
+        note: "Completion is monotonic: a completed milestone never reverts.",
+        fields: [fPlan, fGoal, t("milestoneId", "Milestone ID", { list: "dl-milestones", required: true })],
+        build: function (v) {
+          return { path: "/plans/" + encodeURIComponent(v.planId) + "/goals/" + encodeURIComponent(v.goalId)
+            + "/milestones/" + encodeURIComponent(v.milestoneId) + "/complete" };
+        },
+        done: function (data, msg) {
+          setMsg(msg, "ok", "Milestone completed",
+            data.completedAt ? "Completed at " + esc(when(data.completedAt)) + "." : "Plan progress has moved.");
+        }
+      }
+    ]
+  },
+  {
+    title: "Signals and alerts",
+    optional: true,
+    workflows: [
+      {
+        id: "w-signal", title: "Ingest a field report or post", submit: "Ingest signal", optional: true,
+        note: "Raw text is translated into a Signal by the extractor port before anything downstream sees it — an anti-corruption layer around volatile external feeds.",
+        fields: [sel("source", "Source", SIGNAL_SOURCE_OPTIONS), area("rawText", "Raw text", { required: true })],
+        build: function (v) { return { path: "/signals", body: { rawText: v.rawText, source: v.source } }; },
+        done: function (data, msg) {
+          rememberId("signals", data.signalId, "signal");
+          setMsg(msg, "ok", "Signal ingested", idLine("Identifier", data.signalId, "— evaluate it to raise alerts."));
+        }
+      },
+      {
+        id: "w-evaluate", title: "Evaluate a signal for alerts", submit: "Evaluate signal", optional: true,
+        note: "Alert rules are deterministic over the signal plus registry facts about its village.",
+        fields: [t("signalId", "Signal ID", { list: "dl-signals", required: true }),
+                 sel("villageKnown", "Village is in the registry", ["true", "false"], { half: true }),
+                 sel("hasActiveNgo", "Village has an active NGO", ["true", "false"], { half: true }),
+                 t("recentAidTypes", "Recent aid types", { placeholder: "food, medical", hint: "Comma separated." })],
+        build: function (v) {
+          return { path: "/signals/" + encodeURIComponent(v.signalId) + "/evaluate", body: {
+            registryFacts: {
+              villageKnown: v.villageKnown === "true",
+              hasActiveNgo: v.hasActiveNgo === "true",
+              recentAidTypes: (v.recentAidTypes || "").split(",").map(function (s) { return s.trim(); })
+                .filter(function (s) { return s.length > 0; })
+            } } };
+        },
+        done: function (data, msg) {
+          const alerts = Array.isArray(data.alerts) ? data.alerts : [];
+          if (alerts.length === 0) { setMsg(msg, "ok", "No alert raised", "No rule matched this signal."); return; }
+          setMsg(msg, "dup", alerts.length + " alert" + (alerts.length === 1 ? "" : "s") + " raised",
+            alerts.map(function (alert) { return "<strong>" + esc(words(alert.type)) + "</strong>"; }).join("<br>")
+            + "<br>They are on the District dashboard.");
+        }
+      }
+    ]
+  }
+];
+
+/* --- Form engine ---------------------------------------------------- */
+
+/** Renders one declared field as labelled, described, accessible markup. */
+function fieldHtml(formId, field) {
+  const id = formId + "-" + field.name;
+  const hintId = id + "-hint";
+  const errorId = id + "-err";
+  const described = [];
+  if (field.hint) described.push(hintId);
+  described.push(errorId);
+  const attrs = [
+    'id="' + esc(id) + '"', 'name="' + esc(field.name) + '"',
+    'aria-describedby="' + esc(described.join(" ")) + '"'
+  ];
+  if (field.list) attrs.push('list="' + esc(field.list) + '"');
+  if (field.placeholder) attrs.push('placeholder="' + esc(field.placeholder) + '"');
+  if (field.min !== undefined) attrs.push('min="' + esc(String(field.min)) + '"');
+  if (field.max !== undefined) attrs.push('max="' + esc(String(field.max)) + '"');
+  if (field.step !== undefined) attrs.push('step="' + esc(String(field.step)) + '"');
+
+  let control;
+  if (field.type === "select") {
+    control = "<select " + attrs.join(" ") + ">" + field.options.map(function (option) {
+      return '<option value="' + esc(option) + '"' + (field.value === option ? " selected" : "") + ">"
+        + esc(option) + "</option>";
+    }).join("") + "</select>";
+  } else if (field.type === "textarea") {
+    control = "<textarea " + attrs.join(" ") + "></textarea>";
+  } else {
+    const type = field.type === "number" ? "number" : (field.type === "date" ? "date" : "text");
+    if (type === "number") attrs.push('inputmode="' + (field.step === "any" ? "decimal" : "numeric") + '"');
+    control = "<input type=\"" + type + "\" " + attrs.join(" ")
+      + (field.value !== undefined ? ' value="' + esc(field.value) + '"' : "") + ">";
+  }
+
+  return '<div class="field" data-field="' + esc(field.name) + '">'
+    + '<label for="' + esc(id) + '">' + esc(field.label)
+      + (field.optional ? ' <span class="hint">(optional)</span>' : "") + "</label>"
+    + control
+    + (field.hint ? '<span class="hint" id="' + esc(hintId) + '">' + esc(field.hint) + "</span>" : "")
+    + '<span class="field-error" id="' + esc(errorId) + '" aria-live="polite"></span>'
+    + "</div>";
+}
+
+/** Groups consecutive half-width fields into the two-column grid. */
+function fieldsHtml(formId, fields) {
+  let html = "";
+  let index = 0;
+  while (index < fields.length) {
+    if (fields[index].half && fields[index + 1] && fields[index + 1].half) {
+      html += '<div class="grid-2">' + fieldHtml(formId, fields[index]) + fieldHtml(formId, fields[index + 1]) + "</div>";
+      index += 2;
+    } else {
+      html += fieldHtml(formId, fields[index]);
+      index += 1;
+    }
+  }
+  return html;
+}
+
+function buildWorkflows() {
+  const host = $("#workflows");
+  host.innerHTML = WORKFLOW_GROUPS.map(function (group) {
+    return '<div class="work-group"><h4>' + esc(group.title) + "</h4>"
+      + group.workflows.map(function (workflow) {
+          return '<details class="work" id="' + esc(workflow.id) + '">'
+            + "<summary>" + esc(workflow.title) + '<span class="caret" aria-hidden="true">›</span></summary>'
+            + '<div class="work-body">'
+              + (workflow.note ? '<p class="work-note">' + esc(workflow.note) + "</p>" : "")
+              + '<form novalidate data-workflow="' + esc(workflow.id) + '">'
+                + fieldsHtml(workflow.id, workflow.fields)
+                + '<div class="actions"><button type="submit">' + esc(workflow.submit) + "</button></div>"
+                + '<div class="msg" role="status" aria-live="polite"></div>'
+              + "</form>"
+            + "</div></details>";
+        }).join("")
+      + "</div>";
+  }).join("");
+
+  WORKFLOW_GROUPS.forEach(function (group) {
+    group.workflows.forEach(function (workflow) { wireForm(workflow); });
+  });
+}
+
+function clearFieldErrors(form) {
+  $$(".field", form).forEach(function (field) {
+    field.classList.remove("is-invalid");
+    const error = $(".field-error", field);
+    if (error) error.textContent = "";
+  });
+}
+
+/** Puts a message inline next to the field it concerns, and focuses it. */
+function markField(form, name, message) {
+  const field = name ? $('.field[data-field="' + name + '"]', form) : null;
+  if (!field) return false;
+  field.classList.add("is-invalid");
+  const error = $(".field-error", field);
+  if (error) error.textContent = message;
+  const control = $("input, select, textarea", field);
+  if (control) control.focus();
+  return true;
+}
+
+/**
+ * Guesses which field a domain rejection is about, so a 400 lands next to the
+ * input that caused it rather than only at the bottom of the form. Purely a
+ * presentation nicety: the message itself is always rendered verbatim as well.
+ */
+function fieldForError(workflow, message) {
+  const lower = String(message || "").toLowerCase();
+  for (let i = 0; i < workflow.fields.length; i += 1) {
+    const name = workflow.fields[i].name;
+    if (lower.indexOf(name.toLowerCase()) !== -1) return name;
+    const label = String(workflow.fields[i].label || "").toLowerCase();
+    if (label && lower.indexOf(label) !== -1) return name;
+  }
+  if (/affected famil/.test(lower)) return "affectedFamilies";
+  if (/sanction/.test(lower)) return "sanctionedMinor";
+  if (/released|spent|amount/.test(lower)) return "amountMinor";
+  if (/severity/.test(lower)) return "severity";
+  return null;
+}
+
+/**
+ * Wires one workflow form. Handles client validation, 400 (the domain's own
+ * wording, verbatim and inline), 401 (drop the token and re-lock), a 404 that
+ * means "route not deployed", other failures, network loss, and always restores
+ * the button.
+ */
+function wireForm(workflow) {
+  const details = $("#" + workflow.id);
+  if (!details) return;
+  const form = $("form", details);
   const msgEl = $(".msg", form);
   const button = $("button[type=submit]", form);
 
   form.addEventListener("submit", async function (event) {
     event.preventDefault();
     setMsg(msgEl, null);
+    clearFieldErrors(form);
 
     const values = {};
     new FormData(form).forEach(function (value, key) { values[key] = String(value).trim(); });
 
-    const request = build(values);
+    // Required fields first: never send a request we know will be rejected.
+    for (let i = 0; i < workflow.fields.length; i += 1) {
+      const field = workflow.fields[i];
+      if (field.required && !values[field.name]) {
+        markField(form, field.name, field.label + " is required.");
+        setMsg(msgEl, "error", "Check this form", esc(field.label + " is required."));
+        return;
+      }
+      if (field.type === "number" && values[field.name] !== "" && values[field.name] !== undefined
+          && !isFinite(Number(values[field.name]))) {
+        markField(form, field.name, field.label + " must be a number.");
+        setMsg(msgEl, "error", "Check this form", esc(field.label + " must be a number."));
+        return;
+      }
+    }
+
+    const request = workflow.build(values);
     if (request.error) {
-      setMsg(msgEl, "error", "Check this form", escapeHtml(request.error));
-      const firstInvalid = $("input, select, textarea", form);
-      if (firstInvalid) firstInvalid.focus();
+      markField(form, request.field, request.error);
+      setMsg(msgEl, "error", "Check this form", esc(request.error));
       return;
     }
 
@@ -1044,7 +2875,7 @@ function wireForm(formId, build, done) {
     button.disabled = true;
     button.textContent = "Working…";
     try {
-      const res = await api(request.path, { method: request.method || "POST", body: request.body, auth: true });
+      const res = await api(request.path, { method: request.method || "POST", body: request.body });
 
       if (res.network) {
         setMsg(msgEl, "error", "Network error",
@@ -1052,17 +2883,29 @@ function wireForm(formId, build, done) {
         return;
       }
       if (res.status === 401) { handleUnauthorized(msgEl); return; }
+      if (isMissingRoute(res)) {
+        setMsg(msgEl, "info", "Not available on this deployment yet",
+          "This revision does not serve <code>" + esc(request.method || "POST") + " " + esc(request.path)
+          + "</code>. Nothing was changed. The workflow appears here because the platform supports it —"
+          + " it becomes usable as soon as the route ships.");
+        return;
+      }
       if (!res.ok) {
-        // 400 and 404 carry the domain's own wording — show it verbatim, it is
+        // 400 and 404 carry the domain's own wording. Render it verbatim: it is
         // the most informative thing the platform produces.
-        const why = res.data && res.data.error ? res.data.error : "The service returned status " + res.status;
-        setMsg(msgEl, "error", res.status === 404 ? "Not found" : "Rejected", escapeHtml(why));
+        const why = apiError(res);
+        const field = fieldForError(workflow, why);
+        if (field) markField(form, field, why);
+        setMsg(msgEl, "error", res.status === 404 ? "Not found" : "Rejected", esc(why));
         return;
       }
 
-      done(res.data || {}, msgEl, values);
+      workflow.done(res.data || {}, msgEl, values);
       form.reset();
-      refreshAll();          // public zone reflects the write immediately
+      // The dashboards must reflect the write immediately.
+      state.projects = null;
+      state.assignments = null;
+      if (state.view !== "ops") loadView(state.view);
     } finally {
       button.disabled = false;
       button.textContent = label;
@@ -1070,144 +2913,62 @@ function wireForm(formId, build, done) {
   });
 }
 
-function requireFields(values, keys) {
-  for (let i = 0; i < keys.length; i += 1) {
-    if (!values[keys[i]]) return keys[i] + " is required";
+/** Opens a workflow, optionally prefilled, and puts the cursor in it. */
+function openWorkflow(id, prefill) {
+  goto("ops");
+  const details = $("#" + id);
+  if (!details) return;
+  $$("details.work").forEach(function (other) { if (other !== details) other.open = false; });
+  details.open = true;
+  if (prefill) {
+    Object.keys(prefill).forEach(function (name) {
+      const control = $("#" + id + "-" + name);
+      if (control) control.value = prefill[name];
+    });
   }
-  return null;
+  const first = $("input:not([value]), input, select, textarea", details);
+  details.scrollIntoView({ block: "start" });
+  if (first) first.focus({ preventScroll: true });
 }
 
-function num(values, key) {
-  const parsed = Number(values[key]);
-  return isFinite(parsed) && values[key] !== "" ? parsed : null;
-}
+/* ====================================================================
+ * SCRIPT §9 — boot and delegated events
+ * ==================================================================== */
 
-/* --- Register a village — POST /villages -> 201 { villageId } --- */
-wireForm("f-village", function (v) {
-  const missing = requireFields(v, ["name", "district", "state"]);
-  if (missing) return { error: missing };
-  const nums = { lat: num(v, "lat"), lng: num(v, "lng"), population: num(v, "population"),
-                 households: num(v, "households"), affectedFamilies: num(v, "affectedFamilies") };
-  for (const key in nums) if (nums[key] === null) return { error: key + " must be a number" };
-  return {
-    path: "/villages",
-    body: {
-      name: v.name, district: v.district, state: v.state,
-      geo: { lat: nums.lat, lng: nums.lng },
-      population: nums.population, households: nums.households,
-      affectedFamilies: nums.affectedFamilies, severity: v.severity
-    }
-  };
-}, function (data, msgEl, v) {
-  rememberId("villages", data.villageId, v.name);
-  setMsg(msgEl, "ok", "Village registered",
-    'Identifier <code class="id">' + escapeHtml(data.villageId) + "</code> — it now appears in the public list above.");
+/** One listener for every action button rendered into a list. */
+document.addEventListener("click", function (event) {
+  const button = event.target.closest ? event.target.closest("button[data-action]") : null;
+  if (!button) return;
+  let payload = {};
+  try { payload = JSON.parse(button.getAttribute("data-payload") || "{}"); } catch (_) { payload = {}; }
+  const action = button.getAttribute("data-action");
+  if (action === "workflow") { openWorkflow(payload.workflow, payload.prefill); return; }
+  if (action === "village") { state.villageId = payload.villageId || state.villageId; goto("village", state.villageId); return; }
+  if (action === "ngo") { state.ngoId = payload.ngoId || state.ngoId; goto("ngo", state.ngoId); return; }
+  if (VIEWS.indexOf(action) !== -1) goto(action);
 });
 
-/* --- Register an NGO — POST /ngos -> 201 { ngoId } --- */
-wireForm("f-ngo", function (v) {
-  if (!v.name) return { error: "NGO name is required" };
-  const capacity = num(v, "capacity");
-  if (capacity === null) return { error: "capacity must be a number" };
-  const focusAreas = (v.focusAreas || "").split(",").map(function (s) { return s.trim(); })
-    .filter(function (s) { return s.length > 0; });
-  return { path: "/ngos", body: { name: v.name, focusAreas: focusAreas, capacity: capacity } };
-}, function (data, msgEl, v) {
-  rememberId("ngos", data.ngoId, v.name);
-  setMsg(msgEl, "ok", "NGO registered",
-    'Identifier <code class="id">' + escapeHtml(data.ngoId) + "</code> — use it when assigning a lead NGO.");
+$("#village-select").addEventListener("change", function (event) {
+  state.villageId = event.target.value;
+  goto("village", state.villageId);
+  renderVillageProfile();
 });
 
-/* --- Assign a lead NGO — POST /villages/:id/assignment -> 201 { assignmentId } --- */
-wireForm("f-assign", function (v) {
-  const missing = requireFields(v, ["villageId", "ngoId"]);
-  if (missing) return { error: missing };
-  return { path: "/villages/" + encodeURIComponent(v.villageId) + "/assignment", body: { ngoId: v.ngoId } };
-}, function (data, msgEl, v) {
-  // The API reports the new assignment. If a future revision also names the
-  // assignment it retired, surface that — the One-Village-One-NGO handover is
-  // the fact an operator most needs to see.
-  const retired = data.retiredAssignmentId || data.previousAssignmentId
-    || (data.retired && data.retired.assignmentId);
-  const detail = 'Assignment <code class="id">' + escapeHtml(data.assignmentId) + "</code> is now the active lead"
-    + " for village " + escapeHtml(v.villageId) + "."
-    + (retired
-        ? ' Previous assignment <code class="id">' + escapeHtml(retired) + "</code> was retired."
-        : " Any previous assignment for this village has been retired — one village, one lead NGO.");
-  setMsg(msgEl, "ok", "Lead NGO assigned", detail);
+$("#ngo-select").addEventListener("change", function (event) {
+  state.ngoId = event.target.value;
+  goto("ngo", state.ngoId);
+  renderNgoPortfolio();
 });
 
-/* --- Register a beneficiary — POST /beneficiaries -> 201 { beneficiaryId } --- */
-wireForm("f-beneficiary", function (v) {
-  const missing = requireFields(v, ["villageId", "name"]);
-  if (missing) return { error: missing };
-  return { path: "/beneficiaries", body: { villageId: v.villageId, name: v.name, category: v.category } };
-}, function (data, msgEl, v) {
-  rememberId("beneficiaries", data.beneficiaryId, v.category);
-  setMsg(msgEl, "ok", "Beneficiary registered",
-    'Identifier <code class="id">' + escapeHtml(data.beneficiaryId) + "</code> — record aid against this ID."
-    + " The name is not republished on the public zone.");
-});
+window.addEventListener("hashchange", applyRoute);
 
-/* --- Record aid — POST /beneficiaries/:id/aid
-       -> 201 { beneficiaryId, deliveredAt, duplicate } --- */
-wireForm("f-aid", function (v) {
-  const missing = requireFields(v, ["beneficiaryId", "providerId"]);
-  if (missing) return { error: missing };
-  const body = { aidType: v.aidType, providerId: v.providerId, providerType: v.providerType };
-  if (v.notes) body.notes = v.notes;
-  return { path: "/beneficiaries/" + encodeURIComponent(v.beneficiaryId) + "/aid", body: body };
-}, function (data, msgEl, v) {
-  const when = data.deliveredAt ? new Date(data.deliveredAt).toLocaleString() : "now";
-  if (data.duplicate === true) {
-    // The flagship signal: recorded, and flagged. Never hidden in a toast.
-    setMsg(msgEl, "dup", "Possible duplicate aid",
-      "The delivery was recorded at " + escapeHtml(when) + ", and flagged: <strong>" + escapeHtml(v.aidType)
-      + "</strong> aid already reached <code class=\"id\">" + escapeHtml(data.beneficiaryId)
-      + "</code> from a different provider inside the 14-day window."
-      + " Aid is never silently rejected — verify with the other provider before the next delivery.");
-    return;
-  }
-  setMsg(msgEl, "ok", "Aid recorded",
-    escapeHtml(v.aidType) + " delivered to <code class=\"id\">" + escapeHtml(data.beneficiaryId)
-    + "</code> at " + escapeHtml(when) + ". No duplicate flag raised.");
-});
-
-/* --- Report an issue — POST /issues -> 201 { issueId } --- */
-wireForm("f-issue", function (v) {
-  const missing = requireFields(v, ["villageId", "description"]);
-  if (missing) return { error: missing };
-  const lat = num(v, "lat"); const lng = num(v, "lng");
-  if (lat === null || lng === null) return { error: "GPS latitude and longitude must be numbers" };
-  return {
-    path: "/issues",
-    body: { villageId: v.villageId, category: v.category, description: v.description, gps: { lat: lat, lng: lng } }
-  };
-}, function (data, msgEl, v) {
-  rememberId("issues", data.issueId, v.category);
-  setMsg(msgEl, "ok", "Issue reported",
-    'Identifier <code class="id">' + escapeHtml(data.issueId) + "</code> — route it to assign a responsible party.");
-});
-
-/* --- Route an issue — POST /issues/:id/route -> 200 { issueId, partyType, party } --- */
-wireForm("f-route", function (v) {
-  if (!v.issueId) return { error: "issueId is required" };
-  return { path: "/issues/" + encodeURIComponent(v.issueId) + "/route" };
-}, function (data, msgEl) {
-  // Both party types the routing policy can return, spelled the way the domain
-  // spells them. Anything new falls back to the raw value, de-underscored.
-  const PARTY_LABELS = { lead_ngo: "lead NGO", government_department: "government department" };
-  const partyType = PARTY_LABELS[data.partyType] || String(data.partyType || "").replace(/_/g, " ");
-  setMsg(msgEl, "ok", "Issue routed",
-    "Assigned to the " + escapeHtml(partyType) + ' <code class="id">' + escapeHtml(data.party) + "</code>.");
-});
-
-/* ==================================================================
- * Boot
- * ================================================================== */
 try { state.token = sessionStorage.getItem(TOKEN_KEY); } catch (_) { state.token = null; }
+buildWorkflows();
 applyTokenState();
-refreshAll();
+checkHealth();
+checkReady();
+if (!location.hash) location.hash = "#/public";
+applyRoute();
 // Keep the connection indicator honest without hammering the service.
 setInterval(checkHealth, 30000);
 </script>

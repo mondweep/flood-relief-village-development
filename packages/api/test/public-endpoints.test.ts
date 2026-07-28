@@ -91,6 +91,22 @@ describe("public transparency endpoints", () => {
     return { rampur, sonpur };
   }
 
+  /** Sanctions one bridge project against a village and returns its id. */
+  async function sanctionProject(village: string, sanctionedMinor: number): Promise<string> {
+    const created = await server.request("/projects", {
+      ...jsonBody({
+        villageId: village,
+        name: "Rampur footbridge",
+        category: "bridge",
+        fundSource: "district",
+        sanctionedMinor,
+      }),
+      token: TOKEN,
+    });
+    expect(created.status).toBe(201);
+    return record(created.body)["projectId"] as string;
+  }
+
   describe("GET /public/funds", () => {
     it("answers 200 with a projects array and no credential", async () => {
       const response = await server.request("/public/funds");
@@ -99,17 +115,70 @@ describe("public transparency endpoints", () => {
       expect(response.body).toEqual({ projects: [] });
     });
 
-    it("is empty because Fund Monitoring is not wired, not because it failed", async () => {
-      // Documents the known gap: the route is structurally sourceless today (the
-      // composition root wires no fund-monitoring context), so it reports the
-      // truth — an empty feed — rather than fabricating money movements. If this
-      // ever starts returning rows, the shape below is the contract they must meet.
+    it("is empty because nothing has been sanctioned, not because it failed", async () => {
+      // Villages, NGOs and assessments exist; no project does. An empty feed here
+      // is the honest report of an empty project register, not a dead route.
       await seed();
       const response = await server.request("/public/funds");
 
       const projects = record(response.body)["projects"];
       expect(Array.isArray(projects)).toBe(true);
       expect(projects).toEqual([]);
+    });
+
+    it("publishes a sanctioned project with its sanctioned/released/spent ladder", async () => {
+      const { rampur } = await seed();
+      const projectId = await sanctionProject(rampur, 500_000_00);
+
+      await server.request(`/projects/${projectId}/release`, {
+        ...jsonBody({ amountMinor: 200_000_00 }),
+        token: TOKEN,
+      });
+      await server.request(`/projects/${projectId}/expenditure`, {
+        ...jsonBody({ amountMinor: 75_000_00, description: "Piling contractor", evidenceRef: "INV-77" }),
+        token: TOKEN,
+      });
+
+      const response = await server.request("/public/funds");
+      const projects = record(response.body)["projects"] as Record<string, unknown>[];
+
+      expect(response.status).toBe(200);
+      expect(projects).toHaveLength(1);
+      expect(projects[0]).toEqual({
+        id: projectId,
+        villageId: rampur,
+        name: "Rampur footbridge",
+        category: "bridge",
+        fundSource: "district",
+        currency: "INR",
+        sanctionedMinor: 500_000_00,
+        releasedMinor: 200_000_00,
+        spentMinor: 75_000_00,
+        status: "in_progress",
+      });
+    });
+
+    it("withholds expenditure free text, which an operator could put a name into", async () => {
+      const { rampur } = await seed();
+      const projectId = await sanctionProject(rampur, 500_000_00);
+      await server.request(`/projects/${projectId}/release`, {
+        ...jsonBody({ amountMinor: 200_000_00 }),
+        token: TOKEN,
+      });
+      await server.request(`/projects/${projectId}/expenditure`, {
+        ...jsonBody({ amountMinor: 1_000_00, description: "Paid to Sunita Devi", evidenceRef: "RCPT-9" }),
+        token: TOKEN,
+      });
+
+      const publicBody = JSON.stringify((await server.request("/public/funds")).body);
+      expect(publicBody).not.toContain("Sunita");
+      expect(publicBody).not.toContain("RCPT-9");
+      expect(publicBody).not.toContain("expenditures");
+
+      // The same detail IS available to an authenticated operator — the point is
+      // the split, not that the platform forgets it.
+      const authed = await server.request("/projects", { token: TOKEN });
+      expect(JSON.stringify(authed.body)).toContain("Sunita");
     });
   });
 
@@ -124,7 +193,59 @@ describe("public transparency endpoints", () => {
         villagesWithActiveNgo: 0,
         // Nothing scored is "unknown", never "zero recovery".
         averageRecoveryComposite: null,
+        // Money is the other way round: no project means no rupee has moved,
+        // which is a measured zero rather than an absence of measurement.
+        funds: {
+          projectCount: 0,
+          currency: "INR",
+          sanctionedMinor: 0,
+          releasedMinor: 0,
+          spentMinor: 0,
+          anomalyCount: 0,
+        },
       });
+    });
+
+    it("totals the fund ladder across every sanctioned project", async () => {
+      const { rampur, sonpur } = await seed();
+      const first = await sanctionProject(rampur, 500_000_00);
+      await sanctionProject(sonpur, 300_000_00);
+
+      await server.request(`/projects/${first}/release`, {
+        ...jsonBody({ amountMinor: 200_000_00 }),
+        token: TOKEN,
+      });
+      await server.request(`/projects/${first}/expenditure`, {
+        ...jsonBody({ amountMinor: 60_000_00, description: "Piling contractor" }),
+        token: TOKEN,
+      });
+
+      const funds = record(record((await server.request("/public/stats")).body)["funds"]);
+
+      expect(funds).toEqual({
+        projectCount: 2,
+        currency: "INR",
+        sanctionedMinor: 800_000_00,
+        releasedMinor: 200_000_00,
+        spentMinor: 60_000_00,
+        anomalyCount: 0,
+      });
+    });
+
+    it("counts anomalies that Fund Monitoring has actually flagged", async () => {
+      const { rampur } = await seed();
+      // Two active bridge projects in one village is the duplicate-funding rule.
+      const first = await sanctionProject(rampur, 500_000_00);
+      await sanctionProject(rampur, 400_000_00);
+
+      const detected = await server.request(`/projects/${first}/detect-anomalies`, {
+        ...jsonBody({}),
+        token: TOKEN,
+      });
+      expect(detected.status).toBe(200);
+
+      const funds = record(record((await server.request("/public/stats")).body)["funds"]);
+      expect(funds["anomalyCount"]).toBe(1);
     });
 
     it("counts villages by severity and those with an active NGO assignment", async () => {
