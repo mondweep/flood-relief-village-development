@@ -59,6 +59,66 @@ function validateIssueProps(props: IssueCreateProps): string | null {
   return validateGps(props.gps);
 }
 
+const STATUSES: readonly IssueStatus[] = ["open", "routed", "in_progress", "resolved", "verified"];
+const PARTY_TYPES: readonly PartyType[] = ["lead_ngo", "government_department"];
+
+export function isIssueStatus(value: string): value is IssueStatus {
+  return (STATUSES as readonly string[]).includes(value);
+}
+
+export function isPartyType(value: string): value is PartyType {
+  return (PARTY_TYPES as readonly string[]).includes(value);
+}
+
+/** State needed to rebuild an Issue from storage — see Issue.restore. */
+export interface IssueRestoreProps extends IssueCreateProps {
+  status: IssueStatus;
+  routedTo?: RoutedTo;
+  routedAt?: string;
+  progressStartedAt?: string;
+  resolvedAt?: string;
+  resolutionNote?: string;
+  verifiedAt?: string;
+}
+
+/** Mirrors the transitions in route()/startProgress()/resolve()/verify(). */
+function validateRestoredLifecycle(props: IssueRestoreProps): string | null {
+  const { status } = props;
+  if (!isIssueStatus(status)) return `invalid status: ${String(status)}`;
+
+  const routed = status !== "open";
+  if (routed && props.routedTo === undefined) {
+    return `an issue with status ${status} must have a routing decision`;
+  }
+  if (!routed && props.routedTo !== undefined) {
+    return "an open issue must not have a routing decision";
+  }
+  if (props.routedTo !== undefined && !isPartyType(props.routedTo.partyType)) {
+    return `invalid routed party type: ${String(props.routedTo.partyType)}`;
+  }
+  if (props.routedTo !== undefined && props.routedTo.party.trim().length === 0) {
+    return "routed party must not be empty";
+  }
+
+  const resolved = status === "resolved" || status === "verified";
+  if (resolved) {
+    if (props.resolvedAt === undefined) {
+      return `an issue with status ${status} must have a resolvedAt`;
+    }
+    if (props.resolutionNote === undefined || props.resolutionNote.trim().length === 0) {
+      return `an issue with status ${status} must have a non-empty resolutionNote`;
+    }
+  } else {
+    if (props.resolvedAt !== undefined) {
+      return `an issue with status ${status} must not have a resolvedAt`;
+    }
+    if (props.resolutionNote !== undefined) {
+      return `an issue with status ${status} must not have a resolutionNote`;
+    }
+  }
+  return null;
+}
+
 export class Issue {
   readonly id: IssueId;
   readonly villageId: VillageId;
@@ -90,6 +150,36 @@ export class Issue {
     const error = validateIssueProps(props);
     if (error) return err(error);
     return ok(new Issue(props));
+  }
+
+  /**
+   * Rebuilds an Issue from persisted state. Intended for repository adapters
+   * only — application code moves issues through route()/startProgress()/
+   * resolve()/verify().
+   *
+   * Replaying those transitions is NOT a valid substitute: each demands an
+   * `occurredAt` the store does not hold for every step, so a replay would have
+   * to invent timestamps. restore() instead takes the persisted status directly
+   * and re-checks that the accompanying fields are consistent with it, so a
+   * corrupt row can never become a live aggregate.
+   */
+  static restore(props: IssueRestoreProps): Result<Issue> {
+    const base = Issue.create(props);
+    if (!base.ok) return base;
+    const issue = base.value;
+
+    const error = validateRestoredLifecycle(props);
+    if (error) return err(error);
+
+    issue._status = props.status;
+    if (props.routedTo !== undefined) issue._routedTo = props.routedTo;
+    if (props.routedAt !== undefined) issue._routedAt = props.routedAt;
+    if (props.progressStartedAt !== undefined) issue._progressStartedAt = props.progressStartedAt;
+    if (props.resolvedAt !== undefined) issue._resolvedAt = props.resolvedAt;
+    if (props.resolutionNote !== undefined) issue._resolutionNote = props.resolutionNote;
+    if (props.verifiedAt !== undefined) issue._verifiedAt = props.verifiedAt;
+
+    return ok(issue);
   }
 
   /** Copy of the photo references — mutating it does not affect the issue. */

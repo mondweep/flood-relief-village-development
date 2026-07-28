@@ -45,3 +45,14 @@ export {
 } from "./application/list-villages-by-severity.js";
 
 export { InMemoryVillageRepository } from "./adapters/in-memory-village-repository.js";
+
+export {
+  DAMAGE_ASSESSMENTS_TABLE,
+  SupabaseVillageRepository,
+  VILLAGES_TABLE,
+  fromRow as villageFromRow,
+  toDamageAssessmentRows,
+  toRow as villageToRow,
+  type DamageAssessmentRow,
+  type VillageRow,
+} from "./adapters/supabase-village-repository.js";

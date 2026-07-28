@@ -1,0 +1,60 @@
+# .gcloudignore — controls what `gcloud run deploy --source .` uploads to
+# Cloud Build / Cloud Storage.
+#
+# IMPORTANT: the presence of this file *replaces* gcloud's default behaviour of
+# falling back to .gitignore. So anything the container build needs must NOT be
+# listed here — in particular the Dockerfile, package-lock.json and every
+# packages/*/package.json.
+#
+# This is deliberately looser than .dockerignore: Cloud Build needs the
+# Dockerfile and .dockerignore themselves in the uploaded source, and Docker
+# then applies .dockerignore when assembling the build context.
+
+# --- git metadata (large, never needed by the build) ---
+.git
+.gitignore
+.gitattributes
+.github
+
+# --- dependencies & build output (rebuilt inside the image) ---
+node_modules
+**/node_modules
+dist
+**/dist
+.npm
+
+# --- agent / Ruflo local state ---
+.claude
+.claude-flow
+.claude.json
+.agents
+.swarm
+.mcp.json
+ruvector.db
+ruvector.db-*
+
+# --- tests & coverage ---
+coverage
+**/coverage
+**/test
+**/tests
+**/*.test.ts
+**/*.spec.ts
+
+# --- the Netlify alternative path is irrelevant to a Cloud Run deploy ---
+netlify
+netlify.toml
+.netlify
+
+# --- local secrets: belt and braces, these must never leave the machine ---
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- editor / OS noise ---
+*.log
+.DS_Store
+.vscode
+.idea

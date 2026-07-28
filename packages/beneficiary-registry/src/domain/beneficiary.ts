@@ -103,6 +103,44 @@ function parseInstant(value: string, field: string): Result<number> {
   return ok(ms);
 }
 
+/** State needed to rebuild a Beneficiary from storage — see Beneficiary.restore. */
+export interface BeneficiaryRestoreProps extends BeneficiaryCreateProps {
+  aidRecords: readonly AidRecord[];
+  followUps: readonly FollowUp[];
+  duplicateFlags: readonly DuplicateFlag[];
+}
+
+function validateAidRecord(record: AidRecord): string | null {
+  if (!isAidType(record.aidType)) return `invalid aidType: ${String(record.aidType)}`;
+  if (!isProviderType(record.providerType)) {
+    return `invalid providerType: ${String(record.providerType)}`;
+  }
+  if (record.providerId.trim().length === 0) return "providerId must not be empty";
+  const delivered = parseInstant(record.deliveredAt, "deliveredAt");
+  return delivered.ok ? null : delivered.error;
+}
+
+function validateFollowUp(followUp: FollowUp): string | null {
+  if (followUp.id.trim().length === 0) return "follow-up id must not be empty";
+  const due = parseInstant(followUp.dueAt, "dueAt");
+  if (!due.ok) return due.error;
+  if (followUp.completedAt !== undefined) {
+    const completed = parseInstant(followUp.completedAt, "completedAt");
+    if (!completed.ok) return completed.error;
+  }
+  return null;
+}
+
+function validateDuplicateFlag(flag: DuplicateFlag): string | null {
+  if (!isAidType(flag.aidType)) return `invalid aidType: ${String(flag.aidType)}`;
+  if (flag.providerIds.length === 0) return "duplicate flag must name at least one providerId";
+  if (flag.providerIds.some((id) => id.trim().length === 0)) {
+    return "duplicate flag providerIds must not contain empty ids";
+  }
+  const flagged = parseInstant(flag.flaggedAt, "flaggedAt");
+  return flagged.ok ? null : flagged.error;
+}
+
 export class Beneficiary {
   readonly id: BeneficiaryId;
   readonly villageId: VillageId;
@@ -128,6 +166,47 @@ export class Beneficiary {
       return err(`invalid category: ${String(props.category)}`);
     }
     return ok(new Beneficiary(props));
+  }
+
+  /**
+   * Rebuilds a Beneficiary from persisted state. Intended for repository
+   * adapters only — application code creates beneficiaries via create().
+   *
+   * Replaying recordAid() is NOT a valid substitute: it re-derives duplicate
+   * flags from the window heuristic, which would duplicate (or contradict) the
+   * flags already stored. restore() therefore takes the stored collections
+   * verbatim, but re-runs every invariant create()/recordAid()/scheduleFollowUp()
+   * would have enforced so a corrupt row can never become a live aggregate.
+   */
+  static restore(props: BeneficiaryRestoreProps): Result<Beneficiary> {
+    const base = Beneficiary.create(props);
+    if (!base.ok) return base;
+    const beneficiary = base.value;
+
+    for (const record of props.aidRecords) {
+      const error = validateAidRecord(record);
+      if (error) return err(error);
+      beneficiary._aidRecords.push({ ...record });
+    }
+
+    const seenFollowUpIds = new Set<string>();
+    for (const followUp of props.followUps) {
+      const error = validateFollowUp(followUp);
+      if (error) return err(error);
+      if (seenFollowUpIds.has(followUp.id)) {
+        return err(`duplicate follow-up id: ${followUp.id}`);
+      }
+      seenFollowUpIds.add(followUp.id);
+      beneficiary._followUps.push({ ...followUp });
+    }
+
+    for (const flag of props.duplicateFlags) {
+      const error = validateDuplicateFlag(flag);
+      if (error) return err(error);
+      beneficiary._duplicateFlags.push({ ...flag, providerIds: [...flag.providerIds] });
+    }
+
+    return ok(beneficiary);
   }
 
   /** Append-only history of aid deliveries. Returns copies — safe to mutate. */

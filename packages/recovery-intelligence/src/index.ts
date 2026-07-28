@@ -8,7 +8,11 @@ export {
 
 export { Weights } from "./domain/weights.js";
 
-export { RecoveryIndex, type ScoreHistoryEntry } from "./domain/recovery-index.js";
+export {
+  RecoveryIndex,
+  type RecoveryIndexRestoreProps,
+  type ScoreHistoryEntry,
+} from "./domain/recovery-index.js";
 
 export {
   isSeverity,
@@ -52,3 +56,14 @@ export {
 
 export { InMemoryRecoveryIndexRepository } from "./adapters/in-memory-recovery-index-repository.js";
 export { StaticWeightsProvider } from "./adapters/static-weights-provider.js";
+
+export {
+  HISTORY_TABLE,
+  INDICES_TABLE,
+  SupabaseRecoveryIndexRepository,
+  fromRow as recoveryIndexFromRow,
+  toHistoryRows,
+  toRow as recoveryIndexToRow,
+  type RecoveryIndexRow,
+  type ScoreHistoryRow,
+} from "./adapters/supabase-recovery-index-repository.js";

@@ -1,0 +1,17 @@
+{
+  "name": "@afrip/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/server.ts",
+  "exports": { ".": "./src/server.ts" },
+  "dependencies": {
+    "@afrip/shared-kernel": "*",
+    "@afrip/platform": "*",
+    "@afrip/village-registry": "*",
+    "@afrip/ngo-coordination": "*",
+    "@afrip/recovery-intelligence": "*",
+    "@afrip/issue-tracking": "*",
+    "@afrip/beneficiary-registry": "*"
+  }
+}

@@ -3,6 +3,7 @@ export type {
   AidType,
   BeneficiaryCategory,
   BeneficiaryCreateProps,
+  BeneficiaryRestoreProps,
   DuplicateFlag,
   FollowUp,
   ProviderType,
@@ -54,3 +55,21 @@ export {
 } from "./application/list-overdue-follow-ups.js";
 
 export { InMemoryBeneficiaryRepository } from "./adapters/in-memory-beneficiary-repository.js";
+
+export {
+  AID_RECORDS_TABLE,
+  BENEFICIARIES_TABLE,
+  DUPLICATE_FLAGS_TABLE,
+  FOLLOW_UPS_TABLE,
+  SupabaseBeneficiaryRepository,
+  fromRow as beneficiaryFromRow,
+  toAidRecordRows,
+  toDuplicateFlagRows,
+  toFollowUpRows,
+  toRow as beneficiaryToRow,
+  type AidRecordRow,
+  type BeneficiaryChildRows,
+  type BeneficiaryRow,
+  type DuplicateFlagRow,
+  type FollowUpRow,
+} from "./adapters/supabase-beneficiary-repository.js";

@@ -2,11 +2,12 @@ export type {
   GpsCoordinates,
   IssueCategory,
   IssueCreateProps,
+  IssueRestoreProps,
   IssueStatus,
   PartyType,
   RoutedTo,
 } from "./domain/issue.js";
-export { Issue, isIssueCategory } from "./domain/issue.js";
+export { Issue, isIssueCategory, isIssueStatus, isPartyType } from "./domain/issue.js";
 
 export type { LeadNgo } from "./domain/routing-policy.js";
 export { determineRouting } from "./domain/routing-policy.js";
@@ -49,3 +50,11 @@ export {
 } from "./application/verify-resolution.js";
 
 export { InMemoryIssueRepository } from "./adapters/in-memory-issue-repository.js";
+
+export {
+  ISSUES_TABLE,
+  SupabaseIssueRepository,
+  fromRow as issueFromRow,
+  toRow as issueToRow,
+  type IssueRow,
+} from "./adapters/supabase-issue-repository.js";

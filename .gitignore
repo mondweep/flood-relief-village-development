@@ -3,6 +3,15 @@ dist/
 coverage/
 *.log
 
+# Local environment — real values must never be committed.
+# .env.example is the committed template; see docs/DEPLOYMENT.md.
+.env
+.env.*
+!.env.example
+
+# Netlify CLI state
+.netlify/
+
 # Ruflo / claude-flow runtime state
 ruvector.db
 .swarm/
