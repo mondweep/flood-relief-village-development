@@ -35,8 +35,13 @@ frontend* served alongside this API — not as the API's own host.
 > point real beneficiary or NGO data at it.
 >
 > The happy path is: provision Supabase (section 2) → apply all three
-> migrations, in order → deploy to Cloud Run with `PERSISTENCE=supabase`
-> (section 4).
+> migrations, in order → expose the `assam_floods` schema to the Data API →
+> deploy to Cloud Run with `PERSISTENCE=supabase` (section 4).
+>
+> **AFRIP's tables live in the `assam_floods` schema, not `public`**, so the
+> project can be shared with other applications without collisions. The
+> exposed-schemas step is not optional: PostgREST serves only schemas it has
+> been told about.
 
 ---
 
@@ -669,8 +674,11 @@ Before anything real touches this deployment:
       Frontends use the anon key and go through RLS.
 - [ ] **No `.env` is committed.** `git ls-files | grep -E '^\.env$'` returns
       nothing.
-- [ ] **Only `anon`-readable views are public** — `public_village_recovery` and
-      `public_fund_transparency`. No raw beneficiary rows.
+- [ ] **Only `anon`-readable views are public** — `assam_floods.public_village_recovery`
+      and `assam_floods.public_fund_transparency`. No raw beneficiary rows.
+- [ ] **Exposed schemas are minimal** — `assam_floods` is exposed because the
+      API needs it; nothing else of AFRIP's is. On a shared project, confirm you
+      only *added* to the exposed list and did not remove another app's entry.
 - [ ] **`--allow-unauthenticated` is understood.** It means Google IAM is not
       gating requests; the app's bearer check is the only gate. That is
       deliberate (probes and public transparency endpoints must be reachable),
@@ -800,10 +808,27 @@ supabase migration list          # remote state
 supabase db push                 # apply anything outstanding
 ```
 
-Or re-run the two SQL files in order via the dashboard SQL editor. If `00002`
-was skipped, tables exist but RLS is off and the public views are missing —
-`/public/villages` will fail while authenticated endpoints appear to work, which
-is a dangerous combination to leave running.
+Or re-run the SQL files in order via the dashboard SQL editor; they are
+idempotent, so re-running an already-applied one is a no-op. If `00002` was
+skipped, tables exist but RLS is off, the schema grants are missing and the
+public views do not exist — `/public/villages` will fail while authenticated
+endpoints appear to work, which is a dangerous combination to leave running.
+
+**"schema must be one of the following" / the schema is not exposed**
+
+Distinct from the above, and easy to confuse with it: the tables exist, but
+PostgREST will not serve them because `assam_floods` is not in the project's
+exposed schemas. Fix it in Project Settings → Data API → Exposed schemas (see
+step 1). Verify in the SQL editor, which bypasses PostgREST entirely and so
+answers regardless of exposure:
+
+```sql
+select table_name from information_schema.tables
+where table_schema = 'assam_floods' order by table_name;
+```
+
+Rows back means the migrations are fine and the problem is exposure. No rows
+means the migrations did not run against this project.
 
 ---
 
@@ -816,5 +841,5 @@ is a dangerous combination to leave running.
 | `scripts/deploy-cloudrun.sh` | One-command Cloud Run deploy |
 | `netlify.toml`, `netlify/functions/api.mts` | The Netlify alternative |
 | `.env.example` | Every environment variable, annotated |
-| `supabase/migrations/` | The deployable schema (ADR 0004) |
+| `supabase/migrations/` | The deployable schema (ADR 0004), all of it in `assam_floods` |
 | `docs/adr/` | Why the architecture is the way it is |
