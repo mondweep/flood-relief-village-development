@@ -45,7 +45,7 @@ describe("Leaderboard", () => {
     }));
 
     // Add assignments and hours to vol1
-    vol1.addAssignment({
+    vol1.assignTo({
       id: "assign-1",
       villageId: unwrap(villageId("village-1")),
       task: "work",
@@ -54,7 +54,7 @@ describe("Leaderboard", () => {
     });
 
     // Add assignments and hours to vol2
-    vol2.addAssignment({
+    vol2.assignTo({
       id: "assign-2",
       villageId: unwrap(villageId("village-1")),
       task: "work",
@@ -92,7 +92,7 @@ describe("Leaderboard", () => {
       availability: "available",
     }));
 
-    vol1.addAssignment({
+    vol1.assignTo({
       id: "assign-1",
       villageId: unwrap(villageId("village-1")),
       task: "work",
@@ -100,7 +100,7 @@ describe("Leaderboard", () => {
       hours: 5,
     });
 
-    vol1.addAssignment({
+    vol1.assignTo({
       id: "assign-2",
       villageId: unwrap(villageId("village-2")),
       task: "work",

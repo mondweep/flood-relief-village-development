@@ -120,6 +120,28 @@ describe("DetectAnomalies use case", () => {
     expect(unwrap(result).findings).toEqual([]);
   });
 
+  it("adds no anomalies and publishes no events on a repeat run over an unchanged project", async () => {
+    const project = spender(0); // released, never spent -> stalled
+    const repository = repositoryMock(project);
+    const eventPublisher = publisherMock();
+    const useCase = new DetectAnomalies({
+      repository,
+      eventPublisher,
+      clock: clockMock(new Date("2026-06-01T00:00:00.000Z")),
+    });
+
+    const first = await useCase.execute({ projectId: "proj-1", stalledAfterDays: 60 });
+    expect(unwrap(first).findings.map((f) => f.type)).toEqual(["stalled"]);
+    expect(project.anomalies).toHaveLength(1);
+    expect(eventPublisher.publish).toHaveBeenCalledTimes(1);
+
+    const second = await useCase.execute({ projectId: "proj-1", stalledAfterDays: 60 });
+    expect(unwrap(second).findings).toEqual([]);
+    expect(project.anomalies).toHaveLength(1);
+    expect(repository.save).toHaveBeenCalledTimes(1);
+    expect(eventPublisher.publish).toHaveBeenCalledTimes(1);
+  });
+
   it("returns err when the project does not exist", async () => {
     const repository = repositoryMock(null);
     const useCase = new DetectAnomalies({

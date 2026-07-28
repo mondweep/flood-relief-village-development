@@ -7,7 +7,7 @@ export interface Assignment {
   readonly villageId: string;
   readonly task: string;
   readonly assignedAt: string; // ISO
-  hours: number;
+  readonly hours: number;
 }
 
 export interface VolunteerCreateProps {
@@ -41,8 +41,8 @@ export class Volunteer {
   private constructor(props: VolunteerCreateProps, assignments: Assignment[]) {
     this.id = props.id;
     this.name = props.name;
-    this.skills = props.skills;
-    this.languages = props.languages;
+    this.skills = [...props.skills];
+    this.languages = [...props.languages];
     this.location = props.location;
     this.availability = props.availability ?? "available";
     this._assignments = assignments;
@@ -54,16 +54,22 @@ export class Volunteer {
     return ok(new Volunteer(props, []));
   }
 
+  /** Deep copies — mutating the returned array or its elements does not affect the aggregate. */
   get assignments(): readonly Assignment[] {
-    return this._assignments;
+    return this._assignments.map((a) => ({ ...a }));
   }
 
   getTotalHours(): number {
     return this._assignments.reduce((total, a) => total + a.hours, 0);
   }
 
-  addAssignment(assignment: Assignment): void {
-    this._assignments.push(assignment);
+  /** Assigns the volunteer, enforcing the availability rule inside the aggregate. */
+  assignTo(assignment: Assignment): Result<void> {
+    if (!this.canBeAssigned()) {
+      return err("volunteer is not available");
+    }
+    this._assignments.push({ ...assignment });
+    return ok(undefined);
   }
 
   setAvailability(newAvailability: Availability): Result<{ previous: Availability }> {
@@ -79,15 +85,18 @@ export class Volunteer {
     return this.availability === "available";
   }
 
+  /** Copy — mutating the returned assignment does not affect the aggregate. */
   findAssignmentById(assignmentId: string): Assignment | null {
-    return this._assignments.find((a) => a.id === assignmentId) ?? null;
+    const assignment = this._assignments.find((a) => a.id === assignmentId);
+    return assignment ? { ...assignment } : null;
   }
 
   logHours(assignmentId: string, hours: number): Result<void> {
     if (hours <= 0) return err("hours must be greater than 0");
-    const assignment = this.findAssignmentById(assignmentId);
-    if (!assignment) return err("assignment not found");
-    assignment.hours += hours;
+    const index = this._assignments.findIndex((a) => a.id === assignmentId);
+    if (index === -1) return err("assignment not found");
+    const assignment = this._assignments[index]!;
+    this._assignments[index] = { ...assignment, hours: assignment.hours + hours };
     return ok(undefined);
   }
 }

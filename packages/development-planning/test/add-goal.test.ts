@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CapturingEventPublisher, FixedClock } from "@afrip/shared-kernel";
+import { CapturingEventPublisher, FixedClock, SequentialIdGenerator } from "@afrip/shared-kernel";
 import { DevelopmentPlan } from "../src/domain/development-plan.js";
 import { AddGoal, type AddGoalInput } from "../src/application/add-goal.js";
 import type { PlanRepository } from "../src/application/ports.js";
@@ -26,7 +26,8 @@ describe("AddGoal", () => {
     const repository = buildRepository(plan);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
     const eventPublisher = new CapturingEventPublisher();
-    const useCase = new AddGoal({ repository, clock, eventPublisher });
+    const idGenerator = new SequentialIdGenerator("goal");
+    const useCase = new AddGoal({ repository, clock, idGenerator, eventPublisher });
 
     const result = await useCase.execute(validInput());
 
@@ -47,7 +48,8 @@ describe("AddGoal", () => {
     const repository = buildRepository(plan);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
     const eventPublisher = new CapturingEventPublisher();
-    const useCase = new AddGoal({ repository, clock, eventPublisher });
+    const idGenerator = new SequentialIdGenerator("goal");
+    const useCase = new AddGoal({ repository, clock, idGenerator, eventPublisher });
 
     const result = await useCase.execute(validInput());
     if (!result.ok) return;
@@ -68,7 +70,8 @@ describe("AddGoal", () => {
     const repository = buildRepository(null);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
     const eventPublisher = new CapturingEventPublisher();
-    const useCase = new AddGoal({ repository, clock, eventPublisher });
+    const idGenerator = new SequentialIdGenerator("goal");
+    const useCase = new AddGoal({ repository, clock, idGenerator, eventPublisher });
 
     const result = await useCase.execute(validInput());
 
@@ -82,7 +85,8 @@ describe("AddGoal", () => {
     const repository = buildRepository(plan);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
     const eventPublisher = new CapturingEventPublisher();
-    const useCase = new AddGoal({ repository, clock, eventPublisher });
+    const idGenerator = new SequentialIdGenerator("goal");
+    const useCase = new AddGoal({ repository, clock, idGenerator, eventPublisher });
 
     // @ts-ignore - deliberately test invalid area
     const result = await useCase.execute({
@@ -101,7 +105,8 @@ describe("AddGoal", () => {
     const repository = buildRepository(plan);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
     const eventPublisher = new CapturingEventPublisher();
-    const useCase = new AddGoal({ repository, clock, eventPublisher });
+    const idGenerator = new SequentialIdGenerator("goal");
+    const useCase = new AddGoal({ repository, clock, idGenerator, eventPublisher });
 
     const first = await useCase.execute({
       planId: "plan-1" as any,
@@ -118,5 +123,26 @@ describe("AddGoal", () => {
     expect(plan.goals).toHaveLength(2);
     expect(plan.goals[0]?.area).toBe("education");
     expect(plan.goals[1]?.area).toBe("health");
+  });
+});
+
+describe("AddGoal id injection (regression)", () => {
+  it("generates goal ids via the injected IdGenerator — deterministic, no Date.now()/Math.random()", async () => {
+    const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
+    const repository = buildRepository(plan);
+    const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
+    const eventPublisher = new CapturingEventPublisher();
+    const idGenerator = new SequentialIdGenerator("goal");
+    const useCase = new AddGoal({ repository, clock, idGenerator, eventPublisher });
+
+    const first = await useCase.execute(validInput());
+    const second = await useCase.execute({
+      planId: "plan-1" as any,
+      area: "health",
+      description: "Health goal",
+    });
+
+    expect(first.ok && first.value.goalId).toBe("goal-1");
+    expect(second.ok && second.value.goalId).toBe("goal-2");
   });
 });

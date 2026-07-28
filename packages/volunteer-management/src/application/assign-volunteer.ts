@@ -37,10 +37,6 @@ export class AssignVolunteer {
     const volunteer = await this.deps.repository.findById(input.volunteerId);
     if (!volunteer) return err("volunteer not found");
 
-    if (!volunteer.canBeAssigned()) {
-      return err("volunteer is not available");
-    }
-
     const assignmentId = this.deps.idGenerator.next();
     const assignment: Assignment = {
       id: assignmentId,
@@ -50,7 +46,8 @@ export class AssignVolunteer {
       hours: 0,
     };
 
-    volunteer.addAssignment(assignment);
+    const assignResult = volunteer.assignTo(assignment);
+    if (!assignResult.ok) return err(assignResult.error);
     await this.deps.repository.save(volunteer);
 
     const payload: Record<string, unknown> = {

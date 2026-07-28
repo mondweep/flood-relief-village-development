@@ -144,4 +144,53 @@ describe("AssignNgoToVillage use case", () => {
     expect(assignmentRepository.save).not.toHaveBeenCalled();
     expect(eventPublisher.published).toHaveLength(0);
   });
+
+  it("leaves the previous assignment untouched when the new AssignmentId is invalid", async () => {
+    const ngo = makeNgo("ngo-2", 5);
+    (ngoRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue(ngo);
+    const previous = VillageAssignment.create({
+      id: "asn-old" as AssignmentId,
+      villageId: "village-1" as VillageId,
+      ngoId: "ngo-old" as NgoId,
+      assignedAt: "2026-01-01T00:00:00.000Z",
+    });
+    (assignmentRepository.findActiveByVillage as ReturnType<typeof vi.fn>).mockResolvedValue(previous);
+    vi.spyOn(idGenerator, "next").mockReturnValue("   ");
+
+    const result = await useCase.execute({ villageId: "village-1", ngoId: "ngo-2" });
+
+    expect(isErr(result)).toBe(true);
+    expect(previous.status).toBe("active");
+    expect(assignmentRepository.save).not.toHaveBeenCalled();
+    expect(eventPublisher.published).toHaveLength(0);
+  });
+
+  it("allows re-assigning the same NGO to the village it already leads, even at capacity 1", async () => {
+    const ngo = makeNgo("ngo-1", 1);
+    (ngoRepository.findById as ReturnType<typeof vi.fn>).mockResolvedValue(ngo);
+    const incumbent = VillageAssignment.create({
+      id: "asn-old" as AssignmentId,
+      villageId: "village-1" as VillageId,
+      ngoId: "ngo-1" as NgoId,
+      assignedAt: "2026-01-01T00:00:00.000Z",
+    });
+    (assignmentRepository.findActiveByVillage as ReturnType<typeof vi.fn>).mockResolvedValue(incumbent);
+    (assignmentRepository.findActiveByNgo as ReturnType<typeof vi.fn>).mockResolvedValue([incumbent]);
+
+    const result = await useCase.execute({ villageId: "village-1", ngoId: "ngo-1" });
+
+    expect(isOk(result)).toBe(true);
+    expect(incumbent.status).toBe("retired");
+
+    expect(assignmentRepository.save).toHaveBeenCalledTimes(2);
+    const [firstSaveArg] = (assignmentRepository.save as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(firstSaveArg).toBe(incumbent);
+    expect(firstSaveArg.status).toBe("retired");
+    const [secondSaveArg] = (assignmentRepository.save as ReturnType<typeof vi.fn>).mock.calls[1]!;
+    expect(secondSaveArg.status).toBe("active");
+    expect(secondSaveArg.villageId).toBe("village-1");
+    expect(secondSaveArg.ngoId).toBe("ngo-1");
+
+    expect(eventPublisher.eventNames()).toEqual(["assignment.retired.v1", "ngo.assigned-to-village.v1"]);
+  });
 });

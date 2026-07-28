@@ -3,6 +3,7 @@ export type {
   DamageAssessmentInput,
   GeoCoordinates,
   Severity,
+  UpdateDemographicsInput,
   VillageCreateProps,
 } from "./domain/village.js";
 export { Village, isSeverity } from "./domain/village.js";

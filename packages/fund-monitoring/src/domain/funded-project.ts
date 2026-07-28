@@ -212,7 +212,23 @@ export class FundedProject {
     return ok(this._status);
   }
 
-  /** Pure anomaly rules; appends findings to the aggregate and returns them. */
+  /**
+   * True when an equivalent anomaly is already recorded: same type, and for
+   * duplicate_funding also the same details (i.e. the same village/category pair).
+   */
+  private hasRecordedAnomaly(finding: Anomaly): boolean {
+    return this._anomalies.some(
+      (existing) =>
+        existing.type === finding.type &&
+        (finding.type !== "duplicate_funding" || existing.details === finding.details),
+    );
+  }
+
+  /**
+   * Pure anomaly rules; appends only findings not already recorded to the
+   * aggregate and returns just those newly added findings (idempotent on
+   * repeat runs over unchanged state).
+   */
   detectAnomalies(input: AnomalyDetectionInput, now: Date): Anomaly[] {
     const detectedAt = now.toISOString();
     const findings: Anomaly[] = [];
@@ -260,7 +276,8 @@ export class FundedProject {
       });
     }
 
-    this._anomalies.push(...findings);
-    return findings;
+    const newFindings = findings.filter((finding) => !this.hasRecordedAnomaly(finding));
+    this._anomalies.push(...newFindings);
+    return newFindings;
   }
 }

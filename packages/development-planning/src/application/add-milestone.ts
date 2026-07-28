@@ -4,6 +4,7 @@ import {
   type Clock,
   type DomainEvent,
   type EventPublisher,
+  type IdGenerator,
   type PlanId,
   type Result,
 } from "@afrip/shared-kernel";
@@ -24,6 +25,7 @@ export interface AddMilestoneOutput {
 export interface AddMilestoneDeps {
   repository: PlanRepository;
   clock: Clock;
+  idGenerator: IdGenerator;
   eventPublisher: EventPublisher;
 }
 
@@ -37,8 +39,13 @@ export class AddMilestone {
       return err("plan not found");
     }
 
-    // Add milestone to the goal
-    const milestoneResult = plan.addMilestone(input.goalId, input.title, input.targetDate);
+    // Add milestone to the goal with an injected id (ids are generated at the edge, not in the domain)
+    const milestoneResult = plan.addMilestone(
+      input.goalId,
+      input.title,
+      input.targetDate,
+      this.deps.idGenerator.next() as MilestoneId,
+    );
     if (!milestoneResult.ok) return err(milestoneResult.error);
 
     const milestoneId = milestoneResult.value;

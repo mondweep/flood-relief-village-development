@@ -64,25 +64,25 @@ export class Issue {
   readonly villageId: VillageId;
   readonly category: IssueCategory;
   description: string;
-  photoRefs: string[];
   gps: GpsCoordinates;
-  status: IssueStatus;
   readonly reportedAt: string;
-  routedTo?: RoutedTo;
-  routedAt?: string;
-  progressStartedAt?: string;
-  resolvedAt?: string;
-  resolutionNote?: string;
-  verifiedAt?: string;
+  private readonly _photoRefs: string[];
+  private _status: IssueStatus;
+  private _routedTo?: RoutedTo;
+  private _routedAt?: string;
+  private _progressStartedAt?: string;
+  private _resolvedAt?: string;
+  private _resolutionNote?: string;
+  private _verifiedAt?: string;
 
   private constructor(props: IssueCreateProps) {
     this.id = props.id;
     this.villageId = props.villageId;
     this.category = props.category;
     this.description = props.description;
-    this.photoRefs = props.photoRefs;
+    this._photoRefs = [...props.photoRefs];
     this.gps = props.gps;
-    this.status = "open";
+    this._status = "open";
     this.reportedAt = props.reportedAt;
   }
 
@@ -92,44 +92,77 @@ export class Issue {
     return ok(new Issue(props));
   }
 
+  /** Copy of the photo references — mutating it does not affect the issue. */
+  get photoRefs(): string[] {
+    return [...this._photoRefs];
+  }
+
+  get status(): IssueStatus {
+    return this._status;
+  }
+
+  get routedTo(): RoutedTo | undefined {
+    return this._routedTo;
+  }
+
+  get routedAt(): string | undefined {
+    return this._routedAt;
+  }
+
+  get progressStartedAt(): string | undefined {
+    return this._progressStartedAt;
+  }
+
+  get resolvedAt(): string | undefined {
+    return this._resolvedAt;
+  }
+
+  get resolutionNote(): string | undefined {
+    return this._resolutionNote;
+  }
+
+  get verifiedAt(): string | undefined {
+    return this._verifiedAt;
+  }
+
   route(decision: RoutedTo, occurredAt: string): Result<void> {
-    if (this.status !== "open") {
-      return err(`cannot route an issue with status ${this.status}`);
+    if (this._status !== "open") {
+      return err(`cannot route an issue with status ${this._status}`);
     }
-    this.routedTo = decision;
-    this.status = "routed";
-    this.routedAt = occurredAt;
+    this._routedTo = decision;
+    this._status = "routed";
+    this._routedAt = occurredAt;
     return ok(undefined);
   }
 
   startProgress(occurredAt: string): Result<void> {
-    if (this.status !== "routed") {
-      return err(`cannot start progress on an issue with status ${this.status}`);
+    if (this._status !== "routed") {
+      return err(`cannot start progress on an issue with status ${this._status}`);
     }
-    this.status = "in_progress";
-    this.progressStartedAt = occurredAt;
+    this._status = "in_progress";
+    this._progressStartedAt = occurredAt;
     return ok(undefined);
   }
 
   resolve(resolutionNote: string, occurredAt: string): Result<void> {
-    if (this.status !== "in_progress") {
-      return err(`cannot resolve an issue with status ${this.status}`);
+    if (this._status !== "in_progress") {
+      return err(`cannot resolve an issue with status ${this._status}`);
     }
     if (resolutionNote.trim().length === 0) {
       return err("resolutionNote must not be empty");
     }
-    this.status = "resolved";
-    this.resolvedAt = occurredAt;
-    this.resolutionNote = resolutionNote;
+    this._status = "resolved";
+    this._resolvedAt = occurredAt;
+    this._resolutionNote = resolutionNote;
     return ok(undefined);
   }
 
   verify(occurredAt: string): Result<void> {
-    if (this.status !== "resolved") {
-      return err(`cannot verify an issue with status ${this.status}`);
+    if (this._status !== "resolved") {
+      return err(`cannot verify an issue with status ${this._status}`);
     }
-    this.status = "verified";
-    this.verifiedAt = occurredAt;
+    this._status = "verified";
+    this._verifiedAt = occurredAt;
     return ok(undefined);
   }
 }

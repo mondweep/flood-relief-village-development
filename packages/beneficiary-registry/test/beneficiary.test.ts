@@ -371,3 +371,54 @@ describe("Beneficiary follow-ups", () => {
     expect(b.overdueFollowUps(new Date("2026-02-01T00:00:00.000Z"))).toHaveLength(0);
   });
 });
+
+describe("Beneficiary encapsulation (regression)", () => {
+  it("followUps getter returns copies — completion cannot be forged from outside", () => {
+    const b = build();
+    b.scheduleFollowUp("fu-1", "2026-01-15T00:00:00.000Z");
+
+    (b.followUps[0] as { completedAt?: string }).completedAt = "2026-01-16T00:00:00.000Z";
+    (b.followUps as unknown as unknown[]).push({ id: "forged", dueAt: "2026-01-01T00:00:00.000Z" });
+
+    expect(b.followUps).toHaveLength(1);
+    expect(b.followUps[0]?.completedAt).toBeUndefined();
+    expect(b.overdueFollowUps(new Date("2026-02-01T00:00:00.000Z"))).toHaveLength(1);
+  });
+
+  it("completeFollowUp returns a copy detached from internal state", () => {
+    const b = build();
+    b.scheduleFollowUp("fu-1", "2026-01-15T00:00:00.000Z");
+
+    const completed = b.completeFollowUp("fu-1", "2026-01-21T00:00:00.000Z");
+    expect(completed.ok).toBe(true);
+    if (!completed.ok) return;
+
+    (completed.value as { completedAt?: string }).completedAt = undefined;
+
+    expect(b.followUps[0]?.completedAt).toBe("2026-01-21T00:00:00.000Z");
+  });
+
+  it("aidRecords and duplicateFlags getters return copies of the internal arrays", () => {
+    const b = build();
+    b.recordAid({
+      aidType: "food",
+      providerId: "ngo-1",
+      providerType: "ngo",
+      deliveredAt: "2026-01-01T00:00:00.000Z",
+    });
+    b.recordAid({
+      aidType: "food",
+      providerId: "ngo-2",
+      providerType: "ngo",
+      deliveredAt: "2026-01-02T00:00:00.000Z",
+    });
+
+    (b.aidRecords as unknown as unknown[]).push({ forged: true });
+    (b.duplicateFlags as unknown as unknown[]).length = 0;
+    (b.duplicateFlags[0]?.providerIds as unknown as unknown[])?.push("forged-provider");
+
+    expect(b.aidRecords).toHaveLength(2);
+    expect(b.duplicateFlags).toHaveLength(1);
+    expect(b.duplicateFlags[0]?.providerIds).toEqual(["ngo-1", "ngo-2"]);
+  });
+});

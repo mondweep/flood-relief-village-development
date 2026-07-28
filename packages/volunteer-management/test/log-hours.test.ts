@@ -32,7 +32,7 @@ describe("LogHours", () => {
       assignedAt: "2026-01-01T00:00:00.000Z",
       hours: 0,
     };
-    volunteer.addAssignment(assignment);
+    volunteer.assignTo(assignment);
 
     const repository = buildRepository(volunteer);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
@@ -72,7 +72,7 @@ describe("LogHours", () => {
       assignedAt: "2026-01-01T00:00:00.000Z",
       hours: 0,
     };
-    volunteer.addAssignment(assignment);
+    volunteer.assignTo(assignment);
 
     const repository = buildRepository(volunteer);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
@@ -131,7 +131,7 @@ describe("LogHours", () => {
       assignedAt: "2026-01-01T00:00:00.000Z",
       hours: 0,
     };
-    volunteer.addAssignment(assignment);
+    volunteer.assignTo(assignment);
 
     const repository = buildRepository(volunteer);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));

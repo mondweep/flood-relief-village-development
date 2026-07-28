@@ -309,6 +309,38 @@ describe("EvaluateAlerts", () => {
     expect(eventPublisher.published).toHaveLength(0);
   });
 
+  it("saves nothing and publishes nothing when an alert id fails mid-batch", async () => {
+    // relief_distribution + overlapping recent aid -> 2 alerts; the 2nd id is invalid.
+    const signal = makeSignal({
+      villageName: "Rampur",
+      activityType: "relief_distribution",
+      needs: ["food"],
+    });
+    const signalRepository = buildSignalRepository(signal);
+    const alertRepository = buildAlertRepository();
+    const eventPublisher = new CapturingEventPublisher();
+    const ids = ["alert-1", ""];
+    let call = 0;
+    const idGenerator = { next: vi.fn(() => ids[call++] ?? "") };
+    const useCase = new EvaluateAlerts({
+      signalRepository,
+      alertRepository,
+      clock: new FixedClock(new Date("2026-07-02T00:00:00.000Z")),
+      idGenerator,
+      eventPublisher,
+    });
+
+    const result = await useCase.execute({
+      signalId: "signal-1",
+      registryFacts: facts({ recentAidTypes: ["food"] }),
+    });
+
+    expect(result.ok).toBe(false);
+    expect(idGenerator.next.mock.calls.length).toBeGreaterThanOrEqual(2);
+    expect(alertRepository.save).not.toHaveBeenCalled();
+    expect(eventPublisher.published).toHaveLength(0);
+  });
+
   it("returns an error when the signal does not exist", async () => {
     const { useCase, alertRepository, eventPublisher } = buildUseCase(null);
 

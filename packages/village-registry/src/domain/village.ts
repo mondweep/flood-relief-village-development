@@ -79,27 +79,37 @@ function validateDamageAssessmentInput(input: DamageAssessmentInput): string | n
   return null;
 }
 
+export interface UpdateDemographicsInput {
+  name?: string;
+  district?: string;
+  state?: string;
+  geo?: GeoCoordinates;
+  population?: number;
+  households?: number;
+  affectedFamilies?: number;
+}
+
 export class Village {
   readonly id: VillageId;
-  name: string;
-  district: string;
-  state: string;
-  geo: GeoCoordinates;
-  population: number;
-  households: number;
-  affectedFamilies: number;
   severity: Severity;
+  private _name: string;
+  private _district: string;
+  private _state: string;
+  private _geo: GeoCoordinates;
+  private _population: number;
+  private _households: number;
+  private _affectedFamilies: number;
   private readonly _damageAssessments: DamageAssessment[];
 
   private constructor(props: VillageCreateProps, damageAssessments: DamageAssessment[]) {
     this.id = props.id;
-    this.name = props.name;
-    this.district = props.district;
-    this.state = props.state;
-    this.geo = props.geo;
-    this.population = props.population;
-    this.households = props.households;
-    this.affectedFamilies = props.affectedFamilies;
+    this._name = props.name;
+    this._district = props.district;
+    this._state = props.state;
+    this._geo = { ...props.geo };
+    this._population = props.population;
+    this._households = props.households;
+    this._affectedFamilies = props.affectedFamilies;
     this.severity = props.severity;
     this._damageAssessments = damageAssessments;
   }
@@ -110,13 +120,70 @@ export class Village {
     return ok(new Village(props, []));
   }
 
+  get name(): string {
+    return this._name;
+  }
+
+  get district(): string {
+    return this._district;
+  }
+
+  get state(): string {
+    return this._state;
+  }
+
+  get geo(): GeoCoordinates {
+    return { ...this._geo };
+  }
+
+  get population(): number {
+    return this._population;
+  }
+
+  get households(): number {
+    return this._households;
+  }
+
+  get affectedFamilies(): number {
+    return this._affectedFamilies;
+  }
+
+  /**
+   * Updates demographic fields, re-running the same validation as create()
+   * (including affectedFamilies <= households) against the merged state.
+   */
+  updateDemographics(input: UpdateDemographicsInput): Result<void> {
+    const next: VillageCreateProps = {
+      id: this.id,
+      name: input.name ?? this._name,
+      district: input.district ?? this._district,
+      state: input.state ?? this._state,
+      geo: input.geo ?? this._geo,
+      population: input.population ?? this._population,
+      households: input.households ?? this._households,
+      affectedFamilies: input.affectedFamilies ?? this._affectedFamilies,
+      severity: this.severity,
+    };
+    const error = validateVillageProps(next);
+    if (error) return err(error);
+    this._name = next.name;
+    this._district = next.district;
+    this._state = next.state;
+    this._geo = { ...next.geo };
+    this._population = next.population;
+    this._households = next.households;
+    this._affectedFamilies = next.affectedFamilies;
+    return ok(undefined);
+  }
+
+  /** Copies — mutating the returned array or its elements does not affect the aggregate. */
   get damageAssessments(): readonly DamageAssessment[] {
-    return this._damageAssessments;
+    return this._damageAssessments.map((assessment) => ({ ...assessment }));
   }
 
   get latestDamageAssessment(): DamageAssessment | null {
-    if (this._damageAssessments.length === 0) return null;
-    return this._damageAssessments[this._damageAssessments.length - 1] ?? null;
+    const latest = this._damageAssessments[this._damageAssessments.length - 1];
+    return latest ? { ...latest } : null;
   }
 
   recordDamageAssessment(input: DamageAssessmentInput): Result<DamageAssessment> {
@@ -124,7 +191,7 @@ export class Village {
     if (error) return err(error);
     const assessment: DamageAssessment = { ...input };
     this._damageAssessments.push(assessment);
-    return ok(assessment);
+    return ok({ ...assessment });
   }
 
   updateSeverity(severity: Severity): Result<{ previous: Severity }> {

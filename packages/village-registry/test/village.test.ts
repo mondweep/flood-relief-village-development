@@ -189,3 +189,62 @@ describe("Village.updateSeverity", () => {
     expect(village.severity).toBe("severe");
   });
 });
+
+describe("Village encapsulation (regression)", () => {
+  function validAssessment() {
+    return {
+      assessedAt: "2026-02-01T00:00:00.000Z",
+      housesDamaged: 10,
+      schoolsDamaged: 1,
+      healthCentresDamaged: 0,
+      waterSourcesDamaged: 2,
+      agricultureHectaresLost: 5.5,
+      livestockLost: 3,
+    };
+  }
+
+  it("demographic fields cannot be assigned directly, so create-time invariants hold for life", () => {
+    const village = unwrap(Village.create(baseProps()));
+
+    // households is 250; forging affectedFamilies above it must be impossible
+    expect(() => {
+      (village as any).affectedFamilies = 9999;
+    }).toThrow(TypeError);
+    expect(() => {
+      (village as any).households = 0;
+    }).toThrow(TypeError);
+
+    expect(village.affectedFamilies).toBe(80);
+    expect(village.households).toBe(250);
+  });
+
+  it("updateDemographics re-runs validation including affectedFamilies <= households", () => {
+    const village = unwrap(Village.create(baseProps()));
+
+    const rejected = village.updateDemographics({ affectedFamilies: 251 });
+    expect(rejected.ok).toBe(false);
+    expect(village.affectedFamilies).toBe(80);
+
+    const alsoRejected = village.updateDemographics({ households: 79 });
+    expect(alsoRejected.ok).toBe(false);
+    expect(village.households).toBe(250);
+
+    const accepted = village.updateDemographics({ households: 300, affectedFamilies: 300, name: "New Rampur" });
+    expect(accepted.ok).toBe(true);
+    expect(village.households).toBe(300);
+    expect(village.affectedFamilies).toBe(300);
+    expect(village.name).toBe("New Rampur");
+  });
+
+  it("damageAssessments getter returns a copy — mutating it does not affect the aggregate", () => {
+    const village = unwrap(Village.create(baseProps()));
+    village.recordDamageAssessment(validAssessment());
+
+    const leaked = village.damageAssessments as unknown as unknown[];
+    leaked.push({ forged: true });
+    leaked.splice(0, 1);
+
+    expect(village.damageAssessments).toHaveLength(1);
+    expect(village.latestDamageAssessment?.housesDamaged).toBe(10);
+  });
+});

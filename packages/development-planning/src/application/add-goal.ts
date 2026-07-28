@@ -4,6 +4,7 @@ import {
   type Clock,
   type DomainEvent,
   type EventPublisher,
+  type IdGenerator,
   type PlanId,
   type Result,
 } from "@afrip/shared-kernel";
@@ -23,6 +24,7 @@ export interface AddGoalOutput {
 export interface AddGoalDeps {
   repository: PlanRepository;
   clock: Clock;
+  idGenerator: IdGenerator;
   eventPublisher: EventPublisher;
 }
 
@@ -36,8 +38,8 @@ export class AddGoal {
       return err("plan not found");
     }
 
-    // Add goal to the plan
-    const goalResult = plan.addGoal(input.area, input.description);
+    // Add goal to the plan with an injected id (ids are generated at the edge, not in the domain)
+    const goalResult = plan.addGoal(input.area, input.description, this.deps.idGenerator.next() as GoalId);
     if (!goalResult.ok) return err(goalResult.error);
 
     const goalId = goalResult.value;

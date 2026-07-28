@@ -30,7 +30,15 @@ export interface Goal {
   readonly id: GoalId;
   readonly area: PlanArea;
   readonly description: string;
-  readonly milestones: Milestone[];
+  readonly milestones: readonly Milestone[];
+}
+
+/** Internal mutable storage for a goal — never exposed outside the aggregate. */
+interface GoalState {
+  readonly id: GoalId;
+  readonly area: PlanArea;
+  readonly description: string;
+  milestones: Milestone[];
 }
 
 export interface DevelopmentPlanState {
@@ -42,7 +50,7 @@ export interface DevelopmentPlanState {
 export class DevelopmentPlan {
   readonly id: PlanId;
   readonly villageId: VillageId;
-  private _goals: Goal[];
+  private readonly _goals: GoalState[];
 
   constructor(id: PlanId, villageId: VillageId) {
     this.id = id;
@@ -50,11 +58,17 @@ export class DevelopmentPlan {
     this._goals = [];
   }
 
+  /** Deep copies — mutating the returned goals or their milestones does not affect the aggregate. */
   get goals(): readonly Goal[] {
-    return this._goals;
+    return this._goals.map((goal) => ({
+      id: goal.id,
+      area: goal.area,
+      description: goal.description,
+      milestones: goal.milestones.map((milestone) => ({ ...milestone })),
+    }));
   }
 
-  addGoal(area: string, description: string): Result<GoalId> {
+  addGoal(area: string, description: string, goalId: GoalId): Result<GoalId> {
     if (!isPlanArea(area)) {
       return err(`invalid goal area: ${area}`);
     }
@@ -63,8 +77,7 @@ export class DevelopmentPlan {
       return err("goal description must not be empty");
     }
 
-    const goalId = `goal-${Date.now()}-${Math.random()}` as GoalId;
-    const goal: Goal = {
+    const goal: GoalState = {
       id: goalId,
       area,
       description,
@@ -75,7 +88,12 @@ export class DevelopmentPlan {
     return ok(goalId);
   }
 
-  addMilestone(goalId: GoalId, title: string, targetDate: string): Result<MilestoneId> {
+  addMilestone(
+    goalId: GoalId,
+    title: string,
+    targetDate: string,
+    milestoneId: MilestoneId,
+  ): Result<MilestoneId> {
     const goal = this._goals.find((g) => g.id === goalId);
     if (!goal) {
       return err(`goal not found: ${goalId}`);
@@ -89,14 +107,13 @@ export class DevelopmentPlan {
       return err("milestone targetDate must not be empty");
     }
 
-    const milestoneId = `milestone-${Date.now()}-${Math.random()}` as MilestoneId;
     const milestone: Milestone = {
       id: milestoneId,
       title,
       targetDate,
     };
 
-    (goal.milestones as Milestone[]).push(milestone);
+    goal.milestones.push(milestone);
     return ok(milestoneId);
   }
 
@@ -106,19 +123,17 @@ export class DevelopmentPlan {
       return err(`goal not found: ${goalId}`);
     }
 
-    const milestone = goal.milestones.find((m) => m.id === milestoneId);
-    if (!milestone) {
+    const index = goal.milestones.findIndex((m) => m.id === milestoneId);
+    if (index === -1) {
       return err(`milestone not found: ${milestoneId}`);
     }
 
+    const milestone = goal.milestones[index]!;
     if (milestone.completedAt !== undefined) {
       return err("milestone is already completed");
     }
 
-    // Mutate the milestone by creating a new one with completedAt
-    const index = goal.milestones.indexOf(milestone);
-    const updatedMilestone: Milestone = { ...milestone, completedAt };
-    (goal.milestones as Milestone[])[index] = updatedMilestone;
+    goal.milestones[index] = { ...milestone, completedAt };
 
     return ok(undefined);
   }

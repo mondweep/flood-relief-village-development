@@ -61,7 +61,7 @@ export interface AidRecord {
 export interface FollowUp {
   readonly id: string;
   readonly dueAt: string;
-  completedAt?: string;
+  readonly completedAt?: string;
 }
 
 export interface DuplicateFlag {
@@ -130,17 +130,19 @@ export class Beneficiary {
     return ok(new Beneficiary(props));
   }
 
-  /** Append-only history of aid deliveries. */
+  /** Append-only history of aid deliveries. Returns copies — safe to mutate. */
   get aidRecords(): readonly AidRecord[] {
-    return this._aidRecords;
+    return this._aidRecords.map((record) => ({ ...record }));
   }
 
+  /** Copies — mutating the returned array or its elements does not affect the aggregate. */
   get followUps(): readonly FollowUp[] {
-    return this._followUps;
+    return this._followUps.map((followUp) => ({ ...followUp }));
   }
 
+  /** Copies — mutating the returned array or its elements does not affect the aggregate. */
   get duplicateFlags(): readonly DuplicateFlag[] {
-    return this._duplicateFlags;
+    return this._duplicateFlags.map((flag) => ({ ...flag, providerIds: [...flag.providerIds] }));
   }
 
   /**
@@ -192,7 +194,12 @@ export class Beneficiary {
       this._duplicateFlags.push(duplicateFlag);
     }
 
-    return ok({ record, duplicateFlag });
+    return ok({
+      record: { ...record },
+      duplicateFlag: duplicateFlag
+        ? { ...duplicateFlag, providerIds: [...duplicateFlag.providerIds] }
+        : null,
+    });
   }
 
   scheduleFollowUp(id: string, dueAt: string): Result<FollowUp> {
@@ -201,26 +208,28 @@ export class Beneficiary {
     if (!dueMs.ok) return err(dueMs.error);
     const followUp: FollowUp = { id, dueAt };
     this._followUps.push(followUp);
-    return ok(followUp);
+    return ok({ ...followUp });
   }
 
   completeFollowUp(followUpId: string, completedAt: string): Result<FollowUp> {
-    const followUp = this._followUps.find((f) => f.id === followUpId);
-    if (!followUp) return err(`follow-up not found: ${followUpId}`);
+    const index = this._followUps.findIndex((f) => f.id === followUpId);
+    if (index === -1) return err(`follow-up not found: ${followUpId}`);
+    const followUp = this._followUps[index]!;
     if (followUp.completedAt !== undefined) {
       return err(`follow-up already completed: ${followUpId}`);
     }
     const completedMs = parseInstant(completedAt, "completedAt");
     if (!completedMs.ok) return err(completedMs.error);
-    followUp.completedAt = completedAt;
-    return ok(followUp);
+    const completed: FollowUp = { ...followUp, completedAt };
+    this._followUps[index] = completed;
+    return ok({ ...completed });
   }
 
-  /** Follow-ups strictly past due and not yet completed. */
+  /** Follow-ups strictly past due and not yet completed. Returns copies. */
   overdueFollowUps(now: Date): FollowUp[] {
     const nowMs = now.getTime();
-    return this._followUps.filter(
-      (f) => f.completedAt === undefined && Date.parse(f.dueAt) < nowMs,
-    );
+    return this._followUps
+      .filter((f) => f.completedAt === undefined && Date.parse(f.dueAt) < nowMs)
+      .map((f) => ({ ...f }));
   }
 }

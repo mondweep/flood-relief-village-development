@@ -45,12 +45,28 @@ export class AssignNgoToVillage {
     const ngo = await this.deps.ngoRepository.findById(ngoId);
     if (!ngo) return err("NGO not found");
 
+    const previous = await this.deps.assignmentRepository.findActiveByVillage(villageId);
+
     const activeForNgo = await this.deps.assignmentRepository.findActiveByNgo(ngoId);
-    if (activeForNgo.length >= ngo.capacity) return err("capacity exceeded");
+    const activeForNgoElsewhere = activeForNgo.filter((assignment) => assignment.villageId !== villageId);
+    if (activeForNgoElsewhere.length >= ngo.capacity) return err("capacity exceeded");
+
+    // Validate and construct the new assignment (including its id) before mutating
+    // or saving the previous one, so a failure here leaves the village's existing
+    // assignment untouched and never publishes assignment.retired.v1 without a
+    // successor being saved.
+    const assignmentIdResult = toAssignmentId(this.deps.idGenerator.next());
+    if (!assignmentIdResult.ok) return err(assignmentIdResult.error);
+
+    const assignment = VillageAssignment.create({
+      id: assignmentIdResult.value,
+      villageId,
+      ngoId,
+      assignedAt: this.deps.clock.now().toISOString(),
+    });
 
     const events: DomainEvent[] = [];
 
-    const previous = await this.deps.assignmentRepository.findActiveByVillage(villageId);
     if (previous) {
       const retireResult = previous.retire();
       if (!retireResult.ok) return err(retireResult.error);
@@ -61,16 +77,6 @@ export class AssignNgoToVillage {
         payload: { assignmentId: previous.id, villageId: previous.villageId, ngoId: previous.ngoId },
       });
     }
-
-    const assignmentIdResult = toAssignmentId(this.deps.idGenerator.next());
-    if (!assignmentIdResult.ok) return err(assignmentIdResult.error);
-
-    const assignment = VillageAssignment.create({
-      id: assignmentIdResult.value,
-      villageId,
-      ngoId,
-      assignedAt: this.deps.clock.now().toISOString(),
-    });
 
     await this.deps.assignmentRepository.save(assignment);
 

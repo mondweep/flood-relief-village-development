@@ -101,6 +101,25 @@ describe("RecoveryIndex", () => {
     expect(index.upsertScores(scores, Weights.equal(), AT_1).ok).toBe(false);
   });
 
+  it("ignores keys present with an undefined value, keeping scores and composite finite", () => {
+    const index = newIndex();
+    unwrap(index.upsertScores({ water: 50 }, Weights.equal(), AT_1));
+
+    const partial = { water: undefined } as unknown as Partial<Record<Dimension, number>>;
+    const result = index.upsertScores(partial, Weights.equal(), AT_2);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(Number.isFinite(result.value.composite)).toBe(true);
+    expect(result.value.composite).toBeGreaterThanOrEqual(0);
+    expect(result.value.composite).toBeLessThanOrEqual(100);
+    expect(index.scores.water).toBe(50);
+    expect(Number.isFinite(index.composite)).toBe(true);
+    for (const entry of index.history) {
+      expect(Number.isFinite(entry.composite)).toBe(true);
+    }
+  });
+
   it("exposes immutable snapshots of scores and history", () => {
     const index = newIndex();
     unwrap(index.upsertScores({ water: 40 }, Weights.equal(), AT_1));

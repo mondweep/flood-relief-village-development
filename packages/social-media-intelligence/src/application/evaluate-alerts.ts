@@ -50,9 +50,9 @@ export class EvaluateAlerts {
     const specs = evaluateAlertRules(signal, input.registryFacts);
     const raisedAt = this.deps.clock.now().toISOString();
 
-    const raised: RaisedAlert[] = [];
-    const events: DomainEvent[] = [];
-
+    // Phase 1: build and validate every alert before persisting anything, so an
+    // id/create failure mid-batch leaves no partially saved alerts without events.
+    const alerts: SmartAlert[] = [];
     for (const spec of specs) {
       const idResult = alertId(this.deps.idGenerator.next());
       if (!idResult.ok) return err(idResult.error);
@@ -66,10 +66,14 @@ export class EvaluateAlerts {
         raisedAt,
       });
       if (!alertResult.ok) return err(alertResult.error);
+      alerts.push(alertResult.value);
+    }
 
-      const alert = alertResult.value;
+    // Phase 2: all alerts are valid — save them and publish their events.
+    const raised: RaisedAlert[] = [];
+    const events: DomainEvent[] = [];
+    for (const alert of alerts) {
       await this.deps.alertRepository.save(alert);
-
       events.push({
         name: "alert.raised.v1",
         occurredAt: raisedAt,

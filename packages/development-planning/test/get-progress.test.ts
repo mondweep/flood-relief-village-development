@@ -28,7 +28,7 @@ describe("GetProgress", () => {
 
   it("returns 0% progress for goal with no milestones", async () => {
     const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
-    const goalIdResult = plan.addGoal("education", "Improve school");
+    const goalIdResult = plan.addGoal("education", "Improve school", "goal-1" as any);
     if (!goalIdResult.ok) return;
 
     const repository = buildRepository(plan);
@@ -46,15 +46,15 @@ describe("GetProgress", () => {
 
   it("calculates progress for a single goal with milestones", async () => {
     const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
-    const goalIdResult = plan.addGoal("education", "Improve school");
+    const goalIdResult = plan.addGoal("education", "Improve school", "goal-1" as any);
     if (!goalIdResult.ok) return;
     const goalId = goalIdResult.value;
 
     // Add 4 milestones, complete 1
-    plan.addMilestone(goalId, "Milestone 1", "2026-12-31");
-    plan.addMilestone(goalId, "Milestone 2", "2026-12-31");
-    const m3Result = plan.addMilestone(goalId, "Milestone 3", "2026-12-31");
-    plan.addMilestone(goalId, "Milestone 4", "2026-12-31");
+    plan.addMilestone(goalId, "Milestone 1", "2026-12-31", "milestone-1" as any);
+    plan.addMilestone(goalId, "Milestone 2", "2026-12-31", "milestone-2" as any);
+    const m3Result = plan.addMilestone(goalId, "Milestone 3", "2026-12-31", "milestone-3" as any);
+    plan.addMilestone(goalId, "Milestone 4", "2026-12-31", "milestone-4" as any);
 
     if (m3Result.ok) {
       plan.completeMilestone(goalId, m3Result.value, "2026-10-15T10:30:00.000Z");
@@ -81,23 +81,23 @@ describe("GetProgress", () => {
     const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
 
     // Goal 1: education - 2 milestones, 1 completed (50%)
-    const g1Result = plan.addGoal("education", "Education goal");
+    const g1Result = plan.addGoal("education", "Education goal", "goal-1" as any);
     if (!g1Result.ok) return;
     const g1Id = g1Result.value;
 
-    const m1Result = plan.addMilestone(g1Id, "Milestone 1", "2026-12-31");
-    const m2Result = plan.addMilestone(g1Id, "Milestone 2", "2026-12-31");
+    const m1Result = plan.addMilestone(g1Id, "Milestone 1", "2026-12-31", "milestone-1" as any);
+    const m2Result = plan.addMilestone(g1Id, "Milestone 2", "2026-12-31", "milestone-2" as any);
     if (m1Result.ok) {
       plan.completeMilestone(g1Id, m1Result.value, "2026-10-15T10:30:00.000Z");
     }
 
     // Goal 2: health - 2 milestones, 2 completed (100%)
-    const g2Result = plan.addGoal("health", "Health goal");
+    const g2Result = plan.addGoal("health", "Health goal", "goal-2" as any);
     if (!g2Result.ok) return;
     const g2Id = g2Result.value;
 
-    const m3Result = plan.addMilestone(g2Id, "Milestone 3", "2026-12-31");
-    const m4Result = plan.addMilestone(g2Id, "Milestone 4", "2026-12-31");
+    const m3Result = plan.addMilestone(g2Id, "Milestone 3", "2026-12-31", "milestone-3" as any);
+    const m4Result = plan.addMilestone(g2Id, "Milestone 4", "2026-12-31", "milestone-4" as any);
     if (m3Result.ok) {
       plan.completeMilestone(g2Id, m3Result.value, "2026-10-15T10:30:00.000Z");
     }
@@ -136,11 +136,11 @@ describe("GetProgress", () => {
   it("returns per-goal info with goalId and area", async () => {
     const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
 
-    const g1Result = plan.addGoal("education", "Education goal");
+    const g1Result = plan.addGoal("education", "Education goal", "goal-1" as any);
     if (!g1Result.ok) return;
     const g1Id = g1Result.value;
 
-    plan.addMilestone(g1Id, "Milestone 1", "2026-12-31");
+    plan.addMilestone(g1Id, "Milestone 1", "2026-12-31", "milestone-1" as any);
 
     const repository = buildRepository(plan);
     const useCase = new GetProgress({ repository });

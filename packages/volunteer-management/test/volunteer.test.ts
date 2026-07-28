@@ -70,7 +70,7 @@ describe("Volunteer aggregate", () => {
     });
 
     const volunteer = unwrap(result);
-    volunteer.addAssignment({
+    volunteer.assignTo({
       id: "assign-1",
       villageId: unwrap(villageId("village-1")),
       task: "work",
@@ -93,14 +93,14 @@ describe("Volunteer aggregate", () => {
     });
 
     const volunteer = unwrap(result);
-    volunteer.addAssignment({
+    volunteer.assignTo({
       id: "assign-1",
       villageId: unwrap(villageId("village-1")),
       task: "work",
       assignedAt: "2026-01-01T00:00:00.000Z",
       hours: 5,
     });
-    volunteer.addAssignment({
+    volunteer.assignTo({
       id: "assign-2",
       villageId: unwrap(villageId("village-2")),
       task: "work",
@@ -185,7 +185,7 @@ describe("Volunteer aggregate", () => {
     });
 
     const volunteer = unwrap(result);
-    volunteer.addAssignment({
+    volunteer.assignTo({
       id: "assign-1",
       villageId: unwrap(villageId("village-1")),
       task: "work",
@@ -211,7 +211,7 @@ describe("Volunteer aggregate", () => {
     });
 
     const volunteer = unwrap(result);
-    volunteer.addAssignment({
+    volunteer.assignTo({
       id: "assign-1",
       villageId: unwrap(villageId("village-1")),
       task: "work",
@@ -251,7 +251,7 @@ describe("Volunteer aggregate", () => {
     });
 
     const volunteer = unwrap(result);
-    volunteer.addAssignment({
+    volunteer.assignTo({
       id: "assign-1",
       villageId: unwrap(villageId("village-1")),
       task: "work",
@@ -277,5 +277,92 @@ describe("Volunteer aggregate", () => {
     const volunteer = unwrap(result);
     const found = volunteer.findAssignmentById("unknown");
     expect(found).toBeNull();
+  });
+});
+
+describe("Volunteer encapsulation (regression)", () => {
+  function buildVolunteer(availability: "available" | "unavailable" = "available") {
+    return unwrap(
+      Volunteer.create({
+        id: unwrap(volunteerId("vol-1")),
+        name: "Alice",
+        skills: ["carpentry"],
+        languages: ["English"],
+        location: "Patna",
+        availability,
+      }),
+    );
+  }
+
+  it("mutating an assignment returned by the getter cannot corrupt totals", () => {
+    const volunteer = buildVolunteer();
+    volunteer.assignTo({
+      id: "assign-1",
+      villageId: unwrap(villageId("village-1")),
+      task: "work",
+      assignedAt: "2026-01-01T00:00:00.000Z",
+      hours: 5,
+    });
+
+    (volunteer.assignments[0] as { hours: number }).hours = -500;
+
+    expect(volunteer.assignments[0]!.hours).toBe(5);
+    expect(volunteer.getTotalHours()).toBe(5);
+  });
+
+  it("assignTo enforces the availability rule inside the aggregate", () => {
+    const volunteer = buildVolunteer("unavailable");
+
+    const result = volunteer.assignTo({
+      id: "assign-1",
+      villageId: unwrap(villageId("village-1")),
+      task: "work",
+      assignedAt: "2026-01-01T00:00:00.000Z",
+      hours: 0,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(isErr(result) ? result.error : undefined).toBe("volunteer is not available");
+    expect(volunteer.assignments).toHaveLength(0);
+  });
+
+  it("copies the assignment on assignTo — hours changes only flow through logHours", () => {
+    const volunteer = buildVolunteer();
+    const assignment = {
+      id: "assign-1",
+      villageId: unwrap(villageId("village-1")),
+      task: "work",
+      assignedAt: "2026-01-01T00:00:00.000Z",
+      hours: 0,
+    };
+    volunteer.assignTo(assignment);
+
+    (assignment as { hours: number }).hours = 99;
+    expect(volunteer.getTotalHours()).toBe(0);
+
+    const logResult = volunteer.logHours("assign-1", 4);
+    expect(logResult.ok).toBe(true);
+    expect(volunteer.getTotalHours()).toBe(4);
+  });
+
+  it("copies skills and languages on construction — caller arrays are not aliased", () => {
+    const skills = ["carpentry"];
+    const languages = ["English"];
+    const volunteer = unwrap(
+      Volunteer.create({
+        id: unwrap(volunteerId("vol-1")),
+        name: "Alice",
+        skills,
+        languages,
+        location: "Patna",
+        availability: "available",
+      }),
+    );
+
+    skills.push("forged");
+    languages.push("forged");
+
+    expect(volunteer.skills).toEqual(["carpentry"]);
+    expect(volunteer.languages).toEqual(["English"]);
   });
 });

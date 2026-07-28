@@ -15,11 +15,11 @@ function buildRepository(plan: DevelopmentPlan | null = null): PlanRepository {
 describe("CompleteMilestone", () => {
   it("completes a milestone and saves the plan", async () => {
     const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
-    const goalIdResult = plan.addGoal("education", "Improve school");
+    const goalIdResult = plan.addGoal("education", "Improve school", "goal-1" as any);
     if (!goalIdResult.ok) return;
     const goalId = goalIdResult.value;
 
-    const milestoneResult = plan.addMilestone(goalId, "Complete repairs", "2026-12-31");
+    const milestoneResult = plan.addMilestone(goalId, "Complete repairs", "2026-12-31", "milestone-1" as any);
     if (!milestoneResult.ok) return;
     const milestoneId = milestoneResult.value;
 
@@ -42,11 +42,11 @@ describe("CompleteMilestone", () => {
 
   it("publishes plan.milestone-completed.v1 with correct payload", async () => {
     const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
-    const goalIdResult = plan.addGoal("education", "Improve school");
+    const goalIdResult = plan.addGoal("education", "Improve school", "goal-1" as any);
     if (!goalIdResult.ok) return;
     const goalId = goalIdResult.value;
 
-    const milestoneResult = plan.addMilestone(goalId, "Complete repairs", "2026-12-31");
+    const milestoneResult = plan.addMilestone(goalId, "Complete repairs", "2026-12-31", "milestone-1" as any);
     if (!milestoneResult.ok) return;
     const milestoneId = milestoneResult.value;
 
@@ -92,11 +92,11 @@ describe("CompleteMilestone", () => {
 
   it("rejects if milestone is already completed", async () => {
     const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
-    const goalIdResult = plan.addGoal("education", "Improve school");
+    const goalIdResult = plan.addGoal("education", "Improve school", "goal-1" as any);
     if (!goalIdResult.ok) return;
     const goalId = goalIdResult.value;
 
-    const milestoneResult = plan.addMilestone(goalId, "Complete repairs", "2026-12-31");
+    const milestoneResult = plan.addMilestone(goalId, "Complete repairs", "2026-12-31", "milestone-1" as any);
     if (!milestoneResult.ok) return;
     const milestoneId = milestoneResult.value;
 
@@ -122,11 +122,11 @@ describe("CompleteMilestone", () => {
 
   it("uses clock to set completion time", async () => {
     const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
-    const goalIdResult = plan.addGoal("education", "Improve school");
+    const goalIdResult = plan.addGoal("education", "Improve school", "goal-1" as any);
     if (!goalIdResult.ok) return;
     const goalId = goalIdResult.value;
 
-    const milestoneResult = plan.addMilestone(goalId, "Complete repairs", "2026-12-31");
+    const milestoneResult = plan.addMilestone(goalId, "Complete repairs", "2026-12-31", "milestone-1" as any);
     if (!milestoneResult.ok) return;
     const milestoneId = milestoneResult.value;
 

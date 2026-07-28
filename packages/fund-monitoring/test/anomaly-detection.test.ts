@@ -225,6 +225,25 @@ describe("anomaly rule: duplicate_funding", () => {
   });
 });
 
+describe("idempotent re-detection", () => {
+  it("does not append duplicate anomalies or return already-recorded findings on a repeat run", () => {
+    // Stalled project plus a duplicate-funding pair -> 2 anomalies on the first run.
+    const project = projectWithSpend(0);
+    const input = detectionInput({
+      stalledAfterDays: 60,
+      otherActiveProjects: [{ villageId: "village-1", category: "school" }],
+    });
+
+    const first = project.detectAnomalies(input, new Date("2026-06-01T00:00:00.000Z"));
+    expect(first.map((f) => f.type).sort()).toEqual(["duplicate_funding", "stalled"]);
+    expect(project.anomalies).toHaveLength(2);
+
+    const second = project.detectAnomalies(input, new Date("2026-06-02T00:00:00.000Z"));
+    expect(second).toEqual([]);
+    expect(project.anomalies).toHaveLength(2);
+  });
+});
+
 describe("multiple findings", () => {
   it("appends one anomaly per triggered rule in a single detection run", () => {
     const project = unwrap(

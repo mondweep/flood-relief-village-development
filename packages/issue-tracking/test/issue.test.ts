@@ -209,3 +209,52 @@ describe("Issue status machine", () => {
     expect(issue.status).toBe("verified");
   });
 });
+
+describe("Issue encapsulation (regression)", () => {
+  it("cannot bypass the status machine by assigning to status", () => {
+    const issue = unwrap(Issue.create(baseProps()));
+
+    expect(() => {
+      (issue as any).status = "verified";
+    }).toThrow(TypeError);
+
+    expect(issue.status).toBe("open");
+    expect(issue.verifiedAt).toBeUndefined();
+  });
+
+  it("cannot forge lifecycle timestamps or routing by direct assignment", () => {
+    const issue = unwrap(Issue.create(baseProps()));
+    const fields = [
+      "routedTo",
+      "routedAt",
+      "progressStartedAt",
+      "resolvedAt",
+      "resolutionNote",
+      "verifiedAt",
+    ] as const;
+
+    for (const field of fields) {
+      expect(() => {
+        (issue as any)[field] = "forged";
+      }).toThrow(TypeError);
+      expect(issue[field]).toBeUndefined();
+    }
+  });
+
+  it("copies photoRefs on construction — mutating the caller's array has no effect", () => {
+    const photoRefs = ["photo-1.jpg"];
+    const issue = unwrap(Issue.create({ ...baseProps(), photoRefs }));
+
+    photoRefs.push("sneaky.jpg");
+
+    expect(issue.photoRefs).toEqual(["photo-1.jpg"]);
+  });
+
+  it("returns a copy from the photoRefs getter — mutating it has no effect", () => {
+    const issue = unwrap(Issue.create(baseProps()));
+
+    issue.photoRefs.push("sneaky.jpg");
+
+    expect(issue.photoRefs).toEqual(["photo-1.jpg"]);
+  });
+});

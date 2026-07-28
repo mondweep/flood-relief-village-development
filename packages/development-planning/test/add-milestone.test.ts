@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CapturingEventPublisher, FixedClock } from "@afrip/shared-kernel";
+import { CapturingEventPublisher, FixedClock, SequentialIdGenerator } from "@afrip/shared-kernel";
 import { DevelopmentPlan } from "../src/domain/development-plan.js";
 import { AddMilestone, type AddMilestoneInput } from "../src/application/add-milestone.js";
 import type { PlanRepository } from "../src/application/ports.js";
@@ -15,14 +15,15 @@ function buildRepository(plan: DevelopmentPlan | null = null): PlanRepository {
 describe("AddMilestone", () => {
   it("adds a milestone to an existing goal and saves the plan", async () => {
     const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
-    const goalIdResult = plan.addGoal("education", "Improve school");
+    const goalIdResult = plan.addGoal("education", "Improve school", "goal-1" as any);
     if (!goalIdResult.ok) return;
     const goalId = goalIdResult.value;
 
     const repository = buildRepository(plan);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
     const eventPublisher = new CapturingEventPublisher();
-    const useCase = new AddMilestone({ repository, clock, eventPublisher });
+    const idGenerator = new SequentialIdGenerator("milestone");
+    const useCase = new AddMilestone({ repository, clock, idGenerator, eventPublisher });
 
     const result = await useCase.execute({
       planId: "plan-1" as any,
@@ -45,14 +46,15 @@ describe("AddMilestone", () => {
 
   it("publishes plan.milestone-added.v1 with correct payload", async () => {
     const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
-    const goalIdResult = plan.addGoal("education", "Improve school");
+    const goalIdResult = plan.addGoal("education", "Improve school", "goal-1" as any);
     if (!goalIdResult.ok) return;
     const goalId = goalIdResult.value;
 
     const repository = buildRepository(plan);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
     const eventPublisher = new CapturingEventPublisher();
-    const useCase = new AddMilestone({ repository, clock, eventPublisher });
+    const idGenerator = new SequentialIdGenerator("milestone");
+    const useCase = new AddMilestone({ repository, clock, idGenerator, eventPublisher });
 
     const result = await useCase.execute({
       planId: "plan-1" as any,
@@ -80,7 +82,8 @@ describe("AddMilestone", () => {
     const repository = buildRepository(null);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
     const eventPublisher = new CapturingEventPublisher();
-    const useCase = new AddMilestone({ repository, clock, eventPublisher });
+    const idGenerator = new SequentialIdGenerator("milestone");
+    const useCase = new AddMilestone({ repository, clock, idGenerator, eventPublisher });
 
     const result = await useCase.execute({
       planId: "plan-1" as any,
@@ -99,7 +102,8 @@ describe("AddMilestone", () => {
     const repository = buildRepository(plan);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
     const eventPublisher = new CapturingEventPublisher();
-    const useCase = new AddMilestone({ repository, clock, eventPublisher });
+    const idGenerator = new SequentialIdGenerator("milestone");
+    const useCase = new AddMilestone({ repository, clock, idGenerator, eventPublisher });
 
     const result = await useCase.execute({
       planId: "plan-1" as any,
@@ -115,14 +119,15 @@ describe("AddMilestone", () => {
 
   it("adds multiple milestones to the same goal", async () => {
     const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
-    const goalIdResult = plan.addGoal("education", "Improve school");
+    const goalIdResult = plan.addGoal("education", "Improve school", "goal-1" as any);
     if (!goalIdResult.ok) return;
     const goalId = goalIdResult.value;
 
     const repository = buildRepository(plan);
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
     const eventPublisher = new CapturingEventPublisher();
-    const useCase = new AddMilestone({ repository, clock, eventPublisher });
+    const idGenerator = new SequentialIdGenerator("milestone");
+    const useCase = new AddMilestone({ repository, clock, idGenerator, eventPublisher });
 
     const first = await useCase.execute({
       planId: "plan-1" as any,
@@ -140,5 +145,35 @@ describe("AddMilestone", () => {
 
     expect(first.ok && second.ok).toBe(true);
     expect(plan.goals[0]?.milestones).toHaveLength(2);
+  });
+});
+
+describe("AddMilestone id injection (regression)", () => {
+  it("generates milestone ids via the injected IdGenerator — deterministic, no Date.now()/Math.random()", async () => {
+    const plan = new DevelopmentPlan("plan-1" as any, "village-1" as any);
+    const goalIdResult = plan.addGoal("education", "Improve school", "goal-1" as any);
+    if (!goalIdResult.ok) return;
+
+    const repository = buildRepository(plan);
+    const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));
+    const eventPublisher = new CapturingEventPublisher();
+    const idGenerator = new SequentialIdGenerator("milestone");
+    const useCase = new AddMilestone({ repository, clock, idGenerator, eventPublisher });
+
+    const first = await useCase.execute({
+      planId: "plan-1" as any,
+      goalId: goalIdResult.value,
+      title: "First milestone",
+      targetDate: "2026-06-30",
+    });
+    const second = await useCase.execute({
+      planId: "plan-1" as any,
+      goalId: goalIdResult.value,
+      title: "Second milestone",
+      targetDate: "2026-12-31",
+    });
+
+    expect(first.ok && first.value.milestoneId).toBe("milestone-1");
+    expect(second.ok && second.value.milestoneId).toBe("milestone-2");
   });
 });

@@ -75,13 +75,24 @@ export class RecoveryIndex {
     if (error) return err(error);
     if (calculatedAt.trim().length === 0) return err("calculatedAt must not be empty");
 
-    this._scores = { ...this._scores, ...partial };
+    // Strip keys present with an undefined value so they cannot clobber existing scores.
+    const updates: Partial<Record<Dimension, number>> = {};
+    for (const [key, value] of Object.entries(partial)) {
+      if (value !== undefined) updates[key as Dimension] = value;
+    }
 
+    const nextScores = { ...this._scores, ...updates };
     let weighted = 0;
     for (const dimension of DIMENSIONS) {
-      weighted += weights.get(dimension) * this._scores[dimension];
+      weighted += weights.get(dimension) * nextScores[dimension];
     }
-    this._composite = Math.round(weighted);
+    const composite = Math.round(weighted);
+    if (!Number.isFinite(composite)) {
+      return err("composite must be a finite number");
+    }
+
+    this._scores = nextScores;
+    this._composite = composite;
     this._calculatedAt = calculatedAt;
     this._history.push({ composite: this._composite, calculatedAt });
 

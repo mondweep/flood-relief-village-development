@@ -46,7 +46,7 @@ describe("InMemoryPlanRepository", () => {
     await repository.save(plan);
 
     // Modify the plan
-    const goalResult = plan.addGoal("education", "Test goal");
+    const goalResult = plan.addGoal("education", "Test goal", "goal-1" as any);
     expect(goalResult.ok).toBe(true);
 
     await repository.save(plan);
