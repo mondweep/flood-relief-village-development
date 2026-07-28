@@ -5,9 +5,30 @@ export interface HttpResponse {
   readonly status: number;
   readonly body: unknown;
   readonly headers?: Readonly<Record<string, string>>;
+  /**
+   * When true, `body` is already a serialised payload and is written verbatim
+   * instead of being JSON-encoded. Only the dashboard route sets this — every
+   * API route stays JSON, including 404s for unknown paths.
+   */
+  readonly raw?: boolean;
 }
 
 export const json = (status: number, body: unknown): HttpResponse => ({ status, body });
+
+/**
+ * Serves a pre-rendered HTML document. `cache-control` is short and revalidating:
+ * the markup is baked into the bundle, so a new revision must be picked up
+ * promptly, but a reload inside a session should not refetch it.
+ */
+export const html = (markup: string, status = 200): HttpResponse => ({
+  status,
+  body: markup,
+  raw: true,
+  headers: {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "public, max-age=0, must-revalidate",
+  },
+});
 
 export const badRequest = (message: string): HttpResponse => json(400, { error: message });
 export const unauthorized = (message: string): HttpResponse => json(401, { error: message });
@@ -53,11 +74,13 @@ export function fromResultWith<T>(
 }
 
 export function writeResponse(res: ServerResponse, response: HttpResponse): void {
-  const payload = JSON.stringify(response.body ?? {});
+  const payload = response.raw === true ? String(response.body ?? "") : JSON.stringify(response.body ?? {});
   res.writeHead(response.status, {
     "content-type": "application/json; charset=utf-8",
-    "content-length": String(Buffer.byteLength(payload)),
     ...response.headers,
+    // Always last: content-length is derived from the payload we are about to
+    // write, so a route's own headers must never be able to contradict it.
+    "content-length": String(Buffer.byteLength(payload)),
   });
   res.end(payload);
 }

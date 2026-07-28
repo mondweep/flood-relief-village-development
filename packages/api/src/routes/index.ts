@@ -1,5 +1,6 @@
 import { Router } from "../router.js";
 import { registerBeneficiaryRoutes } from "./beneficiaries.js";
+import { registerDashboardRoutes } from "./dashboard.js";
 import { registerHealthRoutes } from "./health.js";
 import { registerIssueRoutes } from "./issues.js";
 import { registerNgoRoutes } from "./ngos.js";
@@ -12,6 +13,7 @@ export type { RouteDeps } from "./deps.js";
 
 export function buildRouter(deps: RouteDeps): Router {
   const router = new Router();
+  registerDashboardRoutes(router, deps);
   registerHealthRoutes(router, deps);
   registerVillageRoutes(router, deps);
   registerNgoRoutes(router, deps);
