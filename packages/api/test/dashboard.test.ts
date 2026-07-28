@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DASHBOARD_HTML } from "../src/routes/dashboard.js";
 import { startTestServer, type TestServer } from "./helpers.js";
@@ -21,6 +22,33 @@ describe("dashboard document", () => {
     expect(DASHBOARD_HTML).toContain(MARKER);
     expect(DASHBOARD_HTML).toContain(TITLE_MARKER);
     expect(DASHBOARD_HTML).toContain("</html>");
+  });
+
+  /**
+   * Documents a coupling that lives in another file: `routes/dashboard.ts` can
+   * only import `.html` because the root `package.json` build script passes
+   * `--loader:.html=text` to esbuild.
+   *
+   * Measured, not assumed: removing that flag makes `npm run build` exit 1 with
+   * an esbuild "No loader is configured for .html files" error. So this is NOT
+   * guarding a silent failure — the build breaks loudly on its own. What this
+   * adds is a failure that names the cause, in the suite of the package that
+   * depends on it, rather than an esbuild error in a root script that says
+   * nothing about why the flag is there or who needs it.
+   *
+   * Asserting on the script text rather than on a built artifact is deliberate:
+   * it is deterministic, needs no prior `npm run build`, and cannot pass against
+   * a stale `dist/` left over from an earlier build that did have the flag.
+   */
+  it("keeps the esbuild loader that makes the HTML import resolve", () => {
+    const pkg = readFileSync(new URL("../../../package.json", import.meta.url), "utf8");
+    const build = (JSON.parse(pkg) as { scripts?: Record<string, string> }).scripts?.["build"] ?? "";
+
+    expect(
+      build,
+      "root package.json build script must keep --loader:.html=text — without it " +
+        "the dashboard's HTML import cannot resolve and npm run build fails",
+    ).toContain("--loader:.html=text");
   });
 });
 
