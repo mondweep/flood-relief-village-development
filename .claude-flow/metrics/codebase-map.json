@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-07-28T11:16:39.619Z",
+  "projectRoot": "/home/user/flood-relief-village-development",
+  "structure": {
+    "hasPackageJson": true,
+    "hasTsConfig": true,
+    "hasClaudeConfig": true,
+    "hasClaudeFlow": true
+  },
+  "scannedAt": 1785237399619
+}
