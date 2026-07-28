@@ -1,6 +1,6 @@
 import type { AddressInfo } from "node:net";
 import { API_VERSION, createServer, type ApiConfig } from "../src/server.js";
-import { createMemoryRuntime } from "../src/persistence.js";
+import { createMemoryRuntime, type PlatformRuntime } from "../src/persistence.js";
 
 export interface TestServer {
   readonly baseUrl: string;
@@ -21,10 +21,22 @@ export function testConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
   };
 }
 
-/** Boots the real HTTP server on an ephemeral port and returns a fetch-based client. */
+/** Boots the real HTTP server on an ephemeral port, in-memory backed. */
 export async function startTestServer(overrides: Partial<ApiConfig> = {}): Promise<TestServer> {
-  const config = testConfig(overrides);
-  const runtime = createMemoryRuntime();
+  return startTestServerWith({ config: testConfig(overrides), runtime: createMemoryRuntime() });
+}
+
+export interface TestServerDeps {
+  readonly config: ApiConfig;
+  readonly runtime: PlatformRuntime;
+}
+
+/**
+ * Same boot, but with the storage tier supplied — the seam the Supabase-mode
+ * tests use to drive a real HTTP server over a stubbed client.
+ */
+export async function startTestServerWith(deps: TestServerDeps): Promise<TestServer> {
+  const { config, runtime } = deps;
   const server = createServer({ config, runtime });
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));

@@ -15,9 +15,8 @@
 #     between invocations, and two concurrent invocations get two separate
 #     buses. PERSISTENCE=memory is therefore not merely "not durable" here, it
 #     is incoherent: each container has its own private, empty world.
-#   - And PERSISTENCE=supabase does not work YET either — the adapters are an
-#     unwired seam (packages/api/src/persistence.ts throws). So Netlify is a
-#     demo target today and becomes a real option only once that lands.
+#     PERSISTENCE=supabase (wired and preferred) avoids this entirely — state
+#     lives in Postgres, not in a per-container bus.
 #   - Cold starts pay for booting the whole composition root, not just the HTTP
 #     layer.
 
@@ -56,12 +55,12 @@
 # netlify.toml is committed, and SUPABASE_SERVICE_ROLE_KEY / API_TOKEN must
 # never be committed. See .env.example for the full list.
 #
-# Today (Supabase seam unwired — the only mode that boots):
-#   PERSISTENCE=memory
-#   API_TOKEN=<secret>                   (mark as "secret" in the Netlify UI)
-#
-# Once packages/api/src/persistence.ts wires the Supabase adapters:
+# Recommended (persistent):
 #   PERSISTENCE=supabase
 #   SUPABASE_URL=https://<your-project-ref>.supabase.co
 #   SUPABASE_SERVICE_ROLE_KEY=<secret>   (mark as "secret")
 #   API_TOKEN=<secret>
+#
+# Smoke test only (no durable state — see the incoherence warning above):
+#   PERSISTENCE=memory
+#   API_TOKEN=<secret>                   (mark as "secret" in the Netlify UI)

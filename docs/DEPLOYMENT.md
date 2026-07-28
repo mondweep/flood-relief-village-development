@@ -21,22 +21,22 @@ a warm container reuses its connections instead of re-establishing them per
 invocation. Netlify becomes the right call later, for a *static dashboard
 frontend* served alongside this API — not as the API's own host.
 
-> ### Read this before you deploy: the Supabase seam is not wired yet
+> ### Read this before you deploy: Supabase persistence is wired and preferred
 >
-> `createSupabaseRuntime()` in `packages/api/src/persistence.ts` currently
-> throws `supabase persistence not yet wired`. Setting `PERSISTENCE=supabase`
-> makes the process log `[api] persistence error` and **exit 1**, so the Cloud
-> Run revision never becomes ready.
+> `createSupabaseRuntime()` in `packages/api/src/persistence.ts` is fully
+> implemented. `PERSISTENCE=supabase` is the **default and preferred** mode in
+> `scripts/deploy-cloudrun.sh` — the server boots against Supabase Postgres,
+> `/health` reports `"persistence":"supabase"`, and `/ready` returns 503 with an
+> honest error if the database is unreachable (200 once it is).
 >
-> **`PERSISTENCE=memory` is the only mode that boots today**, and it is the
-> default in `scripts/deploy-cloudrun.sh`. What you get is a fully functional
-> API with in-memory state that is lost on every restart and not shared between
-> instances — a working demo, not a system of record.
+> **`PERSISTENCE=memory` still exists**, but only for smoke tests: it is a
+> fully functional API with in-memory state that is lost on every restart (and
+> every scale-to-zero on Cloud Run) and not shared between instances. Never
+> point real beneficiary or NGO data at it.
 >
-> Sections 2 (Supabase) and the Secret Manager wiring below are still worth
-> doing now: the schema, the secrets and the deploy pipeline are all ready and
-> waiting for the adapters. Just do not expect `PERSISTENCE=supabase` to start
-> until that TODO is closed. Steps that depend on it are marked **[blocked]**.
+> The happy path is: provision Supabase (section 2) → apply all three
+> migrations, in order → deploy to Cloud Run with `PERSISTENCE=supabase`
+> (section 4).
 
 ---
 
@@ -76,10 +76,7 @@ Expected: `{"status":"ok","persistence":"memory","version":"0.1.0","auth":"disab
 
 ---
 
-## 2. Step 1 — Provision Supabase **[blocked on the persistence seam]**
-
-Do this now — the schema and credentials are prerequisites — but note that the
-API cannot use them until `packages/api/src/persistence.ts` is finished.
+## 2. Step 1 — Provision Supabase
 
 ### Create the project
 
@@ -91,8 +88,10 @@ once. Creating a project on a paid plan incurs cost; confirm before proceeding.
 ### Apply the migrations, in order
 
 `supabase/migrations/` holds the deployable schema. Order matters:
-`00001_initial_schema.sql` creates every context's tables, then
-`00002_rls_policies.sql` turns on RLS and creates the public transparency views.
+`00001_initial_schema.sql` creates every context's tables, `00002_rls_policies.sql`
+turns on RLS and creates the public transparency views, and
+`00003_lifecycle_timestamps.sql` adds the lifecycle timestamp columns the API
+relies on. Apply all three, in order.
 
 **Path A — Supabase CLI (preferred; it records what has been applied):**
 
@@ -107,7 +106,7 @@ supabase db push
 Verify:
 
 ```bash
-supabase migration list          # both migrations shown as applied remotely
+supabase migration list          # all three migrations shown as applied remotely
 ```
 
 **Path B — dashboard SQL editor (no CLI required):**
@@ -115,7 +114,9 @@ supabase migration list          # both migrations shown as applied remotely
 1. Dashboard → **SQL Editor** → **New query**.
 2. Paste the entire contents of `supabase/migrations/00001_initial_schema.sql`, run it.
 3. Open a new query, paste `supabase/migrations/00002_rls_policies.sql`, run it.
-4. Do not reorder or merge them — `00002` alters tables that `00001` creates.
+4. Open a new query, paste `supabase/migrations/00003_lifecycle_timestamps.sql`, run it.
+5. Do not reorder or merge them — `00002` alters tables that `00001` creates, and
+   `00003` alters tables both of the earlier migrations touch.
 
 Verify either path in **Table Editor**: you should see the context-prefixed
 tables (`village_registry_villages`, `ngo_coordination_assignments`,
@@ -158,7 +159,7 @@ cp .env.example .env
 |---|---|---|
 | `PORT` | no | Defaults to 8080. **Never set it on Cloud Run** — the platform injects it. |
 | `NODE_ENV` | no | `production` in every deployed environment |
-| `PERSISTENCE` | no | `memory` (default, and the only mode that boots today) \| `supabase` |
+| `PERSISTENCE` | no | `supabase` (default, recommended) \| `memory` (smoke tests only) |
 | `SUPABASE_URL` | when `supabase` | Not a secret |
 | `SUPABASE_SERVICE_ROLE_KEY` | when `supabase` | **Secret** → Secret Manager |
 | `API_TOKEN` | yes in prod | **Secret** → Secret Manager. Unset ⇒ auth disabled. |
@@ -193,39 +194,41 @@ Secret Manager, grants the runtime service account access, builds, deploys and
 smoke-tests. Supply the secrets **once** — afterwards they live in Secret
 Manager and the script reuses them.
 
+`PERSISTENCE=supabase` is the default, so a plain invocation deploys the
+persistent, recommended configuration. Supply `SUPABASE_URL` and seed the
+service-role key the first time:
+
 ```bash
 cd /home/user/flood-relief-village-development
 
-API_TOKEN="$(openssl rand -hex 32)" ./scripts/deploy-cloudrun.sh
-```
-
-Every subsequent deploy is just:
-
-```bash
-./scripts/deploy-cloudrun.sh
-```
-
-Seed the Supabase secret at the same time if you want it in place ahead of the
-adapters landing — the script stores it and reuses it later:
-
-```bash
+SUPABASE_URL=https://<your-project-ref>.supabase.co \
 SUPABASE_SERVICE_ROLE_KEY='<your service_role key>' \
 API_TOKEN="$(openssl rand -hex 32)" \
   ./scripts/deploy-cloudrun.sh
 ```
 
+Every subsequent deploy just needs `SUPABASE_URL` (the script remembers the
+secrets already in Secret Manager):
+
+```bash
+SUPABASE_URL=https://<your-project-ref>.supabase.co ./scripts/deploy-cloudrun.sh
+```
+
 Defaults: `PROJECT_ID=e-vidhayak`, `REGION=europe-west2`, `SERVICE=afrip-api`,
-`PERSISTENCE=memory`. Override any of them, plus `MIN_INSTANCES`,
+`PERSISTENCE=supabase`. Override any of them, plus `MIN_INSTANCES`,
 `MAX_INSTANCES`, `MEMORY`, `CPU`, `CONCURRENCY`, `TIMEOUT`, `SERVICE_ACCOUNT`,
 through the environment.
 
-The script refuses to deploy `PERSISTENCE=supabase` while the seam is unwired —
-it would build for five minutes and then produce a revision that cannot start.
-Once `persistence.ts` is finished, deploy with:
+The script checks credentials strictly: `PERSISTENCE=supabase` without
+`SUPABASE_URL`, or without the `afrip-supabase-service-role-key` secret already
+in Secret Manager (or supplied via `SUPABASE_SERVICE_ROLE_KEY` on this
+invocation), fails fast with a specific message before any Cloud Build spend.
+
+For a smoke test only, with no durable state, opt into memory mode explicitly —
+the script prints a loud warning that all data is lost on every scale-to-zero:
 
 ```bash
-PERSISTENCE=supabase SUPABASE_URL=https://<your-project-ref>.supabase.co \
-  ./scripts/deploy-cloudrun.sh
+PERSISTENCE=memory API_TOKEN="$(openssl rand -hex 32)" ./scripts/deploy-cloudrun.sh
 ```
 
 ### Manual equivalent
@@ -271,12 +274,12 @@ gcloud run deploy afrip-api \
   --cpu 1 \
   --concurrency 80 \
   --timeout 300 \
-  --set-env-vars NODE_ENV=production,PERSISTENCE=memory \
-  --set-secrets API_TOKEN=afrip-api-token:latest
+  --set-env-vars NODE_ENV=production,PERSISTENCE=supabase,SUPABASE_URL=https://<your-project-ref>.supabase.co \
+  --set-secrets SUPABASE_SERVICE_ROLE_KEY=afrip-supabase-service-role-key:latest,API_TOKEN=afrip-api-token:latest
 
-# ... and once the Supabase adapters are wired, the last two flags become:
-#   --set-env-vars NODE_ENV=production,PERSISTENCE=supabase,SUPABASE_URL=https://<your-project-ref>.supabase.co \
-#   --set-secrets SUPABASE_SERVICE_ROLE_KEY=afrip-supabase-service-role-key:latest,API_TOKEN=afrip-api-token:latest
+# ... or, for a smoke test only, with no durable state:
+#   --set-env-vars NODE_ENV=production,PERSISTENCE=memory \
+#   --set-secrets API_TOKEN=afrip-api-token:latest
 
 # 5. Get the URL
 gcloud run services describe afrip-api --project e-vidhayak --region europe-west2 \
@@ -349,21 +352,49 @@ not illustrations:
 and serving. It answers even when the datastore is not.
 
 ```json
-{"status":"ok","persistence":"memory","version":"0.1.0","auth":"bearer"}
+{"status":"ok","persistence":"supabase","version":"0.1.0","auth":"bearer"}
 ```
 
 `"auth"` is the field to check first after a deploy: `"bearer"` means the token
 gate is on, `"disabled"` means `API_TOKEN` never reached the container and every
 non-public route is open.
 
-**`GET /ready`** — 200, no auth. Readiness includes dependencies, so once the
-Supabase adapters are wired a 200 will imply the database was reached, and a 503
-here alongside a 200 on `/health` will mean the process is fine and Supabase is
-not. In `memory` mode it is necessarily always ready:
+**`GET /ready`** — readiness includes dependencies. In `PERSISTENCE=supabase`
+mode this means the database was actually reached:
+
+```json
+{"status":"ready","persistence":"supabase"}
+```
+
+In `memory` mode there is no external dependency, so it is necessarily always
+ready:
 
 ```json
 {"status":"ready","persistence":"memory"}
 ```
+
+#### Reading a 503 from `/ready`
+
+| Response | Meaning |
+|---|---|
+| `/health` 200, `/ready` 200 | Process is up, database reachable. Healthy. |
+| `/health` 200, `/ready` 503 | Process is up, but Supabase could not be reached. The API is running; the database is not. |
+
+A 503 on `/ready` with a 200 on `/health` means the container started fine but
+the Supabase connection failed. Check, in order:
+
+1. **`SUPABASE_URL`** — correct project, `https://` scheme, no trailing slash,
+   and the project is not paused (free-tier projects pause after inactivity —
+   resume it in the dashboard).
+2. **`SUPABASE_SERVICE_ROLE_KEY`** — the secret mounted into the container.
+   Confirm with `gcloud run services describe afrip-api --project e-vidhayak
+   --region europe-west2 --format='yaml(spec.template.spec.containers[0].env)'`
+   and check `roles/secretmanager.secretAccessor` was granted (step 3/4 above).
+3. **Migrations ran** — all three files in `supabase/migrations/` applied, in
+   order. `supabase migration list` shows the remote state.
+
+The 503 body includes the specific error, so start there before working through
+the checklist.
 
 **`GET /public/villages`** — 200, no auth. An object with a `villages` array (not
 a bare array). Empty is correct on a fresh deployment, not a failure:
@@ -399,10 +430,9 @@ detail; the summary:
   whose effect is not written through to Supabase before the response returns is
   **silently lost**.
 - Consequently **`PERSISTENCE=memory` is not merely non-durable here, it is
-  incoherent** — concurrent invocations see different worlds. The fix would be
-  `PERSISTENCE=supabase`, **which does not work yet**. So Netlify today is a
-  demo target only; it becomes a genuine option when the persistence seam
-  closes.
+  incoherent** — concurrent invocations see different worlds. Use
+  `PERSISTENCE=supabase` on Netlify for anything beyond a quick demo; it is
+  wired and works the same way it does on Cloud Run.
 - **10-second synchronous execution limit** (26s on some plans) versus Cloud
   Run's 300s. Long operations must become background functions.
 - **Cold starts** pay to boot the entire composition root, not just the HTTP
@@ -420,13 +450,13 @@ npm i -g netlify-cli
 netlify login
 netlify init                     # link or create the site
 
-netlify env:set PERSISTENCE memory
+netlify env:set PERSISTENCE supabase
+netlify env:set SUPABASE_URL https://<your-project-ref>.supabase.co
+netlify env:set SUPABASE_SERVICE_ROLE_KEY '<your service_role key>' --secret
 netlify env:set API_TOKEN "$(openssl rand -hex 32)" --secret
 
-# Once the Supabase adapters are wired, replace the first line with:
-#   netlify env:set PERSISTENCE supabase
-#   netlify env:set SUPABASE_URL https://<your-project-ref>.supabase.co
-#   netlify env:set SUPABASE_SERVICE_ROLE_KEY '<your service_role key>' --secret
+# For a smoke test only, with no durable state, use PERSISTENCE=memory instead
+# of the three Supabase lines above — see the incoherence warning further up.
 
 netlify build                    # runs npm run build -> dist/server.js
 netlify deploy --build           # draft URL
@@ -550,9 +580,10 @@ Before anything real touches this deployment:
       `curl $URL/health` must report `"auth":"bearer"`, and an unauthenticated
       `/villages` must return 401. The server also logs a loud startup warning
       when the token is absent — check the logs for it.
-- [ ] **You know which persistence mode is live.** `memory` means the data is
-      ephemeral and per-instance. Do not onboard real beneficiary data onto a
-      `memory` deployment; there is nothing to lose it *from*.
+- [ ] **You know which persistence mode is live.** Check `curl $URL/health` for
+      `"persistence":"supabase"`. `memory` means the data is ephemeral and
+      per-instance — do not onboard real beneficiary data onto a `memory`
+      deployment; there is nothing to lose it *from*.
 - [ ] **Secrets are in Secret Manager**, referenced via `--set-secrets`. Run
       `gcloud run services describe afrip-api --project e-vidhayak --region europe-west2 --format=yaml`
       and confirm no key material appears under `env`. Anything in
@@ -612,7 +643,6 @@ The specific startup failures, and what they look like in the log:
 
 | Log line | Cause |
 |---|---|
-| `[api] persistence error: supabase persistence not yet wired` | `PERSISTENCE=supabase`. The seam is unimplemented — use `memory`. |
 | `[api] configuration error: PERSISTENCE=supabase requires SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to be set` | Supabase mode without both variables |
 | `[api] configuration error: PORT must be an integer between 0 and 65535` | A bad `PORT` override — remove it and let Cloud Run inject it |
 | `[api] configuration error: PERSISTENCE must be "memory" or "supabase"` | Typo in the value |
@@ -652,10 +682,7 @@ gcloud builds log <BUILD_ID> --project e-vidhayak
 
 **Supabase connection refused / timeouts**
 
-First: confirm this is not the unwired seam. `[api] persistence error: supabase
-persistence not yet wired` is not a connectivity problem.
-
-Otherwise, check `SUPABASE_URL` has the `https://` scheme and no trailing slash. Confirm the
+Check `SUPABASE_URL` has the `https://` scheme and no trailing slash. Confirm the
 project is not paused (free-tier projects pause after inactivity — resume it in
 the dashboard). Confirm the secret actually mounted:
 

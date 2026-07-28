@@ -20,13 +20,12 @@
  *      effect is not written through to a shared datastore before the response
  *      is returned is silently lost.
  *
- *      This is the sharpest edge right now, because
- *      `packages/api/src/persistence.ts` still throws for
- *      PERSISTENCE=supabase ("supabase persistence not yet wired"). So the only
- *      mode that BOOTS is `memory` — and `memory` on Lambda means every
- *      container has its own private, empty, disposable world. Deploying here
- *      today gives you a demo, not a service. Netlify only becomes viable once
- *      that seam is filled in.
+ *      This is the sharpest edge right now: `memory` on Lambda means every
+ *      container has its own private, empty, disposable world, because the
+ *      bus does not survive between invocations. `PERSISTENCE=supabase` is
+ *      wired and avoids this — state lives in Postgres, not in a
+ *      per-container bus — and is the mode to use for anything beyond a
+ *      quick demo.
  *
  *   3. EXECUTION TIME LIMITS. Synchronous Netlify Functions are killed at 10s
  *      (26s on some plans). Cloud Run's request timeout is 300s by default.
@@ -182,8 +181,8 @@ function bootServer(): Promise<void> {
     if (server === null || server === undefined) {
       throw new Error(
         "The API rejected its configuration and did not start. Check the function logs for " +
-          "'[api] configuration error' or '[api] persistence error'. Most likely: PERSISTENCE=supabase, " +
-          "which is not yet wired (see packages/api/src/persistence.ts).",
+          "'[api] configuration error' or '[api] persistence error'. Most likely: PERSISTENCE=supabase " +
+          "without both SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY set, or the database is unreachable.",
       );
     }
 

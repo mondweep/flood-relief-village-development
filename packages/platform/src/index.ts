@@ -1,1 +1,6 @@
-export { createPlatform, type Platform, type PlatformOverrides } from "./composition-root.js";
+export {
+  createPlatform,
+  type Platform,
+  type PlatformOverrides,
+  type PlatformRepositories,
+} from "./composition-root.js";

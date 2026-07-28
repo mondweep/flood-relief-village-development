@@ -7,9 +7,11 @@ From emergency relief to long-term village development — one continuous platfo
 
 | Document | What it covers |
 |---|---|
-| [docs/PRD.md](docs/PRD.md) | Domain-driven PRD: ubiquitous language, bounded contexts, context map, aggregates + invariants + domain events, phased requirements |
+| **[docs/DESIGN.md](docs/DESIGN.md)** | **System design**: context / container / component views, domain flows, eventing, persistence, security model, failure modes, known limitations |
+| **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** | **How to deploy**: Supabase provisioning, Google Cloud Run (recommended), Netlify alternative, verification, rollback, troubleshooting |
+| [docs/PRD.md](docs/PRD.md) | Product requirements, domain-driven: ubiquitous language, bounded contexts, aggregates and invariants, phased requirements |
 | [docs/adr/](docs/adr/) | ADRs 0001–0007: hexagonal architecture, TypeScript monorepo, London-school TDD, Supabase, domain events, agent-swarm build, phased delivery |
-| [supabase/](supabase/) | Deployable schema for every context, RLS policies, public transparency views |
+| [supabase/](supabase/) | Schema migrations, RLS policies, public transparency views |
 
 ## Layout
 
@@ -26,25 +28,60 @@ packages/
   volunteer-management/       Registration, assignment, hours, leaderboard            [supporting]
   development-planning/       Long-term goals and milestones per village              [supporting]
   platform/                   Composition root: wires contexts over the event bus
+  api/                        HTTP service — the deployable process
 ```
 
 Each context is hexagonal: `src/domain` (aggregates, value objects, policies), `src/application`
-(use cases + ports), `src/adapters` (in-memory fakes; Supabase repositories). Contexts share only
+(use cases + ports), `src/adapters` (in-memory fakes and Supabase repositories). Contexts share only
 identifiers and event contracts — integration happens through domain events, never direct calls.
+Only `packages/api` is a running process; everything else is a library.
 
-## Build and test
+## Run it locally
 
 ```bash
 npm install
-npm test          # vitest: 536 tests
+npm test          # 766 tests
 npm run typecheck # tsc --noEmit, strict
+npm run dev       # API on http://localhost:8080, in-memory persistence
 ```
 
-Everything runs against in-memory adapters, so no database or API keys are needed. The Supabase
-migrations are the deployable persistence artifact (see `supabase/README.md`).
+```bash
+curl localhost:8080/health          # {"status":"ok","persistence":"memory",...}
+curl localhost:8080/public/villages # public transparency projection
+```
+
+In-memory mode needs no database or keys — data lives in the process and is lost on restart.
+For persistence, set `PERSISTENCE=supabase` with `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`
+(see [`.env.example`](.env.example)).
+
+### API surface
+
+`GET /health` and `GET /ready` (health probes), `GET /public/villages` (public, no PII), plus
+authenticated routes for villages, NGO assignment and committees, beneficiaries and aid, issues,
+and recovery scores. Set `API_TOKEN` to require `Authorization: Bearer <token>` on everything
+except the public and probe routes — without it the API starts unauthenticated and says so loudly.
+Bearer tokens are a stopgap; Supabase Auth with RLS-scoped JWTs is the production path
+(see [docs/DESIGN.md](docs/DESIGN.md) §8).
+
+## Deploy
+
+**Google Cloud Run is the recommended target** — this is a long-lived containerized Node process
+with an in-process event bus, which suits a container runtime rather than a function runtime.
+Netlify is documented as the alternative and becomes the better choice once a static dashboard
+frontend exists.
+
+```bash
+gcloud auth login mondweep@dxsure.uk
+gcloud config set project e-vidhayak
+./scripts/deploy-cloudrun.sh
+```
+
+Full instructions — including Supabase provisioning, applying migrations, Secret Manager wiring,
+verification, rollback and troubleshooting — are in **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)**.
 
 ## How this was built
 
 Phase-wise, by a Ruflo agent swarm with models matched to task complexity (ADR 0006): one
 London-school TDD agent per bounded context in parallel, then an adversarial review wave whose ten
-confirmed findings were each fixed test-first.
+confirmed findings were each fixed test-first, then a second wave for the API, persistence adapters
+and deployment tooling.

@@ -43,8 +43,11 @@ const openRow: IssueRow = {
   routed_party_type: null,
   routed_party: null,
   reported_at: "2026-03-01T00:00:00.000Z",
+  routed_at: null,
+  progress_started_at: null,
   resolved_at: null,
   resolution_note: null,
+  verified_at: null,
 };
 
 describe("SupabaseIssueRepository — schema contract", () => {
@@ -60,13 +63,16 @@ describe("SupabaseIssueRepository — schema contract", () => {
       "lat",
       "lng",
       "photo_refs",
+      "progress_started_at",
       "reported_at",
       "resolution_note",
+      "resolved_at",
+      "routed_at",
       "routed_party",
       "routed_party_type",
       "status",
+      "verified_at",
       "village_id",
-      "resolved_at",
     ].sort());
     expect(upsert.payload).toEqual(openRow);
   });
@@ -80,6 +86,8 @@ describe("SupabaseIssueRepository — schema contract", () => {
       status: "resolved",
       routed_party_type: "lead_ngo",
       routed_party: "ngo-1",
+      routed_at: "2026-03-02T00:00:00.000Z",
+      progress_started_at: "2026-03-03T00:00:00.000Z",
       resolved_at: "2026-03-10T00:00:00.000Z",
       resolution_note: "New handpump installed",
     });
@@ -91,8 +99,11 @@ describe("SupabaseIssueRepository — schema contract", () => {
     const payload = fake.callTo(ISSUES_TABLE, "upsert").payload as FakeRow;
     expect(payload["routed_party_type"]).toBeNull();
     expect(payload["routed_party"]).toBeNull();
+    expect(payload["routed_at"]).toBeNull();
+    expect(payload["progress_started_at"]).toBeNull();
     expect(payload["resolved_at"]).toBeNull();
     expect(payload["resolution_note"]).toBeNull();
+    expect(payload["verified_at"]).toBeNull();
   });
 
   it("copies photo refs rather than aliasing the aggregate's array", () => {
@@ -134,6 +145,37 @@ describe("SupabaseIssueRepository — round trip", () => {
     expect(found?.routedTo).toEqual({ partyType: "lead_ngo", party: "ngo-1" });
     expect(found?.resolvedAt).toBe(original.resolvedAt);
     expect(found?.resolutionNote).toBe(original.resolutionNote);
+  });
+
+  it("preserves WHEN each transition happened, not just the status (00003)", async () => {
+    const original = resolved(makeIssue());
+    unwrap(original.verify("2026-03-12T00:00:00.000Z"));
+    const fake = createFakeSupabase({
+      tables: { [ISSUES_TABLE]: [toRow(original) as unknown as FakeRow] },
+    });
+
+    const found = await new SupabaseIssueRepository(fake.client).findById(original.id);
+
+    expect(found?.status).toBe("verified");
+    expect(found?.routedAt).toBe("2026-03-02T00:00:00.000Z");
+    expect(found?.progressStartedAt).toBe("2026-03-03T00:00:00.000Z");
+    expect(found?.resolvedAt).toBe("2026-03-10T00:00:00.000Z");
+    expect(found?.verifiedAt).toBe("2026-03-12T00:00:00.000Z");
+  });
+
+  it("leaves the instants of states never reached undefined", async () => {
+    const fake = createFakeSupabase({
+      tables: { [ISSUES_TABLE]: [toRow(makeIssue()) as unknown as FakeRow] },
+    });
+
+    const found = await new SupabaseIssueRepository(fake.client).findById(
+      unwrap(issueId("issue-1")),
+    );
+
+    expect(found?.routedAt).toBeUndefined();
+    expect(found?.progressStartedAt).toBeUndefined();
+    expect(found?.resolvedAt).toBeUndefined();
+    expect(found?.verifiedAt).toBeUndefined();
   });
 
   it("keeps a rehydrated issue usable: only the next legal transition is allowed", () => {

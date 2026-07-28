@@ -5,7 +5,14 @@ import { loadConfig, type ApiConfig } from "./config.js";
 import { createPersistence, type PlatformRuntime } from "./persistence.js";
 
 export { loadConfig, API_VERSION, type ApiConfig, type PersistenceMode } from "./config.js";
-export { createPersistence, createMemoryRuntime, type PlatformRuntime } from "./persistence.js";
+export {
+  createPersistence,
+  createMemoryRuntime,
+  createSupabaseRuntime,
+  createSupabaseRuntimeFromClient,
+  READY_PROBE_TABLE,
+  type PlatformRuntime,
+} from "./persistence.js";
 export { createHandler } from "./app.js";
 
 /** Cloud Run routes traffic to the container's external interface, so 127.0.0.1 is not enough. */

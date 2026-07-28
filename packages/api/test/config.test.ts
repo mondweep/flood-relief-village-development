@@ -76,14 +76,24 @@ describe("persistence seam", () => {
     expect(await runtime.checkReady()).toEqual({ ok: true, value: { mode: "memory" } });
   });
 
-  it("throws a clear marker until the supabase adapters are wired", () => {
+  it("wires the supabase platform for supabase mode", () => {
     const config = testConfig({
       persistence: "supabase",
       supabaseUrl: "https://x.supabase.co",
       supabaseServiceRoleKey: "service-role-key",
     });
 
-    expect(() => createSupabaseRuntime(config)).toThrow("supabase persistence not yet wired");
-    expect(() => createPersistence(config)).toThrow("supabase persistence not yet wired");
+    // Constructing the runtime opens no connection: the Supabase client is lazy,
+    // so this stays a pure wiring assertion with no network.
+    expect(createSupabaseRuntime(config).mode).toBe("supabase");
+    expect(createPersistence(config).mode).toBe("supabase");
+  });
+
+  it("refuses supabase mode without credentials rather than booting half-configured", () => {
+    const config = testConfig({ persistence: "supabase" });
+
+    expect(() => createSupabaseRuntime(config)).toThrow(
+      /SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY/,
+    );
   });
 });

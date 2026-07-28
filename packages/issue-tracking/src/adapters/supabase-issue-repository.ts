@@ -26,8 +26,11 @@ export interface IssueRow {
   routed_party_type: string | null;
   routed_party: string | null;
   reported_at: string;
+  routed_at: string | null;
+  progress_started_at: string | null;
   resolved_at: string | null;
   resolution_note: string | null;
+  verified_at: string | null;
 }
 
 function failed(table: string, operation: string, error: { message?: string } | null): void {
@@ -43,10 +46,11 @@ function corrupt(table: string, id: string, reason: string): Error {
 }
 
 /**
- * Note: the 00001 schema stores only the routing decision and the resolution,
- * not the `routedAt` / `progressStartedAt` / `verifiedAt` instants the
- * aggregate tracks in memory. Those are intentionally written nowhere rather
- * than invented on read.
+ * Every field the aggregate holds has a column, including the three lifecycle
+ * instants added by 00003_lifecycle_timestamps.sql (`routed_at`,
+ * `progress_started_at`, `verified_at`). Before 00003 those were written
+ * nowhere, so a round trip silently forgot WHEN an issue was routed, picked up
+ * or verified — it kept only the status.
  */
 export function toRow(issue: Issue): IssueRow {
   const routedTo = issue.routedTo;
@@ -62,9 +66,17 @@ export function toRow(issue: Issue): IssueRow {
     routed_party_type: routedTo ? routedTo.partyType : null,
     routed_party: routedTo ? routedTo.party : null,
     reported_at: issue.reportedAt,
+    routed_at: issue.routedAt ?? null,
+    progress_started_at: issue.progressStartedAt ?? null,
     resolved_at: issue.resolvedAt ?? null,
     resolution_note: issue.resolutionNote ?? null,
+    verified_at: issue.verifiedAt ?? null,
   };
+}
+
+/** Treats SQL NULL (and a column absent from an old row) as "not set". */
+function instant(value: string | null | undefined): string | undefined {
+  return value === null || value === undefined ? undefined : value;
 }
 
 /** Rebuilds an Issue from its row; any invariant failure throws. */
@@ -88,6 +100,11 @@ export function fromRow(row: IssueRow): Issue {
       ? { partyType: row.routed_party_type as PartyType, party: row.routed_party as string }
       : undefined;
 
+  const routedAt = instant(row.routed_at);
+  const progressStartedAt = instant(row.progress_started_at);
+  const resolvedAt = instant(row.resolved_at);
+  const verifiedAt = instant(row.verified_at);
+
   const props: IssueRestoreProps = {
     id: id.value,
     villageId: village.value,
@@ -98,12 +115,13 @@ export function fromRow(row: IssueRow): Issue {
     reportedAt: row.reported_at,
     status: row.status as IssueStatus,
     ...(routedTo === undefined ? {} : { routedTo }),
-    ...(row.resolved_at === null || row.resolved_at === undefined
-      ? {}
-      : { resolvedAt: row.resolved_at }),
+    ...(routedAt === undefined ? {} : { routedAt }),
+    ...(progressStartedAt === undefined ? {} : { progressStartedAt }),
+    ...(resolvedAt === undefined ? {} : { resolvedAt }),
     ...(row.resolution_note === null || row.resolution_note === undefined
       ? {}
       : { resolutionNote: row.resolution_note }),
+    ...(verifiedAt === undefined ? {} : { verifiedAt }),
   };
 
   const restored = Issue.restore(props);

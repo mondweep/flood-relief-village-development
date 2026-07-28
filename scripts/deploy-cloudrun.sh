@@ -30,12 +30,12 @@ PROJECT_ID="${PROJECT_ID:-e-vidhayak}"
 REGION="${REGION:-europe-west2}"
 SERVICE="${SERVICE:-afrip-api}"
 
-# Default is `memory`, deliberately. packages/api/src/persistence.ts still throws
-# "supabase persistence not yet wired" for PERSISTENCE=supabase, so a supabase
-# deploy exits 1 at startup and the revision never becomes ready. Flip this to
-# supabase the moment that seam is filled in; the Secret Manager wiring below is
-# already in place and waiting.
-PERSISTENCE="${PERSISTENCE:-memory}"
+# Default is `supabase`. A real deployment should persist its data; the
+# in-memory adapter loses everything on every scale-to-zero, so it is opt-in
+# for smoke tests only (PERSISTENCE=memory below). Supabase credentials are
+# checked strictly further down: missing SUPABASE_URL or the Secret Manager
+# secret is a hard failure before any Cloud Build spend.
+PERSISTENCE="${PERSISTENCE:-supabase}"
 SUPABASE_URL="${SUPABASE_URL:-}"
 
 # Sizing. See docs/DEPLOYMENT.md for why min-instances=0 is the default.
@@ -118,27 +118,25 @@ if [[ "$PERSISTENCE" == "supabase" && -z "$SUPABASE_URL" ]]; then
     export SUPABASE_URL=https://<your-project-ref>.supabase.co"
 fi
 
-# The bigger warning: the Supabase adapters are not written yet.
-if [[ "$PERSISTENCE" == "supabase" ]]; then
+# PERSISTENCE must be one of the two supported values — catch a typo here
+# rather than after a five-minute Cloud Build.
+if [[ "$PERSISTENCE" != "supabase" && "$PERSISTENCE" != "memory" ]]; then
+  die \
+"PERSISTENCE must be \"memory\" or \"supabase\" (got '${PERSISTENCE}').
+  export PERSISTENCE=supabase   # persistent, recommended
+  export PERSISTENCE=memory     # smoke tests only, see warning below"
+fi
+
+# memory mode is real, and loudly opt-in only: every scale-to-zero (the
+# default MIN_INSTANCES=0) throws away all state, and nothing is shared
+# between concurrent instances either. There is no scenario where this is
+# safe for anything but a smoke test.
+if [[ "$PERSISTENCE" == "memory" ]]; then
   warn \
-"PERSISTENCE=supabase is NOT YET SUPPORTED by packages/api.
-         createSupabaseRuntime() in packages/api/src/persistence.ts throws
-         'supabase persistence not yet wired'. The container will log
-         '[api] persistence error' and exit 1, and the revision will never
-         become ready — Cloud Run will keep serving the previous revision.
-         Deploy with PERSISTENCE=memory until that seam is implemented."
-  if [[ "${FORCE_SUPABASE:-0}" == "1" ]]; then
-    warn "FORCE_SUPABASE=1 set — proceeding despite the above."
-  elif [[ -t 0 ]]; then
-    read -r -p "         Continue anyway? [y/N] " reply
-    if [[ ! "$reply" =~ ^[Yy]$ ]]; then
-      die "Aborted. Re-run with PERSISTENCE=memory (the default)."
-    fi
-  else
-    die \
-"Refusing to deploy a revision that cannot start.
-  Use PERSISTENCE=memory (the default), or set FORCE_SUPABASE=1 to override."
-  fi
+"PERSISTENCE=memory selected. ALL DATA IS LOST on every scale-to-zero and is
+         NOT shared between concurrent instances. This mode exists for smoke
+         tests only — never point real NGO or beneficiary data at it.
+         For a real deployment: PERSISTENCE=supabase (the default)."
 fi
 
 # ---------------------------------------------------------------------------

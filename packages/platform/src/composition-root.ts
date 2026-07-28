@@ -11,6 +11,7 @@ import {
   RecordDamageAssessment,
   RegisterVillage,
   UpdateSeverity,
+  type VillageRepository,
 } from "@afrip/village-registry";
 import {
   AddCommitteeMember,
@@ -19,6 +20,8 @@ import {
   InMemoryNgoRepository,
   ListUnassignedVillages,
   RegisterNgo,
+  type AssignmentRepository,
+  type NgoRepository,
 } from "@afrip/ngo-coordination";
 import {
   DAMAGE_ASSESSED_EVENT,
@@ -29,6 +32,7 @@ import {
   StaticWeightsProvider,
   UpsertDimensionScores,
   makeDamageAssessedHandler,
+  type RecoveryIndexRepository,
 } from "@afrip/recovery-intelligence";
 import {
   InMemoryIssueRepository,
@@ -38,6 +42,7 @@ import {
   StartProgress,
   VerifyResolution,
   type AssignmentLookup,
+  type IssueRepository,
 } from "@afrip/issue-tracking";
 import {
   CompleteFollowUp,
@@ -46,13 +51,34 @@ import {
   RecordAid,
   RegisterBeneficiary,
   ScheduleFollowUp,
+  type BeneficiaryRepository,
 } from "@afrip/beneficiary-registry";
+
+/**
+ * The six outbound persistence ports the platform wires. Every entry is
+ * optional: an omitted port falls back to this context's in-memory adapter, so
+ * `createPlatform()` with no arguments stays a fully in-process platform.
+ *
+ * This is the seam that lets the API boot the same use cases against Supabase
+ * (ADR 0004) without the composition root importing a single Supabase symbol —
+ * it depends on the ports, never on a storage technology.
+ */
+export interface PlatformRepositories {
+  village?: VillageRepository;
+  ngo?: NgoRepository;
+  assignment?: AssignmentRepository;
+  recoveryIndex?: RecoveryIndexRepository;
+  issue?: IssueRepository;
+  beneficiary?: BeneficiaryRepository;
+}
 
 export interface PlatformOverrides {
   /** Clock injected into every use case; defaults to the system clock. */
   clock?: Clock;
   /** Factory producing one IdGenerator per id kind; defaults to SequentialIdGenerator. */
   idGenerator?: (prefix: string) => IdGenerator;
+  /** Repository implementations per bounded context; each defaults to in-memory. */
+  repositories?: PlatformRepositories;
 }
 
 export interface Platform {
@@ -96,17 +122,19 @@ const systemClock: Clock = { now: () => new Date() };
 
 /**
  * Composition root: wires the five bounded contexts together over the
- * in-process event bus (ADR 0005). All adapters are in-memory; cross-context
+ * in-process event bus (ADR 0005). Repository adapters default to in-memory but
+ * can be supplied per context through `overrides.repositories`; cross-context
  * integration happens only through domain events and explicit port adapters.
  */
 export function createPlatform(overrides: PlatformOverrides = {}): Platform {
   const clock = overrides.clock ?? systemClock;
   const makeIds = overrides.idGenerator ?? ((prefix: string) => new SequentialIdGenerator(prefix));
+  const repositories = overrides.repositories ?? {};
 
   const bus = new InMemoryEventBus();
 
   // Village Registry
-  const villageRepository = new InMemoryVillageRepository();
+  const villageRepository = repositories.village ?? new InMemoryVillageRepository();
   const villageRegistry = {
     registerVillage: new RegisterVillage({
       repository: villageRepository,
@@ -125,8 +153,8 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
   };
 
   // NGO Coordination
-  const ngoRepository = new InMemoryNgoRepository();
-  const assignmentRepository = new InMemoryAssignmentRepository();
+  const ngoRepository = repositories.ngo ?? new InMemoryNgoRepository();
+  const assignmentRepository = repositories.assignment ?? new InMemoryAssignmentRepository();
   const ngoCoordination = {
     registerNgo: new RegisterNgo({
       ngoRepository,
@@ -146,7 +174,7 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
   };
 
   // Recovery Intelligence
-  const recoveryIndexRepository = new InMemoryRecoveryIndexRepository();
+  const recoveryIndexRepository = repositories.recoveryIndex ?? new InMemoryRecoveryIndexRepository();
   const weightsProvider = new StaticWeightsProvider();
   const upsertDimensionScores = new UpsertDimensionScores({
     repository: recoveryIndexRepository,
@@ -175,7 +203,7 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
       return { ngoId: ngo.id, name: ngo.name };
     },
   };
-  const issueRepository = new InMemoryIssueRepository();
+  const issueRepository = repositories.issue ?? new InMemoryIssueRepository();
   const issueTracking = {
     reportIssue: new ReportIssue({
       repository: issueRepository,
@@ -190,7 +218,7 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
   };
 
   // Beneficiary Registry
-  const beneficiaryRepository = new InMemoryBeneficiaryRepository();
+  const beneficiaryRepository = repositories.beneficiary ?? new InMemoryBeneficiaryRepository();
   const beneficiaryRegistry = {
     registerBeneficiary: new RegisterBeneficiary({
       repository: beneficiaryRepository,
