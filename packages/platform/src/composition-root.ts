@@ -53,15 +53,59 @@ import {
   ScheduleFollowUp,
   type BeneficiaryRepository,
 } from "@afrip/beneficiary-registry";
+import {
+  CompleteProject,
+  DetectAnomalies,
+  InMemoryProjectRepository,
+  RecordExpenditure,
+  ReleaseFunds,
+  SanctionProject,
+  VerifyProject,
+  type ProjectRepository,
+} from "@afrip/fund-monitoring";
+import {
+  AssignVolunteer,
+  InMemoryVolunteerRepository,
+  Leaderboard,
+  LogHours,
+  RegisterVolunteer,
+  SetAvailability,
+  type VolunteerRepository,
+} from "@afrip/volunteer-management";
+import {
+  AddGoal,
+  AddMilestone,
+  CompleteMilestone,
+  CreatePlan,
+  GetProgress,
+  InMemoryPlanRepository,
+  type PlanRepository,
+} from "@afrip/development-planning";
+import {
+  EvaluateAlerts,
+  InMemoryAlertRepository,
+  InMemorySignalRepository,
+  IngestRawReport,
+  KeywordSignalExtractor,
+  type AlertRepository,
+  type SignalExtractor,
+  type SignalRepository,
+} from "@afrip/social-media-intelligence";
 
 /**
- * The six outbound persistence ports the platform wires. Every entry is
+ * The eleven outbound persistence ports the platform wires. Every entry is
  * optional: an omitted port falls back to this context's in-memory adapter, so
  * `createPlatform()` with no arguments stays a fully in-process platform.
  *
  * This is the seam that lets the API boot the same use cases against Supabase
  * (ADR 0004) without the composition root importing a single Supabase symbol —
  * it depends on the ports, never on a storage technology.
+ *
+ * NOTE: only six of these have a Supabase adapter today. The other five
+ * (`project`, `volunteer`, `plan`, `signal`, `alert`) exist as ports with
+ * in-memory adapters only, which is why `packages/api/src/persistence.ts`
+ * discloses the memory-backed contexts on `GET /health` instead of letting
+ * "PERSISTENCE=supabase" imply that every context is durable.
  */
 export interface PlatformRepositories {
   village?: VillageRepository;
@@ -70,6 +114,11 @@ export interface PlatformRepositories {
   recoveryIndex?: RecoveryIndexRepository;
   issue?: IssueRepository;
   beneficiary?: BeneficiaryRepository;
+  project?: ProjectRepository;
+  volunteer?: VolunteerRepository;
+  plan?: PlanRepository;
+  signal?: SignalRepository;
+  alert?: AlertRepository;
 }
 
 export interface PlatformOverrides {
@@ -79,6 +128,13 @@ export interface PlatformOverrides {
   idGenerator?: (prefix: string) => IdGenerator;
   /** Repository implementations per bounded context; each defaults to in-memory. */
   repositories?: PlatformRepositories;
+  /**
+   * The anti-corruption layer in front of AI extraction for Social Media
+   * Intelligence. Defaults to `KeywordSignalExtractor`, the deterministic
+   * keyword adapter, so the context works end to end with no LLM configured;
+   * inject an LLM-backed adapter (or a stub, in tests) to replace it.
+   */
+  signalExtractor?: SignalExtractor;
 }
 
 export interface Platform {
@@ -116,12 +172,55 @@ export interface Platform {
     completeFollowUp: CompleteFollowUp;
     listOverdueFollowUps: ListOverdueFollowUps;
   };
+  fundMonitoring: {
+    sanctionProject: SanctionProject;
+    releaseFunds: ReleaseFunds;
+    recordExpenditure: RecordExpenditure;
+    completeProject: CompleteProject;
+    verifyProject: VerifyProject;
+    detectAnomalies: DetectAnomalies;
+    /**
+     * Read port for list queries. Fund Monitoring ships no list use case, and
+     * the alternative — the API keeping its own event-sourced projection of
+     * public money — would be a second, silently divergent source of truth for
+     * the one figure that must never diverge. Exposed as the port, so a caller
+     * still cannot see which storage technology is behind it.
+     */
+    projectRepository: ProjectRepository;
+  };
+  volunteerManagement: {
+    registerVolunteer: RegisterVolunteer;
+    setAvailability: SetAvailability;
+    assignVolunteer: AssignVolunteer;
+    logHours: LogHours;
+    leaderboard: Leaderboard;
+    /** Read port for `GET /volunteers`; the context ships no list use case. */
+    volunteerRepository: VolunteerRepository;
+  };
+  developmentPlanning: {
+    createPlan: CreatePlan;
+    addGoal: AddGoal;
+    addMilestone: AddMilestone;
+    completeMilestone: CompleteMilestone;
+    getProgress: GetProgress;
+    /** Read port for the village -> plan lookup; the context ships no query use case for it. */
+    planRepository: PlanRepository;
+  };
+  socialMediaIntelligence: {
+    ingestRawReport: IngestRawReport;
+    evaluateAlerts: EvaluateAlerts;
+    /** The extractor actually in use — surfaced so the API can report which ACL is live. */
+    signalExtractor: SignalExtractor;
+    /** Read ports for `GET /signals` and `GET /alerts`; neither has a list use case. */
+    signalRepository: SignalRepository;
+    alertRepository: AlertRepository;
+  };
 }
 
 const systemClock: Clock = { now: () => new Date() };
 
 /**
- * Composition root: wires the five bounded contexts together over the
+ * Composition root: wires the nine bounded contexts together over the
  * in-process event bus (ADR 0005). Repository adapters default to in-memory but
  * can be supplied per context through `overrides.repositories`; cross-context
  * integration happens only through domain events and explicit port adapters.
@@ -237,5 +336,105 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
     listOverdueFollowUps: new ListOverdueFollowUps({ repository: beneficiaryRepository, clock }),
   };
 
-  return { bus, villageRegistry, ngoCoordination, recoveryIntelligence, issueTracking, beneficiaryRegistry };
+  // Fund Monitoring
+  const projectRepository = repositories.project ?? new InMemoryProjectRepository();
+  const fundMonitoring = {
+    sanctionProject: new SanctionProject({
+      repository: projectRepository,
+      clock,
+      idGenerator: makeIds("project"),
+      eventPublisher: bus,
+    }),
+    releaseFunds: new ReleaseFunds({ repository: projectRepository, clock, eventPublisher: bus }),
+    recordExpenditure: new RecordExpenditure({ repository: projectRepository, clock, eventPublisher: bus }),
+    completeProject: new CompleteProject({ repository: projectRepository, clock, eventPublisher: bus }),
+    verifyProject: new VerifyProject({ repository: projectRepository, clock, eventPublisher: bus }),
+    detectAnomalies: new DetectAnomalies({ repository: projectRepository, clock, eventPublisher: bus }),
+    projectRepository,
+  };
+
+  // Volunteer Management
+  const volunteerRepository = repositories.volunteer ?? new InMemoryVolunteerRepository();
+  const volunteerManagement = {
+    registerVolunteer: new RegisterVolunteer({
+      repository: volunteerRepository,
+      clock,
+      idGenerator: makeIds("volunteer"),
+      eventPublisher: bus,
+    }),
+    setAvailability: new SetAvailability({ repository: volunteerRepository, clock, eventPublisher: bus }),
+    assignVolunteer: new AssignVolunteer({
+      repository: volunteerRepository,
+      clock,
+      idGenerator: makeIds("volunteer-assignment"),
+      eventPublisher: bus,
+    }),
+    logHours: new LogHours({ repository: volunteerRepository, clock, eventPublisher: bus }),
+    leaderboard: new Leaderboard({ repository: volunteerRepository }),
+    volunteerRepository,
+  };
+
+  // Development Planning
+  const planRepository = repositories.plan ?? new InMemoryPlanRepository();
+  const developmentPlanning = {
+    createPlan: new CreatePlan({
+      repository: planRepository,
+      clock,
+      idGenerator: makeIds("plan"),
+      eventPublisher: bus,
+    }),
+    addGoal: new AddGoal({
+      repository: planRepository,
+      clock,
+      idGenerator: makeIds("goal"),
+      eventPublisher: bus,
+    }),
+    addMilestone: new AddMilestone({
+      repository: planRepository,
+      clock,
+      idGenerator: makeIds("milestone"),
+      eventPublisher: bus,
+    }),
+    completeMilestone: new CompleteMilestone({ repository: planRepository, clock, eventPublisher: bus }),
+    getProgress: new GetProgress({ repository: planRepository }),
+    planRepository,
+  };
+
+  // Social Media Intelligence — the SignalExtractor port defaults to the
+  // deterministic keyword adapter so the context needs no LLM to run.
+  const signalRepository = repositories.signal ?? new InMemorySignalRepository();
+  const alertRepository = repositories.alert ?? new InMemoryAlertRepository();
+  const signalExtractor = overrides.signalExtractor ?? new KeywordSignalExtractor();
+  const socialMediaIntelligence = {
+    ingestRawReport: new IngestRawReport({
+      signalRepository,
+      extractor: signalExtractor,
+      clock,
+      idGenerator: makeIds("signal"),
+      eventPublisher: bus,
+    }),
+    evaluateAlerts: new EvaluateAlerts({
+      signalRepository,
+      alertRepository,
+      clock,
+      idGenerator: makeIds("alert"),
+      eventPublisher: bus,
+    }),
+    signalExtractor,
+    signalRepository,
+    alertRepository,
+  };
+
+  return {
+    bus,
+    villageRegistry,
+    ngoCoordination,
+    recoveryIntelligence,
+    issueTracking,
+    beneficiaryRegistry,
+    fundMonitoring,
+    volunteerManagement,
+    developmentPlanning,
+    socialMediaIntelligence,
+  };
 }

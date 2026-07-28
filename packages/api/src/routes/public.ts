@@ -1,7 +1,10 @@
 import type { Severity } from "@afrip/village-registry";
+import { summariseFunds, toPublicFundProject, type FundTotals } from "../fund-view.js";
 import { json, type HttpResponse } from "../http-result.js";
 import type { Router } from "../router.js";
 import type { RouteDeps } from "./deps.js";
+
+export type { PublicFundProject } from "../fund-view.js";
 
 /**
  * Public transparency projection — unauthenticated by design.
@@ -18,36 +21,19 @@ import type { RouteDeps } from "./deps.js";
 /** The four severities, in the order the dashboard reads them. */
 const SEVERITIES: readonly Severity[] = ["critical", "severe", "moderate", "minor"];
 
-/**
- * One row of the fund-transparency feed. Mirrors the intent of the
- * `assam_floods.public_fund_transparency` view in
- * `supabase/migrations/00002_rls_policies.sql`: project identity, where the
- * money came from, and the sanctioned/released/spent ladder — no vendor,
- * no approver, no contact.
- */
-export interface PublicFundProject {
-  readonly id: string;
-  readonly villageId: string;
-  readonly name: string;
-  readonly category: string;
-  readonly fundSource: string;
-  readonly currency: string;
-  readonly sanctionedMinor: number;
-  readonly releasedMinor: number;
-  readonly spentMinor: number;
-  readonly status: string;
-}
-
 export interface PublicStats {
   readonly totalVillages: number;
   readonly bySeverity: Readonly<Record<Severity, number>>;
   readonly villagesWithActiveNgo: number;
   /** Mean composite across villages that have a recovery index; null when none do. */
   readonly averageRecoveryComposite: number | null;
+  /** Money movement across every sanctioned project, plus flagged anomalies. */
+  readonly funds: FundTotals;
 }
 
 export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
-  const { villageRegistry, ngoCoordination, recoveryIntelligence } = deps.runtime.platform;
+  const { villageRegistry, ngoCoordination, recoveryIntelligence, fundMonitoring } =
+    deps.runtime.platform;
 
   router.get("/public/villages", async (): Promise<HttpResponse> => {
     const listed = await villageRegistry.listVillagesBySeverity.execute();
@@ -75,24 +61,20 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
   });
 
   /**
-   * Fund transparency.
+   * Fund transparency — real project data, now that Fund Monitoring is wired
+   * into the composition root.
    *
-   * STRUCTURALLY EMPTY, DELIBERATELY. The Fund Monitoring context
-   * (`@afrip/fund-monitoring`) exists and is fully tested, but the composition
-   * root in `packages/platform/src/composition-root.ts` does not wire it: the
-   * `Platform` it returns has no fund-monitoring member, so this route has no
-   * source of projects to read from. Rather than invent plausible-looking money
-   * — the single most damaging thing a *transparency* endpoint could do — it
-   * answers with the honest one: nothing has been published yet.
-   *
-   * The response shape is already the contract the dashboard codes against, so
-   * wiring the context later fills this in with no client-visible change: add
-   * fund monitoring to the platform, then map its projects onto
-   * `PublicFundProject` here.
+   * Every project appears the moment it is sanctioned: publishing only
+   * completed ones would let a stalled project stay invisible for exactly as
+   * long as it was going wrong. What is withheld is the detail below the
+   * ladder — expenditure descriptions, evidence references and anomaly notes
+   * are free text an operator could put a person's name into, so
+   * `toPublicFundProject` drops them and only the authenticated `GET /projects`
+   * carries them.
    */
   router.get("/public/funds", async (): Promise<HttpResponse> => {
-    const projects: PublicFundProject[] = [];
-    return json(200, { projects });
+    const projects = await fundMonitoring.projectRepository.listAll();
+    return json(200, { projects: projects.map(toPublicFundProject) });
   });
 
   /**
@@ -127,6 +109,10 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
       compositeTotal += index.value.composite;
     }
 
+    // Unlike the recovery average, zero is the honest answer for money: no
+    // sanctioned project means no rupee has moved, which is a fact, not a gap.
+    const funds = summariseFunds(await fundMonitoring.projectRepository.listAll());
+
     const stats: PublicStats = {
       totalVillages: villages.length,
       bySeverity,
@@ -134,6 +120,7 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
       // No village scored yet is not "0% recovered", it is "unknown". A zero
       // here would be a lie the dashboard would faithfully render as a red bar.
       averageRecoveryComposite: scored === 0 ? null : compositeTotal / scored,
+      funds,
     };
 
     return json(200, stats);

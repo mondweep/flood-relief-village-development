@@ -37,6 +37,42 @@ export function requiredNumber(body: Body, key: string): Result<number> {
   return ok(value);
 }
 
+export function optionalNumber(body: Body, key: string): Result<number | undefined> {
+  const value = body[key];
+  if (value === undefined || value === null) return ok(undefined);
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return err(`${key} must be a finite number when present`);
+  }
+  return ok(value);
+}
+
+/**
+ * Absent and empty are distinguished deliberately: several use cases treat a
+ * missing list as "derive it for me" and an empty one as "there are none".
+ */
+export function optionalNumberArray(body: Body, key: string): Result<number[] | undefined> {
+  const value = body[key];
+  if (value === undefined || value === null) return ok(undefined);
+  if (!Array.isArray(value)) return err(`${key} must be an array of numbers`);
+  if (value.some((item) => typeof item !== "number" || !Number.isFinite(item))) {
+    return err(`${key} must be an array of numbers`);
+  }
+  return ok([...(value as number[])]);
+}
+
+export function optionalObjectArray(body: Body, key: string): Result<Body[] | undefined> {
+  const value = body[key];
+  if (value === undefined || value === null) return ok(undefined);
+  if (!Array.isArray(value)) return err(`${key} must be an array of objects`);
+  const out: Body[] = [];
+  for (const item of value) {
+    const parsed = asObject(item);
+    if (!parsed.ok) return err(`${key} must be an array of objects`);
+    out.push(parsed.value);
+  }
+  return ok(out);
+}
+
 export function requiredStringArray(body: Body, key: string): Result<string[]> {
   const value = body[key];
   if (!Array.isArray(value)) return err(`${key} must be an array of strings`);
