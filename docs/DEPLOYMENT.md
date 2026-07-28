@@ -88,10 +88,45 @@ once. Creating a project on a paid plan incurs cost; confirm before proceeding.
 ### Apply the migrations, in order
 
 `supabase/migrations/` holds the deployable schema. Order matters:
-`00001_initial_schema.sql` creates every context's tables, `00002_rls_policies.sql`
-turns on RLS and creates the public transparency views, and
+`00001_initial_schema.sql` creates the `assam_floods` schema and every context's
+tables inside it, `00002_rls_policies.sql` turns on RLS, issues the schema
+grants and creates the public transparency views, and
 `00003_lifecycle_timestamps.sql` adds the lifecycle timestamp columns the API
 relies on. Apply all three, in order.
+
+> **AFRIP tables live in the `assam_floods` schema, not `public`.**
+>
+> This matters most when the Supabase project is shared with other
+> applications — the reference project's `public` schema already holds
+> unrelated tables (`kg_nodes`, `chat_messages`, `swarm_vitals`, …) and the
+> other applications each occupy a schema of their own (`agentic_ai_news`,
+> `brigade_sales`, `driftwise`, `ruflo_demo`). Putting AFRIP in `public` would
+> risk name collisions with a neighbouring app and make "which tables are
+> ours?" unanswerable.
+>
+> The migrations schema-qualify every object and touch nothing outside
+> `assam_floods`, so they are safe to run against a project that already has
+> other tenants in it. They are also re-runnable: every statement is
+> `if not exists`, `create or replace`, or a drop-then-create.
+>
+> Note the naming: the schema is `assam_floods` with an **underscore**. An
+> unquoted Postgres identifier cannot contain a hyphen, so `assam-floods` would
+> force every table reference everywhere to be double-quoted forever.
+
+### Expose the schema to the API (required)
+
+PostgREST — the layer behind the Supabase client — only serves schemas that are
+explicitly exposed. A brand-new custom schema is **not** exposed by default, so
+skipping this step leaves every request failing even though the tables exist.
+
+Dashboard → **Project Settings** → **Data API** → **Exposed schemas**: add
+`assam_floods` alongside whatever is already listed, and save. (Leave the other
+entries alone — removing `public` would break the project's other applications.)
+
+The change takes a few seconds to propagate. `GET /ready` on the deployed
+service is the check: it runs a bounded select against
+`assam_floods.village_registry_villages`, so it fails while the schema is
+unexposed and passes once it is.
 
 **Path A — Supabase CLI (preferred; it records what has been applied):**
 
@@ -118,10 +153,15 @@ supabase migration list          # all three migrations shown as applied remotel
 5. Do not reorder or merge them — `00002` alters tables that `00001` creates, and
    `00003` alters tables both of the earlier migrations touch.
 
-Verify either path in **Table Editor**: you should see the context-prefixed
-tables (`village_registry_villages`, `ngo_coordination_assignments`,
+Verify either path in **Table Editor**: switch the schema selector from `public`
+to **`assam_floods`** — the tables are not in `public` and the editor opens on
+`public` by default, so an empty-looking list usually means the selector, not a
+failed migration. You should then see the context-prefixed tables
+(`village_registry_villages`, `ngo_coordination_assignments`,
 `fund_monitoring_projects`, …), each with the RLS shield icon, plus the views
-`public_village_recovery` and `public_fund_transparency`.
+`public_village_recovery` and `public_fund_transparency`. Those two view names
+describe their *audience* — they are anon-readable — and they live in
+`assam_floods` with everything else.
 
 ### Collect the credentials
 
@@ -162,12 +202,37 @@ cp .env.example .env
 | `PERSISTENCE` | no | `supabase` (default, recommended) \| `memory` (smoke tests only) |
 | `SUPABASE_URL` | when `supabase` | Not a secret |
 | `SUPABASE_SERVICE_ROLE_KEY` | when `supabase` | **Secret** → Secret Manager |
+| `SUPABASE_SCHEMA` | no | Postgres schema holding the AFRIP tables. Defaults to `assam_floods`. Leave unset. |
 | `API_TOKEN` | yes in prod | **Secret** → Secret Manager. Unset ⇒ auth disabled. |
 
 Configuration is validated at startup and fails fast: an out-of-range `PORT`, an
 unrecognised `PERSISTENCE`, or `PERSISTENCE=supabase` without both Supabase
 variables all cause a non-zero exit with a specific message, rather than a
 half-configured server.
+
+### `SUPABASE_SCHEMA`
+
+The Supabase adapters do not use the client's default schema — that default is
+`public`, which in a shared project belongs to other applications. Every query
+names its schema explicitly, resolved in this order:
+
+1. `SUPABASE_SCHEMA`, if set to a non-blank value;
+2. otherwise `assam_floods`, the built-in default.
+
+There is no third case: a blank or whitespace-only value is treated as unset and
+falls back to `assam_floods`, never to `public`. The readiness probe behind
+`GET /ready` queries the same schema the adapters write to, so a mismatch
+between this variable and what the migrations created surfaces as a failing
+readiness check rather than as silent writes to the wrong place.
+
+**Normal deployments should leave `SUPABASE_SCHEMA` unset.** It exists for the
+case where a second environment shares one Supabase project — a review or
+staging stack pointed at, say, `assam_floods_review`, populated by running the
+same migrations with the schema name substituted.
+
+> Setting `SUPABASE_SCHEMA=public` is accepted by the config layer but is
+> exactly the mistake the default exists to prevent: on the shared project it
+> aims AFRIP at other applications' tables.
 
 Generate the API token:
 
@@ -391,7 +456,15 @@ the Supabase connection failed. Check, in order:
    --region europe-west2 --format='yaml(spec.template.spec.containers[0].env)'`
    and check `roles/secretmanager.secretAccessor` was granted (step 3/4 above).
 3. **Migrations ran** — all three files in `supabase/migrations/` applied, in
-   order. `supabase migration list` shows the remote state.
+   order. `supabase migration list` shows the remote state. Remember the tables
+   are in `assam_floods`; an empty `public` schema is expected, not a symptom.
+4. **`assam_floods` is exposed to the Data API** — Project Settings → Data API →
+   Exposed schemas. This is the most common 503 on a *first* deployment against
+   a new project: the migrations succeeded, the credentials are right, and
+   PostgREST still refuses to serve a schema it has not been told about. The
+   error text mentions the schema rather than a missing relation.
+5. **`SUPABASE_SCHEMA`** — if it is set, it must match the schema the migrations
+   actually created. Unset is correct for a normal deployment.
 
 The 503 body includes the specific error, so start there before working through
 the checklist.
