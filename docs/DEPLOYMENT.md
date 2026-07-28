@@ -466,9 +466,31 @@ the Supabase connection failed. Check, in order:
 4. **`assam_floods` is exposed to the Data API** — Project Settings → Data API →
    Exposed schemas. This is the most common 503 on a *first* deployment against
    a new project: the migrations succeeded, the credentials are right, and
-   PostgREST still refuses to serve a schema it has not been told about. The
-   error text mentions the schema rather than a missing relation.
-5. **`SUPABASE_SCHEMA`** — if it is set, it must match the schema the migrations
+   PostgREST still refuses to serve a schema it has not been told about.
+5. **PostgREST has reloaded its schema cache** — exposing the schema is only
+   half of it, and this is the failure that actually bit us on the first live
+   deployment. PostgREST caches the set of relations it knows about at startup.
+   Adding a schema — whether through the dashboard or with
+   `alter role authenticator set pgrst.db_schemas = ...` — updates the *config*
+   but leaves that cache stale, so `/ready` returns 503 with:
+
+   ```
+   Could not find the table 'assam_floods.village_registry_villages' in the schema cache
+   ```
+
+   Note the shape of that message: it names a table, so it reads like a missing
+   migration. It is not — the table exists and the migrations ran. Send both
+   notifications from the SQL editor:
+
+   ```sql
+   notify pgrst, 'reload config';
+   notify pgrst, 'reload schema';
+   ```
+
+   `reload config` alone is not sufficient; the schema cache is a separate
+   reload. Both are instant and safe to re-run. If the message persists after
+   both, the schema genuinely is not in the exposed list — go back to step 4.
+6. **`SUPABASE_SCHEMA`** — if it is set, it must match the schema the migrations
    actually created. Unset is correct for a normal deployment.
 
 The 503 body includes the specific error, so start there before working through
@@ -647,6 +669,66 @@ The honest headline: **a low-traffic pilot on `--min-instances=0` is close to
 free, and the single biggest lever on the bill is that flag.** Prune old images
 periodically (`gcloud artifacts docker images list`) so registry storage does
 not creep.
+
+### Rotating a secret
+
+Rotate the Supabase key whenever it may have been exposed — pasted into a chat
+window, a ticket, a screen share, or a log. Rotation is cheap; assuming a key is
+still private after it has been somewhere unencrypted is not.
+
+The important property of the procedure below is that **the new value goes
+straight from the source that issued it into Secret Manager, and is never
+repeated to anyone in between.** Pipe it from a file or paste it into a prompt
+that does not echo:
+
+```bash
+# 1. Issue the new key in the Supabase dashboard:
+#    Project Settings -> API keys -> rotate. Copy it once.
+
+# 2. Add it as a new version. --data-file=- reads stdin, so the value never
+#    becomes a shell argument and never lands in your shell history.
+#    (On the prompt, paste the key, press Enter, then Ctrl-D.)
+gcloud secrets versions add afrip-supabase-service-role-key \
+  --data-file=- --project=e-vidhayak
+
+# 3. Confirm a new version exists — print the metadata, not the value.
+gcloud secrets versions list afrip-supabase-service-role-key \
+  --project=e-vidhayak --limit=3
+```
+
+The service mounts secrets as `name:latest`, so **no redeploy is needed**: Cloud
+Run resolves `latest` when an instance starts, and new instances pick the new
+version up. Existing warm instances keep the old value until they cycle. To cut
+over immediately rather than eventually, force new instances:
+
+```bash
+gcloud run services update afrip-api --project=e-vidhayak \
+  --region=europe-west2 --update-env-vars=ROTATED_AT="$(date -u +%FT%TZ)"
+```
+
+Then verify — a 200 proves the running container authenticated to Supabase with
+whatever key it currently holds:
+
+```bash
+curl -fsS https://afrip-api-zzfcpiiwva-nw.a.run.app/ready
+```
+
+Finally disable the old version, which is reversible, rather than destroying it:
+
+```bash
+gcloud secrets versions disable 1 --secret=afrip-supabase-service-role-key \
+  --project=e-vidhayak
+```
+
+If `/ready` goes 503 afterwards, re-enable that version to restore service while
+you investigate. The same procedure applies to `afrip-api-token`.
+
+> **Note on who holds the value.** Nobody needs to send a rotated key to a
+> collaborator — human or agent — for it to reach the service. The Supabase
+> dashboard issues it and `gcloud secrets versions add` consumes it; that is the
+> whole path. Anyone with `roles/secretmanager.secretVersionAdder` on the
+> project can perform the rotation without the value passing through a chat
+> transcript, an email, or a commit.
 
 ---
 
@@ -829,6 +911,32 @@ where table_schema = 'assam_floods' order by table_name;
 
 Rows back means the migrations are fine and the problem is exposure. No rows
 means the migrations did not run against this project.
+
+**"Could not find the table ... in the schema cache"**
+
+The third member of this family, and the one most likely to send you hunting in
+the wrong place, because the message names a table and therefore reads like a
+missing migration. The table exists, the migrations ran, and the schema is
+exposed — PostgREST is simply serving a schema cache it built before the schema
+was added. Both notifications, from the SQL editor:
+
+```sql
+notify pgrst, 'reload config';
+notify pgrst, 'reload schema';
+```
+
+`reload config` picks up the exposed-schema change; `reload schema` rebuilds the
+relation cache. They are separate reloads and the second one is the fix — this
+cost us a confused ten minutes on the first live deployment, where `/ready` kept
+returning 503 immediately after a migration run that had plainly succeeded.
+
+Telling the three apart quickly:
+
+| Error text mentions | Cause | Fix |
+|---|---|---|
+| `schema must be one of the following` | Schema not in exposed list | Add it (step 1) |
+| `Could not find the table ... in the schema cache` | Exposed, cache stale | `notify pgrst, 'reload schema'` |
+| `relation ... does not exist` | Migrations genuinely did not run | Apply `supabase/migrations/` |
 
 ---
 
