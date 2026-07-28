@@ -42,7 +42,7 @@ Only `packages/api` is a running process; everything else is a library.
 npm install
 npm test          # 766 tests
 npm run typecheck # tsc --noEmit, strict
-npm run dev       # API on http://localhost:8080, in-memory persistence
+npm run dev       # build + serve on http://localhost:8080, in-memory persistence
 ```
 
 ```bash

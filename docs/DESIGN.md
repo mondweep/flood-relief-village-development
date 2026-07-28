@@ -118,7 +118,7 @@ graph TB
 
 | Piece | Kind | Notes |
 |---|---|---|
-| HTTP API (`packages/api`) | **Running process** | Node 22, ESM. Root `package.json` bundles `packages/api/src/server.ts` with esbuild to `dist/server.js` (`npm run build`), started with `npm start`, developed with `node --experimental-strip-types --watch`. Its job is transport only: parse and validate HTTP input, call a use case, map the `Result<T>` to a status code and JSON body. Under construction. |
+| HTTP API (`packages/api`) | **Running process** | Node 22, ESM. Root `package.json` bundles `packages/api/src/server.ts` with esbuild to `dist/server.js` (`npm run build`), started with `npm start`, and rebuilt-and-run locally with `npm run dev`. Its job is transport only: parse and validate HTTP input, call a use case, map the `Result<T>` to a status code and JSON body. Note the API cannot be run directly from TypeScript source: `node --experimental-strip-types` does not rewrite the `.js` import specifiers this codebase uses, and the dashboard is imported through an esbuild-only `.html` text loader. Both mean a build step is mandatory, hence `dev` bundles first. |
 | Supabase Postgres | **Running managed service** | Schema in `supabase/migrations/`. Not yet provisioned; provisioning has a cost that requires the account owner's confirmation (ADR 0004). |
 | `@afrip/platform` | Library | The composition root (`src/composition-root.ts`): constructs repositories, clock, id generators and the bus, and instantiates every use case. The single place where concrete adapters are chosen. |
 | Context packages | Libraries | One npm workspace per bounded context; no build step beyond `tsc --noEmit` (ADR 0002). |
