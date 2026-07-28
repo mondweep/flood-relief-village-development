@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { villageId, type VillageId } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, villageId, type VillageId } from "@afrip/shared-kernel";
 import type { DimensionScores } from "../domain/dimensions.js";
 import { RecoveryIndex, type ScoreHistoryEntry } from "../domain/recovery-index.js";
 import type { RecoveryIndexRepository } from "../application/ports.js";
@@ -98,19 +98,30 @@ export function fromRow(
 
 /** Supabase/Postgres adapter for RecoveryIndexRepository (ADR 0004). */
 export class SupabaseRecoveryIndexRepository implements RecoveryIndexRepository {
-  constructor(private readonly client: SupabaseClient) {}
+  /**
+   * @param schema Postgres schema holding the AFRIP tables. Defaults to
+   * AFRIP_SCHEMA rather than the client's own default, which is `public` — a
+   * schema owned by other applications in this shared project.
+   */
+  constructor(
+    private readonly client: SupabaseClient,
+    private readonly schema: string = AFRIP_SCHEMA,
+  ) {}
+
+  /** Every query goes through here, so no call can forget the schema. */
+  private table(name: string) {
+    return this.client.schema(this.schema).from(name);
+  }
 
   async findByVillage(village: VillageId): Promise<RecoveryIndex | null> {
-    const index = await this.client
-      .from(INDICES_TABLE)
+    const index = await this.table(INDICES_TABLE)
       .select("*")
       .eq("village_id", village)
       .maybeSingle();
     failed(INDICES_TABLE, "select", index.error);
     if (!index.data) return null;
 
-    const history = await this.client
-      .from(HISTORY_TABLE)
+    const history = await this.table(HISTORY_TABLE)
       .select("*")
       .eq("village_id", village)
       .order("id", { ascending: true });
@@ -120,17 +131,17 @@ export class SupabaseRecoveryIndexRepository implements RecoveryIndexRepository 
   }
 
   async save(index: RecoveryIndex): Promise<void> {
-    const upserted = await this.client.from(INDICES_TABLE).upsert(toRow(index));
+    const upserted = await this.table(INDICES_TABLE).upsert(toRow(index));
     failed(INDICES_TABLE, "upsert", upserted.error);
 
     // History rows carry a DB-assigned identity key, so the append-only log is
     // reconciled wholesale: clear then re-insert in aggregate order.
-    const cleared = await this.client.from(HISTORY_TABLE).delete().eq("village_id", index.villageId);
+    const cleared = await this.table(HISTORY_TABLE).delete().eq("village_id", index.villageId);
     failed(HISTORY_TABLE, "delete", cleared.error);
 
     const rows = toHistoryRows(index);
     if (rows.length > 0) {
-      const inserted = await this.client.from(HISTORY_TABLE).insert(rows);
+      const inserted = await this.table(HISTORY_TABLE).insert(rows);
       failed(HISTORY_TABLE, "insert", inserted.error);
     }
   }

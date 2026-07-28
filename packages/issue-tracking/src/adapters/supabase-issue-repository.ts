@@ -1,5 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { issueId, villageId, type IssueId, type VillageId } from "@afrip/shared-kernel";
+import {
+  AFRIP_SCHEMA,
+  issueId,
+  villageId,
+  type IssueId,
+  type VillageId,
+} from "@afrip/shared-kernel";
 import {
   Issue,
   type IssueCategory,
@@ -131,23 +137,35 @@ export function fromRow(row: IssueRow): Issue {
 
 /** Supabase/Postgres adapter for IssueRepository (ADR 0004). */
 export class SupabaseIssueRepository implements IssueRepository {
-  constructor(private readonly client: SupabaseClient) {}
+  /**
+   * @param schema Postgres schema holding the AFRIP tables. Defaults to
+   * AFRIP_SCHEMA rather than the client's own default, which is `public` — a
+   * schema owned by other applications in this shared project.
+   */
+  constructor(
+    private readonly client: SupabaseClient,
+    private readonly schema: string = AFRIP_SCHEMA,
+  ) {}
+
+  /** Every query goes through here, so no call can forget the schema. */
+  private table(name: string) {
+    return this.client.schema(this.schema).from(name);
+  }
 
   async findById(id: IssueId): Promise<Issue | null> {
-    const result = await this.client.from(ISSUES_TABLE).select("*").eq("id", id).maybeSingle();
+    const result = await this.table(ISSUES_TABLE).select("*").eq("id", id).maybeSingle();
     failed(ISSUES_TABLE, "select", result.error);
     if (!result.data) return null;
     return fromRow(result.data as IssueRow);
   }
 
   async save(issue: Issue): Promise<void> {
-    const result = await this.client.from(ISSUES_TABLE).upsert(toRow(issue));
+    const result = await this.table(ISSUES_TABLE).upsert(toRow(issue));
     failed(ISSUES_TABLE, "upsert", result.error);
   }
 
   async listByVillage(village: VillageId): Promise<Issue[]> {
-    const result = await this.client
-      .from(ISSUES_TABLE)
+    const result = await this.table(ISSUES_TABLE)
       .select("*")
       .eq("village_id", village)
       .order("reported_at", { ascending: true });
@@ -156,8 +174,7 @@ export class SupabaseIssueRepository implements IssueRepository {
   }
 
   async listByStatus(status: IssueStatus): Promise<Issue[]> {
-    const result = await this.client
-      .from(ISSUES_TABLE)
+    const result = await this.table(ISSUES_TABLE)
       .select("*")
       .eq("status", status)
       .order("reported_at", { ascending: true });

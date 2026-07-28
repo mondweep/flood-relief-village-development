@@ -1,5 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { assignmentId, ngoId, villageId, type NgoId, type VillageId } from "@afrip/shared-kernel";
+import {
+  AFRIP_SCHEMA,
+  assignmentId,
+  ngoId,
+  villageId,
+  type NgoId,
+  type VillageId,
+} from "@afrip/shared-kernel";
 import {
   VillageAssignment,
   type AssignmentStatus,
@@ -107,11 +114,23 @@ export function fromRow(
 
 /** Supabase/Postgres adapter for AssignmentRepository (ADR 0004). */
 export class SupabaseAssignmentRepository implements AssignmentRepository {
-  constructor(private readonly client: SupabaseClient) {}
+  /**
+   * @param schema Postgres schema holding the AFRIP tables. Defaults to
+   * AFRIP_SCHEMA rather than the client's own default, which is `public` — a
+   * schema owned by other applications in this shared project.
+   */
+  constructor(
+    private readonly client: SupabaseClient,
+    private readonly schema: string = AFRIP_SCHEMA,
+  ) {}
+
+  /** Every query goes through here, so no call can forget the schema. */
+  private table(name: string) {
+    return this.client.schema(this.schema).from(name);
+  }
 
   async findActiveByVillage(village: VillageId): Promise<VillageAssignment | undefined> {
-    const result = await this.client
-      .from(ASSIGNMENTS_TABLE)
+    const result = await this.table(ASSIGNMENTS_TABLE)
       .select("*")
       .eq("village_id", village)
       .eq("status", ACTIVE_STATUS)
@@ -125,8 +144,7 @@ export class SupabaseAssignmentRepository implements AssignmentRepository {
   }
 
   async findActiveByNgo(ngo: NgoId): Promise<VillageAssignment[]> {
-    const result = await this.client
-      .from(ASSIGNMENTS_TABLE)
+    const result = await this.table(ASSIGNMENTS_TABLE)
       .select("*")
       .eq("ngo_id", ngo)
       .eq("status", ACTIVE_STATUS)
@@ -141,20 +159,19 @@ export class SupabaseAssignmentRepository implements AssignmentRepository {
   }
 
   async save(assignment: VillageAssignment): Promise<void> {
-    const upserted = await this.client.from(ASSIGNMENTS_TABLE).upsert(toRow(assignment));
+    const upserted = await this.table(ASSIGNMENTS_TABLE).upsert(toRow(assignment));
     failed(ASSIGNMENTS_TABLE, "upsert", upserted.error);
 
     // Committee members carry a DB-assigned identity key, so the child set is
     // reconciled wholesale: clear then re-insert in aggregate order.
-    const cleared = await this.client
-      .from(COMMITTEE_MEMBERS_TABLE)
+    const cleared = await this.table(COMMITTEE_MEMBERS_TABLE)
       .delete()
       .eq("assignment_id", assignment.id);
     failed(COMMITTEE_MEMBERS_TABLE, "delete", cleared.error);
 
     const rows = toCommitteeMemberRows(assignment);
     if (rows.length > 0) {
-      const inserted = await this.client.from(COMMITTEE_MEMBERS_TABLE).insert(rows);
+      const inserted = await this.table(COMMITTEE_MEMBERS_TABLE).insert(rows);
       failed(COMMITTEE_MEMBERS_TABLE, "insert", inserted.error);
     }
   }
@@ -162,8 +179,7 @@ export class SupabaseAssignmentRepository implements AssignmentRepository {
   private async committeeRowsFor(
     assignmentIds: readonly string[],
   ): Promise<Map<string, CommitteeMemberRow[]>> {
-    const result = await this.client
-      .from(COMMITTEE_MEMBERS_TABLE)
+    const result = await this.table(COMMITTEE_MEMBERS_TABLE)
       .select("*")
       .in("assignment_id", [...assignmentIds])
       .order("id", { ascending: true });

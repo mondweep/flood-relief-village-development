@@ -12,7 +12,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
  * behaves, not how any single row round-trips.
  */
 
+/** What `.from()` resolves against when no schema was selected, as in supabase-js. */
+export const DEFAULT_CLIENT_SCHEMA = "public";
+
 export interface FakeQuery {
+  /** Schema this query resolved against; DEFAULT_CLIENT_SCHEMA if none was selected. */
+  schema: string;
   table: string;
   operation: "select" | "upsert" | "insert" | "delete";
   columns: string | null;
@@ -33,14 +38,16 @@ export interface FakeSupabase {
   queries: FakeQuery[];
   /** Every table the adapters have talked to, in first-touch order. */
   tablesTouched(): string[];
+  /** Every schema the adapters resolved against, in first-use order. */
+  schemasUsed(): string[];
   queriesTo(table: string): FakeQuery[];
 }
 
 export function createFakeSupabase(options: FakeSupabaseOptions = {}): FakeSupabase {
   const queries: FakeQuery[] = [];
 
-  const from = vi.fn((table: string) => {
-    const query: FakeQuery = { table, operation: "select", columns: null, limit: null };
+  const fromIn = (schema: string) => vi.fn((table: string) => {
+    const query: FakeQuery = { schema, table, operation: "select", columns: null, limit: null };
     queries.push(query);
 
     const settle = (): Promise<{ data: unknown; error: { message: string } | null }> => {
@@ -92,10 +99,16 @@ export function createFakeSupabase(options: FakeSupabaseOptions = {}): FakeSupab
     return builder;
   });
 
+  // Bare `.from()` — no schema selected — behaves like supabase-js and lands in
+  // `public`, so a regressed adapter is visible rather than silently accepted.
+  const from = fromIn(DEFAULT_CLIENT_SCHEMA);
+  const schema = vi.fn((name: string) => ({ from: fromIn(name) }));
+
   return {
-    client: { from } as unknown as SupabaseClient,
+    client: { from, schema } as unknown as SupabaseClient,
     queries,
     tablesTouched: () => [...new Set(queries.map((q) => q.table))],
+    schemasUsed: () => [...new Set(queries.map((q) => q.schema))],
     queriesTo: (table: string) => queries.filter((q) => q.table === table),
   };
 }

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { villageId, type VillageId } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, villageId, type VillageId } from "@afrip/shared-kernel";
 import {
   Village,
   type DamageAssessment,
@@ -128,19 +128,30 @@ export function fromRow(row: VillageRow, assessmentRows: readonly DamageAssessme
 
 /** Supabase/Postgres adapter for VillageRepository (ADR 0004). */
 export class SupabaseVillageRepository implements VillageRepository {
-  constructor(private readonly client: SupabaseClient) {}
+  /**
+   * @param schema Postgres schema holding the AFRIP tables. Defaults to
+   * AFRIP_SCHEMA rather than the client's own default, which is `public` — a
+   * schema owned by other applications in this shared project.
+   */
+  constructor(
+    private readonly client: SupabaseClient,
+    private readonly schema: string = AFRIP_SCHEMA,
+  ) {}
+
+  /** Every query goes through here, so no call can forget the schema. */
+  private table(name: string) {
+    return this.client.schema(this.schema).from(name);
+  }
 
   async findById(id: VillageId): Promise<Village | null> {
-    const village = await this.client
-      .from(VILLAGES_TABLE)
+    const village = await this.table(VILLAGES_TABLE)
       .select("*")
       .eq("id", id)
       .maybeSingle();
     failed(VILLAGES_TABLE, "select", village.error);
     if (!village.data) return null;
 
-    const assessments = await this.client
-      .from(DAMAGE_ASSESSMENTS_TABLE)
+    const assessments = await this.table(DAMAGE_ASSESSMENTS_TABLE)
       .select("*")
       .eq("village_id", id)
       .order("id", { ascending: true });
@@ -150,35 +161,32 @@ export class SupabaseVillageRepository implements VillageRepository {
   }
 
   async save(village: Village): Promise<void> {
-    const upserted = await this.client.from(VILLAGES_TABLE).upsert(toRow(village));
+    const upserted = await this.table(VILLAGES_TABLE).upsert(toRow(village));
     failed(VILLAGES_TABLE, "upsert", upserted.error);
 
     // Damage assessments carry a DB-assigned identity key, so the child set is
     // reconciled wholesale: clear then re-insert in aggregate order.
-    const cleared = await this.client
-      .from(DAMAGE_ASSESSMENTS_TABLE)
+    const cleared = await this.table(DAMAGE_ASSESSMENTS_TABLE)
       .delete()
       .eq("village_id", village.id);
     failed(DAMAGE_ASSESSMENTS_TABLE, "delete", cleared.error);
 
     const rows = toDamageAssessmentRows(village);
     if (rows.length > 0) {
-      const inserted = await this.client.from(DAMAGE_ASSESSMENTS_TABLE).insert(rows);
+      const inserted = await this.table(DAMAGE_ASSESSMENTS_TABLE).insert(rows);
       failed(DAMAGE_ASSESSMENTS_TABLE, "insert", inserted.error);
     }
   }
 
   async listAll(): Promise<Village[]> {
-    const villages = await this.client
-      .from(VILLAGES_TABLE)
+    const villages = await this.table(VILLAGES_TABLE)
       .select("*")
       .order("id", { ascending: true });
     failed(VILLAGES_TABLE, "select", villages.error);
     const villageRows = (villages.data ?? []) as VillageRow[];
     if (villageRows.length === 0) return [];
 
-    const assessments = await this.client
-      .from(DAMAGE_ASSESSMENTS_TABLE)
+    const assessments = await this.table(DAMAGE_ASSESSMENTS_TABLE)
       .select("*")
       .in(
         "village_id",

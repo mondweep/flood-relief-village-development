@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { beneficiaryId, unwrap, villageId } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, beneficiaryId, unwrap, villageId } from "@afrip/shared-kernel";
 import {
   AID_RECORDS_TABLE,
   BENEFICIARIES_TABLE,
@@ -14,7 +14,7 @@ import {
   type BeneficiaryRow,
 } from "../src/adapters/supabase-beneficiary-repository.js";
 import { Beneficiary } from "../src/domain/beneficiary.js";
-import { createFakeSupabase, type FakeRow } from "./fake-supabase-client.js";
+import { DEFAULT_CLIENT_SCHEMA, createFakeSupabase, type FakeRow } from "./fake-supabase-client.js";
 
 function makeBeneficiary(id = "beneficiary-1", village = "village-1"): Beneficiary {
   return unwrap(
@@ -429,5 +429,63 @@ describe("SupabaseBeneficiaryRepository — corrupt rows", () => {
     await expect(
       new SupabaseBeneficiaryRepository(fake.client).findById(unwrap(beneficiaryId("beneficiary-1"))),
     ).rejects.toThrow(/corrupt row in beneficiary_registry_beneficiaries \(id=beneficiary-1\)/);
+  });
+});
+
+/**
+ * Beneficiary rows are the most sensitive data in the system — named flood
+ * victims, their aid history and their duplicate-aid flags — and their
+ * confidentiality rests on RLS policies that exist only on the `assam_floods`
+ * tables. Writing them through `public` would deposit personal data in a
+ * neighbouring application's schema with none of those policies attached.
+ */
+describe("SupabaseBeneficiaryRepository — schema targeting", () => {
+  it("resolves every query, parent and child, against assam_floods", async () => {
+    const fake = createFakeSupabase();
+    const repository = new SupabaseBeneficiaryRepository(fake.client);
+
+    // withHistory exercises all three child tables, so this covers the
+    // replaceChildren / selectChildren helpers as well as the parent table.
+    await repository.save(withHistory(makeBeneficiary()));
+    await repository.findById(unwrap(beneficiaryId("beneficiary-1")));
+    await repository.listByVillage(unwrap(villageId("village-1")));
+    await repository.listAll();
+
+    expect(fake.calls.length).toBeGreaterThan(0);
+    expect(fake.schemasUsed()).toEqual([AFRIP_SCHEMA]);
+    expect(fake.schemasUsed()).not.toContain(DEFAULT_CLIENT_SCHEMA);
+  });
+
+  it("keeps every child table in the schema, not just the parent", async () => {
+    const fake = createFakeSupabase();
+    await new SupabaseBeneficiaryRepository(fake.client).save(withHistory(makeBeneficiary()));
+
+    for (const table of [
+      BENEFICIARIES_TABLE,
+      AID_RECORDS_TABLE,
+      FOLLOW_UPS_TABLE,
+      DUPLICATE_FLAGS_TABLE,
+    ]) {
+      const calls = fake.callsTo(table);
+      expect(calls.length).toBeGreaterThan(0);
+      for (const call of calls) expect(call.schema).toBe(AFRIP_SCHEMA);
+    }
+  });
+
+  it("selects the schema explicitly instead of leaning on the client default", async () => {
+    const fake = createFakeSupabase();
+    await new SupabaseBeneficiaryRepository(fake.client).listAll();
+
+    expect(fake.schema).toHaveBeenCalledWith(AFRIP_SCHEMA);
+    expect(fake.from).not.toHaveBeenCalled();
+  });
+
+  it("honours an injected schema so a review environment can be redirected", async () => {
+    const fake = createFakeSupabase();
+    const repository = new SupabaseBeneficiaryRepository(fake.client, "assam_floods_review");
+
+    await repository.save(withHistory(makeBeneficiary()));
+
+    expect(fake.schemasUsed()).toEqual(["assam_floods_review"]);
   });
 });

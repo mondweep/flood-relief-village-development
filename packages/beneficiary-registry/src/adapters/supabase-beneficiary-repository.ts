@@ -1,5 +1,11 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { beneficiaryId, villageId, type BeneficiaryId, type VillageId } from "@afrip/shared-kernel";
+import {
+  AFRIP_SCHEMA,
+  beneficiaryId,
+  villageId,
+  type BeneficiaryId,
+  type VillageId,
+} from "@afrip/shared-kernel";
 import {
   Beneficiary,
   type AidRecord,
@@ -162,11 +168,23 @@ export function fromRow(row: BeneficiaryRow, children: BeneficiaryChildRows): Be
 
 /** Supabase/Postgres adapter for BeneficiaryRepository (ADR 0004). */
 export class SupabaseBeneficiaryRepository implements BeneficiaryRepository {
-  constructor(private readonly client: SupabaseClient) {}
+  /**
+   * @param schema Postgres schema holding the AFRIP tables. Defaults to
+   * AFRIP_SCHEMA rather than the client's own default, which is `public` — a
+   * schema owned by other applications in this shared project.
+   */
+  constructor(
+    private readonly client: SupabaseClient,
+    private readonly schema: string = AFRIP_SCHEMA,
+  ) {}
+
+  /** Every query goes through here, so no call can forget the schema. */
+  private table(name: string) {
+    return this.client.schema(this.schema).from(name);
+  }
 
   async findById(id: BeneficiaryId): Promise<Beneficiary | null> {
-    const result = await this.client
-      .from(BENEFICIARIES_TABLE)
+    const result = await this.table(BENEFICIARIES_TABLE)
       .select("*")
       .eq("id", id)
       .maybeSingle();
@@ -179,8 +197,7 @@ export class SupabaseBeneficiaryRepository implements BeneficiaryRepository {
   }
 
   async listByVillage(village: VillageId): Promise<Beneficiary[]> {
-    const result = await this.client
-      .from(BENEFICIARIES_TABLE)
+    const result = await this.table(BENEFICIARIES_TABLE)
       .select("*")
       .eq("village_id", village)
       .order("id", { ascending: true });
@@ -189,8 +206,7 @@ export class SupabaseBeneficiaryRepository implements BeneficiaryRepository {
   }
 
   async listAll(): Promise<Beneficiary[]> {
-    const result = await this.client
-      .from(BENEFICIARIES_TABLE)
+    const result = await this.table(BENEFICIARIES_TABLE)
       .select("*")
       .order("id", { ascending: true });
     failed(BENEFICIARIES_TABLE, "select", result.error);
@@ -198,7 +214,7 @@ export class SupabaseBeneficiaryRepository implements BeneficiaryRepository {
   }
 
   async save(beneficiary: Beneficiary): Promise<void> {
-    const upserted = await this.client.from(BENEFICIARIES_TABLE).upsert(toRow(beneficiary));
+    const upserted = await this.table(BENEFICIARIES_TABLE).upsert(toRow(beneficiary));
     failed(BENEFICIARIES_TABLE, "upsert", upserted.error);
 
     // Aid records, follow-ups and duplicate flags are append-only collections
@@ -217,10 +233,10 @@ export class SupabaseBeneficiaryRepository implements BeneficiaryRepository {
     id: BeneficiaryId,
     rows: readonly object[],
   ): Promise<void> {
-    const cleared = await this.client.from(table).delete().eq("beneficiary_id", id);
+    const cleared = await this.table(table).delete().eq("beneficiary_id", id);
     failed(table, "delete", cleared.error);
     if (rows.length === 0) return;
-    const inserted = await this.client.from(table).insert([...rows]);
+    const inserted = await this.table(table).insert([...rows]);
     failed(table, "insert", inserted.error);
   }
 
@@ -250,7 +266,7 @@ export class SupabaseBeneficiaryRepository implements BeneficiaryRepository {
     ids: readonly string[],
     orderBy: readonly string[],
   ): Promise<T[]> {
-    let query = this.client.from(table).select("*").in("beneficiary_id", [...ids]);
+    let query = this.table(table).select("*").in("beneficiary_id", [...ids]);
     for (const column of orderBy) query = query.order(column, { ascending: true });
     const result = await query;
     failed(table, "select", result.error);

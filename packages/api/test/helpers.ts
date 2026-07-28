@@ -1,5 +1,6 @@
 import type { AddressInfo } from "node:net";
 import { API_VERSION, createServer, type ApiConfig } from "../src/server.js";
+import { DEFAULT_SUPABASE_SCHEMA } from "../src/config.js";
 import { createMemoryRuntime, type PlatformRuntime } from "../src/persistence.js";
 
 export interface TestServer {
@@ -16,6 +17,7 @@ export function testConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
     persistence: "memory",
     supabaseUrl: null,
     supabaseServiceRoleKey: null,
+    supabaseSchema: DEFAULT_SUPABASE_SCHEMA,
     version: API_VERSION,
     ...overrides,
   };

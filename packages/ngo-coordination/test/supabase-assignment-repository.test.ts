@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { assignmentId, ngoId, unwrap, villageId } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, assignmentId, ngoId, unwrap, villageId } from "@afrip/shared-kernel";
 import {
   ASSIGNMENTS_TABLE,
   COMMITTEE_MEMBERS_TABLE,
@@ -10,7 +10,7 @@ import {
   type AssignmentRow,
 } from "../src/adapters/supabase-assignment-repository.js";
 import { VillageAssignment } from "../src/domain/village-assignment.js";
-import { createFakeSupabase, type FakeRow } from "./fake-supabase-client.js";
+import { DEFAULT_CLIENT_SCHEMA, createFakeSupabase, type FakeRow } from "./fake-supabase-client.js";
 
 function makeAssignment(id = "assignment-1", village = "village-1", ngo = "ngo-1"): VillageAssignment {
   return VillageAssignment.create({
@@ -285,5 +285,43 @@ describe("SupabaseAssignmentRepository — corrupt rows", () => {
         unwrap(villageId("village-1")),
       ),
     ).rejects.toThrow(/corrupt row in ngo_coordination_assignments \(id=assignment-1\)/);
+  });
+});
+
+/**
+ * The One Village, One NGO invariant is enforced by a partial unique index that
+ * lives in `assam_floods`. An adapter writing through `public` would not just
+ * write to the wrong place — it would write somewhere that index does not
+ * guard, so the flagship invariant would stop being enforced at all.
+ */
+describe("SupabaseAssignmentRepository — schema targeting", () => {
+  it("resolves every query against assam_floods, never public", async () => {
+    const fake = createFakeSupabase();
+    const repository = new SupabaseAssignmentRepository(fake.client);
+
+    await repository.save(withCommittee(makeAssignment()));
+    await repository.findActiveByVillage(unwrap(villageId("village-1")));
+    await repository.findActiveByNgo(unwrap(ngoId("ngo-1")));
+
+    expect(fake.calls.length).toBeGreaterThan(0);
+    expect(fake.schemasUsed()).toEqual([AFRIP_SCHEMA]);
+    expect(fake.schemasUsed()).not.toContain(DEFAULT_CLIENT_SCHEMA);
+  });
+
+  it("selects the schema explicitly instead of leaning on the client default", async () => {
+    const fake = createFakeSupabase();
+    await new SupabaseAssignmentRepository(fake.client).findActiveByNgo(unwrap(ngoId("ngo-1")));
+
+    expect(fake.schema).toHaveBeenCalledWith(AFRIP_SCHEMA);
+    expect(fake.from).not.toHaveBeenCalled();
+  });
+
+  it("honours an injected schema so a review environment can be redirected", async () => {
+    const fake = createFakeSupabase();
+    const repository = new SupabaseAssignmentRepository(fake.client, "assam_floods_review");
+
+    await repository.save(withCommittee(makeAssignment()));
+
+    expect(fake.schemasUsed()).toEqual(["assam_floods_review"]);
   });
 });

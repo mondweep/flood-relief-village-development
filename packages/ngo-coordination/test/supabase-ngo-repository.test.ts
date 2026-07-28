@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ngoId, unwrap } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, ngoId, unwrap } from "@afrip/shared-kernel";
 import {
   NGOS_TABLE,
   SupabaseNgoRepository,
@@ -8,7 +8,7 @@ import {
   type NgoRow,
 } from "../src/adapters/supabase-ngo-repository.js";
 import { Ngo } from "../src/domain/ngo.js";
-import { createFakeSupabase, type FakeRow } from "./fake-supabase-client.js";
+import { DEFAULT_CLIENT_SCHEMA, createFakeSupabase, type FakeRow } from "./fake-supabase-client.js";
 
 function makeNgo(id = "ngo-1"): Ngo {
   return unwrap(
@@ -122,5 +122,39 @@ describe("SupabaseNgoRepository — corrupt rows", () => {
     await expect(
       new SupabaseNgoRepository(fake.client).findById(unwrap(ngoId("ngo-1"))),
     ).rejects.toThrow(/corrupt row in ngo_coordination_ngos/);
+  });
+});
+
+/**
+ * In a shared Supabase project `public` belongs to other applications, and
+ * supabase-js sends an unqualified `.from()` there without complaint. Every
+ * query must name the AFRIP schema.
+ */
+describe("SupabaseNgoRepository — schema targeting", () => {
+  it("resolves every query against assam_floods, never public", async () => {
+    const fake = createFakeSupabase();
+    const repository = new SupabaseNgoRepository(fake.client);
+
+    await repository.save(makeNgo());
+    await repository.findById(unwrap(ngoId("ngo-1")));
+
+    expect(fake.calls.length).toBeGreaterThan(0);
+    expect(fake.schemasUsed()).toEqual([AFRIP_SCHEMA]);
+    expect(fake.schemasUsed()).not.toContain(DEFAULT_CLIENT_SCHEMA);
+  });
+
+  it("selects the schema explicitly instead of leaning on the client default", async () => {
+    const fake = createFakeSupabase();
+    await new SupabaseNgoRepository(fake.client).findById(unwrap(ngoId("ngo-1")));
+
+    expect(fake.schema).toHaveBeenCalledWith(AFRIP_SCHEMA);
+    expect(fake.from).not.toHaveBeenCalled();
+  });
+
+  it("honours an injected schema so a review environment can be redirected", async () => {
+    const fake = createFakeSupabase();
+    await new SupabaseNgoRepository(fake.client, "assam_floods_review").save(makeNgo());
+
+    expect(fake.schemasUsed()).toEqual(["assam_floods_review"]);
   });
 });

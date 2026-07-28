@@ -2,12 +2,22 @@ import { vi } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 /**
- * A `vi.fn()`-backed stand-in for SupabaseClient. It records every table,
- * operation, filter, ordering and payload the adapter produces, and answers
- * selects from an in-memory table map — no network, no live database.
+ * A `vi.fn()`-backed stand-in for SupabaseClient. It records every schema,
+ * table, operation, filter, ordering and payload the adapter produces, and
+ * answers selects from an in-memory table map — no network, no live database.
+ *
+ * The schema is recorded because it is silently wrong by default: a real
+ * SupabaseClient that is never told `.schema(...)` resolves `.from(t)` against
+ * `public`, which in this shared project belongs to other applications. The
+ * fake reproduces that exactly — a bare `.from()` is tagged
+ * DEFAULT_CLIENT_SCHEMA — so an adapter that drops the schema selection shows
+ * up as `public` in the recorded calls instead of passing unnoticed.
  */
 
 export type FakeOperation = "select" | "upsert" | "insert" | "delete";
+
+/** What `.from()` resolves against when no schema was selected, as in supabase-js. */
+export const DEFAULT_CLIENT_SCHEMA = "public";
 
 export interface FakeFilter {
   type: "eq" | "in";
@@ -21,6 +31,8 @@ export interface FakeOrder {
 }
 
 export interface FakeCall {
+  /** Schema this call resolved against; DEFAULT_CLIENT_SCHEMA if none was selected. */
+  schema: string;
   table: string;
   operation: FakeOperation;
   filters: FakeFilter[];
@@ -42,10 +54,14 @@ export interface FakeSupabase {
   client: SupabaseClient;
   calls: FakeCall[];
   from: ReturnType<typeof vi.fn>;
+  /** Records each `client.schema(name)` selection, in call order. */
+  schema: ReturnType<typeof vi.fn>;
   /** Every recorded call to a table, optionally narrowed to one operation. */
   callsTo(table: string, operation?: FakeOperation): FakeCall[];
   /** The single recorded call to a table/operation pair; fails loudly otherwise. */
   callTo(table: string, operation: FakeOperation): FakeCall;
+  /** Distinct schemas every recorded query resolved against, in first-use order. */
+  schemasUsed(): string[];
 }
 
 function compare(a: unknown, b: unknown): number {
@@ -84,8 +100,9 @@ function respond(
 export function createFakeSupabase(options: FakeSupabaseOptions = {}): FakeSupabase {
   const calls: FakeCall[] = [];
 
-  const from = vi.fn((table: string) => {
+  const fromIn = (schema: string) => vi.fn((table: string) => {
     const call: FakeCall = {
+      schema,
       table,
       operation: "select",
       filters: [],
@@ -139,6 +156,11 @@ export function createFakeSupabase(options: FakeSupabaseOptions = {}): FakeSupab
     return builder;
   });
 
+  // Bare `.from()` — no schema selected — behaves like supabase-js and lands in
+  // `public`, so a regressed adapter is visible rather than silently accepted.
+  const from = fromIn(DEFAULT_CLIENT_SCHEMA);
+  const schema = vi.fn((name: string) => ({ from: fromIn(name) }));
+
   const callsTo = (table: string, operation?: FakeOperation): FakeCall[] =>
     calls.filter((c) => c.table === table && (operation === undefined || c.operation === operation));
 
@@ -153,5 +175,13 @@ export function createFakeSupabase(options: FakeSupabaseOptions = {}): FakeSupab
     return found[0] as FakeCall;
   };
 
-  return { client: { from } as unknown as SupabaseClient, calls, from, callsTo, callTo };
+  return {
+    client: { from, schema } as unknown as SupabaseClient,
+    calls,
+    from,
+    schema,
+    callsTo,
+    callTo,
+    schemasUsed: () => [...new Set(calls.map((c) => c.schema))],
+  };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { FixedClock } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, FixedClock } from "@afrip/shared-kernel";
 import { VILLAGES_TABLE } from "@afrip/village-registry";
 import { ASSIGNMENTS_TABLE, NGOS_TABLE } from "@afrip/ngo-coordination";
 import { INDICES_TABLE } from "@afrip/recovery-intelligence";
@@ -11,7 +11,11 @@ import {
   createPersistence,
   createSupabaseRuntimeFromClient,
 } from "../src/persistence.js";
-import { createFakeSupabase, type FakeSupabase } from "./fake-supabase-client.js";
+import {
+  DEFAULT_CLIENT_SCHEMA,
+  createFakeSupabase,
+  type FakeSupabase,
+} from "./fake-supabase-client.js";
 import { startTestServerWith, testConfig, type TestServer } from "./helpers.js";
 
 const clock = (): FixedClock => new FixedClock(new Date("2026-07-01T00:00:00.000Z"));
@@ -139,6 +143,78 @@ describe("supabase runtime — the Supabase adapters are the ones wired in", () 
     await runtime.platform.villageRegistry.getVillageProfile.execute({ villageId: "village-1" });
 
     expect(fake.tablesTouched()).not.toContain(VILLAGES_TABLE);
+  });
+});
+
+/**
+ * Table names alone are not enough here. This Supabase project is shared, and
+ * `public` already holds unrelated applications' tables — so "touched
+ * village_registry_villages" is only correct if it also means "in
+ * assam_floods". supabase-js resolves an unqualified `.from()` against `public`
+ * silently, which makes the wrong schema a data-corruption bug rather than an
+ * error anyone would see in a log.
+ */
+describe("supabase runtime — schema targeting", () => {
+  async function exerciseEveryContext(runtime: ReturnType<typeof createSupabaseRuntimeFromClient>) {
+    await runtime.platform.villageRegistry.getVillageProfile.execute({ villageId: "village-1" });
+    await runtime.platform.ngoCoordination.registerNgo.execute({
+      name: "Sewa Trust",
+      focusAreas: ["water"],
+      capacity: 3,
+    });
+    await runtime.platform.ngoCoordination.listUnassignedVillages.execute([
+      { villageId: "village-1", severity: "critical" },
+    ]);
+    await runtime.platform.recoveryIntelligence.getRecoveryIndex.execute({
+      villageId: "village-1",
+    });
+    await runtime.platform.issueTracking.routeIssue.execute({ issueId: "issue-1" });
+    await runtime.platform.beneficiaryRegistry.listOverdueFollowUps.execute();
+  }
+
+  it("points all six context adapters at assam_floods, never public", async () => {
+    const fake = createFakeSupabase();
+
+    await exerciseEveryContext(createSupabaseRuntimeFromClient(fake.client, { clock: clock() }));
+
+    // Every context really did issue a query...
+    for (const table of [
+      VILLAGES_TABLE,
+      NGOS_TABLE,
+      ASSIGNMENTS_TABLE,
+      INDICES_TABLE,
+      ISSUES_TABLE,
+      BENEFICIARIES_TABLE,
+    ]) {
+      expect(fake.tablesTouched()).toContain(table);
+    }
+    // ...and every one of those queries resolved in our schema.
+    expect(fake.schemasUsed()).toEqual([AFRIP_SCHEMA]);
+    expect(fake.schemasUsed()).not.toContain(DEFAULT_CLIENT_SCHEMA);
+  });
+
+  it("probes readiness in the same schema the adapters write to", async () => {
+    const fake = createFakeSupabase();
+
+    await createSupabaseRuntimeFromClient(fake.client).checkReady();
+
+    // A probe that passed against `public` while the adapters wrote to
+    // assam_floods would report ready for a database the app cannot use.
+    expect(fake.queriesTo(READY_PROBE_TABLE)[0]?.schema).toBe(AFRIP_SCHEMA);
+  });
+
+  it("threads an injected schema through every adapter and the readiness probe", async () => {
+    const fake = createFakeSupabase();
+    const runtime = createSupabaseRuntimeFromClient(
+      fake.client,
+      { clock: clock() },
+      "assam_floods_review",
+    );
+
+    await exerciseEveryContext(runtime);
+    await runtime.checkReady();
+
+    expect(fake.schemasUsed()).toEqual(["assam_floods_review"]);
   });
 });
 

@@ -1,11 +1,37 @@
 -- AFRIP initial schema (ADR 0004)
--- Each bounded context owns its tables (context prefix). SQL constraints duplicate
--- cheap domain invariants as defence-in-depth behind the domain model.
+--
+-- WHY A DEDICATED SCHEMA
+-- ---------------------------------------------------------------------------
+-- The target Supabase project is SHARED with several unrelated applications.
+-- Its `public` schema already holds other tenants' tables (kg_nodes,
+-- chat_messages, swarm_vitals, ...), and the other applications that live there
+-- have each taken a schema of their own (agentic_ai_news, brigade_sales,
+-- driftwise, ruflo_demo). AFRIP follows the same convention: every object below
+-- is created in `assam_floods` and nothing here touches `public`.
+--
+-- That buys three things. Name collisions become impossible — a generic table
+-- name like `issue_tracking_issues` is ours alone. A future `drop schema
+-- assam_floods cascade` removes this application and only this application.
+-- And PostgREST cannot serve our tables to a neighbouring app's client unless
+-- `assam_floods` is explicitly added to the project's exposed schemas.
+--
+-- The schema is spelled with an underscore, not a hyphen: an unquoted
+-- identifier is folded to lower case and must match [a-z_][a-z0-9_]*, so
+-- `assam-floods` would force every reference in every migration, view, policy
+-- and client call to be double-quoted forever.
+--
+-- Each bounded context owns its tables (context prefix). SQL constraints
+-- duplicate cheap domain invariants as defence-in-depth behind the domain model.
+--
+-- Idempotent: `if not exists` throughout, so re-running against an already
+-- migrated database is a no-op.
+
+create schema if not exists assam_floods;
 
 -- ---------------------------------------------------------------------------
 -- Village Registry
 -- ---------------------------------------------------------------------------
-create table village_registry_villages (
+create table if not exists assam_floods.village_registry_villages (
   id text primary key,
   name text not null,
   district text not null,
@@ -21,9 +47,9 @@ create table village_registry_villages (
   check (affected_families <= households)
 );
 
-create table village_registry_damage_assessments (
+create table if not exists assam_floods.village_registry_damage_assessments (
   id bigint generated always as identity primary key,
-  village_id text not null references village_registry_villages (id),
+  village_id text not null references assam_floods.village_registry_villages (id),
   assessed_at timestamptz not null,
   houses_damaged integer not null check (houses_damaged >= 0),
   schools_damaged integer not null check (schools_damaged >= 0),
@@ -37,7 +63,7 @@ create table village_registry_damage_assessments (
 -- ---------------------------------------------------------------------------
 -- NGO Coordination (One Village, One NGO)
 -- ---------------------------------------------------------------------------
-create table ngo_coordination_ngos (
+create table if not exists assam_floods.ngo_coordination_ngos (
   id text primary key,
   name text not null,
   focus_areas text[] not null default '{}',
@@ -45,23 +71,25 @@ create table ngo_coordination_ngos (
   created_at timestamptz not null default now()
 );
 
-create table ngo_coordination_assignments (
+create table if not exists assam_floods.ngo_coordination_assignments (
   id text primary key,
-  village_id text not null references village_registry_villages (id),
-  ngo_id text not null references ngo_coordination_ngos (id),
+  village_id text not null references assam_floods.village_registry_villages (id),
+  ngo_id text not null references assam_floods.ngo_coordination_ngos (id),
   status text not null check (status in ('active', 'retired')),
   assigned_at timestamptz not null,
   retired_at timestamptz
 );
 
 -- The flagship invariant: at most one ACTIVE assignment per village.
-create unique index one_active_assignment_per_village
-  on ngo_coordination_assignments (village_id)
+-- An index is created in the schema of the table it indexes, so the name stays
+-- bare while the table it targets is qualified.
+create unique index if not exists one_active_assignment_per_village
+  on assam_floods.ngo_coordination_assignments (village_id)
   where status = 'active';
 
-create table ngo_coordination_committee_members (
+create table if not exists assam_floods.ngo_coordination_committee_members (
   id bigint generated always as identity primary key,
-  assignment_id text not null references ngo_coordination_assignments (id),
+  assignment_id text not null references assam_floods.ngo_coordination_assignments (id),
   role text not null check (role in ('leader', 'volunteer', 'engineer', 'teacher', 'doctor',
                                      'government_rep', 'health_worker', 'school_rep', 'womens_rep')),
   name text not null,
@@ -72,9 +100,9 @@ create table ngo_coordination_committee_members (
 -- ---------------------------------------------------------------------------
 -- Beneficiary Registry
 -- ---------------------------------------------------------------------------
-create table beneficiary_registry_beneficiaries (
+create table if not exists assam_floods.beneficiary_registry_beneficiaries (
   id text primary key,
-  village_id text not null references village_registry_villages (id),
+  village_id text not null references assam_floods.village_registry_villages (id),
   name text not null,
   category text not null check (category in ('widow', 'orphan', 'senior_citizen', 'disabled',
                                              'pregnant_woman', 'farmer', 'small_business',
@@ -82,9 +110,9 @@ create table beneficiary_registry_beneficiaries (
   created_at timestamptz not null default now()
 );
 
-create table beneficiary_registry_aid_records (
+create table if not exists assam_floods.beneficiary_registry_aid_records (
   id bigint generated always as identity primary key,
-  beneficiary_id text not null references beneficiary_registry_beneficiaries (id),
+  beneficiary_id text not null references assam_floods.beneficiary_registry_beneficiaries (id),
   aid_type text not null check (aid_type in ('food', 'shelter', 'medical', 'cash', 'livelihood', 'education')),
   provider_id text not null,
   provider_type text not null check (provider_type in ('ngo', 'government', 'donor')),
@@ -92,17 +120,17 @@ create table beneficiary_registry_aid_records (
   notes text
 );
 
-create table beneficiary_registry_follow_ups (
+create table if not exists assam_floods.beneficiary_registry_follow_ups (
   id text not null,
-  beneficiary_id text not null references beneficiary_registry_beneficiaries (id),
+  beneficiary_id text not null references assam_floods.beneficiary_registry_beneficiaries (id),
   due_at timestamptz not null,
   completed_at timestamptz,
   primary key (beneficiary_id, id)
 );
 
-create table beneficiary_registry_duplicate_flags (
+create table if not exists assam_floods.beneficiary_registry_duplicate_flags (
   id bigint generated always as identity primary key,
-  beneficiary_id text not null references beneficiary_registry_beneficiaries (id),
+  beneficiary_id text not null references assam_floods.beneficiary_registry_beneficiaries (id),
   aid_type text not null,
   provider_ids text[] not null,
   flagged_at timestamptz not null
@@ -111,9 +139,9 @@ create table beneficiary_registry_duplicate_flags (
 -- ---------------------------------------------------------------------------
 -- Fund Monitoring
 -- ---------------------------------------------------------------------------
-create table fund_monitoring_projects (
+create table if not exists assam_floods.fund_monitoring_projects (
   id text primary key,
-  village_id text not null references village_registry_villages (id),
+  village_id text not null references assam_floods.village_registry_villages (id),
   name text not null,
   category text not null check (category in ('bridge', 'school', 'water_supply', 'housing', 'road', 'health', 'other')),
   fund_source text not null check (fund_source in ('district', 'csr', 'ngo', 'donor', 'mla', 'mp', 'scheme')),
@@ -127,18 +155,18 @@ create table fund_monitoring_projects (
   check (spent_minor <= released_minor)
 );
 
-create table fund_monitoring_expenditures (
+create table if not exists assam_floods.fund_monitoring_expenditures (
   id bigint generated always as identity primary key,
-  project_id text not null references fund_monitoring_projects (id),
+  project_id text not null references assam_floods.fund_monitoring_projects (id),
   amount_minor bigint not null check (amount_minor > 0),
   description text not null,
   evidence_ref text,
   spent_at timestamptz not null
 );
 
-create table fund_monitoring_anomalies (
+create table if not exists assam_floods.fund_monitoring_anomalies (
   id bigint generated always as identity primary key,
-  project_id text not null references fund_monitoring_projects (id),
+  project_id text not null references assam_floods.fund_monitoring_projects (id),
   type text not null check (type in ('overspend_vs_comparable', 'stalled', 'duplicate_funding')),
   detected_at timestamptz not null,
   details text not null
@@ -147,9 +175,9 @@ create table fund_monitoring_anomalies (
 -- ---------------------------------------------------------------------------
 -- Issue Tracking
 -- ---------------------------------------------------------------------------
-create table issue_tracking_issues (
+create table if not exists assam_floods.issue_tracking_issues (
   id text primary key,
-  village_id text not null references village_registry_villages (id),
+  village_id text not null references assam_floods.village_registry_villages (id),
   category text not null check (category in ('infrastructure', 'water', 'education', 'health', 'food', 'corruption', 'other')),
   description text not null,
   photo_refs text[] not null default '{}',
@@ -166,7 +194,7 @@ create table issue_tracking_issues (
 -- ---------------------------------------------------------------------------
 -- Volunteer Management
 -- ---------------------------------------------------------------------------
-create table volunteer_management_volunteers (
+create table if not exists assam_floods.volunteer_management_volunteers (
   id text primary key,
   name text not null,
   skills text[] not null default '{}',
@@ -176,10 +204,10 @@ create table volunteer_management_volunteers (
   created_at timestamptz not null default now()
 );
 
-create table volunteer_management_assignments (
+create table if not exists assam_floods.volunteer_management_assignments (
   id text not null,
-  volunteer_id text not null references volunteer_management_volunteers (id),
-  village_id text not null references village_registry_villages (id),
+  volunteer_id text not null references assam_floods.volunteer_management_volunteers (id),
+  village_id text not null references assam_floods.village_registry_villages (id),
   task text not null,
   assigned_at timestamptz not null,
   hours numeric not null default 0 check (hours >= 0),
@@ -189,16 +217,16 @@ create table volunteer_management_assignments (
 -- ---------------------------------------------------------------------------
 -- Recovery Intelligence
 -- ---------------------------------------------------------------------------
-create table recovery_intelligence_indices (
-  village_id text primary key references village_registry_villages (id),
+create table if not exists assam_floods.recovery_intelligence_indices (
+  village_id text primary key references assam_floods.village_registry_villages (id),
   scores jsonb not null,
   composite integer not null check (composite between 0 and 100),
   calculated_at timestamptz not null
 );
 
-create table recovery_intelligence_history (
+create table if not exists assam_floods.recovery_intelligence_history (
   id bigint generated always as identity primary key,
-  village_id text not null references village_registry_villages (id),
+  village_id text not null references assam_floods.village_registry_villages (id),
   composite integer not null check (composite between 0 and 100),
   calculated_at timestamptz not null
 );
@@ -206,7 +234,7 @@ create table recovery_intelligence_history (
 -- ---------------------------------------------------------------------------
 -- Social Media Intelligence
 -- ---------------------------------------------------------------------------
-create table smi_signals (
+create table if not exists assam_floods.smi_signals (
   id text primary key,
   source text not null check (source in ('facebook', 'x', 'instagram', 'youtube', 'news', 'whatsapp_field_report', 'other')),
   raw_text text not null,
@@ -214,11 +242,11 @@ create table smi_signals (
   detected_at timestamptz not null
 );
 
-create table smi_alerts (
+create table if not exists assam_floods.smi_alerts (
   id text primary key,
   type text not null check (type in ('new_relief_activity', 'duplicate_aid_likely', 'no_ngo_assigned',
                                      'possible_orphan_identified', 'medical_support_needed')),
-  signal_id text not null references smi_signals (id),
+  signal_id text not null references assam_floods.smi_signals (id),
   village_name text,
   details text not null,
   raised_at timestamptz not null
@@ -227,22 +255,22 @@ create table smi_alerts (
 -- ---------------------------------------------------------------------------
 -- Development Planning
 -- ---------------------------------------------------------------------------
-create table development_planning_plans (
+create table if not exists assam_floods.development_planning_plans (
   id text primary key,
-  village_id text not null unique references village_registry_villages (id),
+  village_id text not null unique references assam_floods.village_registry_villages (id),
   created_at timestamptz not null default now()
 );
 
-create table development_planning_goals (
+create table if not exists assam_floods.development_planning_goals (
   id text not null,
-  plan_id text not null references development_planning_plans (id),
+  plan_id text not null references assam_floods.development_planning_plans (id),
   area text not null check (area in ('education', 'livelihood', 'health', 'infrastructure',
                                      'women_empowerment', 'digital_literacy')),
   description text not null,
   primary key (plan_id, id)
 );
 
-create table development_planning_milestones (
+create table if not exists assam_floods.development_planning_milestones (
   id text not null,
   plan_id text not null,
   goal_id text not null,
@@ -250,13 +278,13 @@ create table development_planning_milestones (
   target_date date not null,
   completed_at timestamptz,
   primary key (plan_id, goal_id, id),
-  foreign key (plan_id, goal_id) references development_planning_goals (plan_id, id)
+  foreign key (plan_id, goal_id) references assam_floods.development_planning_goals (plan_id, id)
 );
 
 -- ---------------------------------------------------------------------------
 -- Domain event outbox (ADR 0005 durable-delivery path)
 -- ---------------------------------------------------------------------------
-create table domain_events_outbox (
+create table if not exists assam_floods.domain_events_outbox (
   id bigint generated always as identity primary key,
   name text not null,
   occurred_at timestamptz not null,
@@ -264,4 +292,5 @@ create table domain_events_outbox (
   published_at timestamptz
 );
 
-create index domain_events_outbox_unpublished on domain_events_outbox (id) where published_at is null;
+create index if not exists domain_events_outbox_unpublished
+  on assam_floods.domain_events_outbox (id) where published_at is null;

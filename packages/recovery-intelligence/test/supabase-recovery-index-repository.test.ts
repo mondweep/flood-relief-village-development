@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { unwrap, villageId } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, unwrap, villageId } from "@afrip/shared-kernel";
 import {
   HISTORY_TABLE,
   INDICES_TABLE,
@@ -12,7 +12,7 @@ import {
 import { zeroScores } from "../src/domain/dimensions.js";
 import { RecoveryIndex } from "../src/domain/recovery-index.js";
 import { Weights } from "../src/domain/weights.js";
-import { createFakeSupabase, type FakeRow } from "./fake-supabase-client.js";
+import { DEFAULT_CLIENT_SCHEMA, createFakeSupabase, type FakeRow } from "./fake-supabase-client.js";
 
 function makeIndex(id = "village-1"): RecoveryIndex {
   const index = RecoveryIndex.create(unwrap(villageId(id)));
@@ -269,5 +269,41 @@ describe("SupabaseRecoveryIndexRepository — corrupt rows", () => {
     await expect(
       new SupabaseRecoveryIndexRepository(fake.client).findByVillage(unwrap(villageId("village-1"))),
     ).rejects.toThrow(/corrupt row in recovery_intelligence_indices \(village_id=village-1\)/);
+  });
+});
+
+/**
+ * In a shared Supabase project `public` belongs to other applications, and
+ * supabase-js sends an unqualified `.from()` there without complaint. Every
+ * query must name the AFRIP schema.
+ */
+describe("SupabaseRecoveryIndexRepository — schema targeting", () => {
+  it("resolves every query against assam_floods, never public", async () => {
+    const fake = createFakeSupabase();
+    const repository = new SupabaseRecoveryIndexRepository(fake.client);
+
+    await repository.save(makeIndex());
+    await repository.findByVillage(unwrap(villageId("village-1")));
+
+    expect(fake.calls.length).toBeGreaterThan(0);
+    expect(fake.schemasUsed()).toEqual([AFRIP_SCHEMA]);
+    expect(fake.schemasUsed()).not.toContain(DEFAULT_CLIENT_SCHEMA);
+  });
+
+  it("selects the schema explicitly instead of leaning on the client default", async () => {
+    const fake = createFakeSupabase();
+    await new SupabaseRecoveryIndexRepository(fake.client).findByVillage(
+      unwrap(villageId("village-1")),
+    );
+
+    expect(fake.schema).toHaveBeenCalledWith(AFRIP_SCHEMA);
+    expect(fake.from).not.toHaveBeenCalled();
+  });
+
+  it("honours an injected schema so a review environment can be redirected", async () => {
+    const fake = createFakeSupabase();
+    await new SupabaseRecoveryIndexRepository(fake.client, "assam_floods_review").save(makeIndex());
+
+    expect(fake.schemasUsed()).toEqual(["assam_floods_review"]);
   });
 });

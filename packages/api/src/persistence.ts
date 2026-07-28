@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { createPlatform, type Platform, type PlatformOverrides } from "@afrip/platform";
-import { err, ok, type Result } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, err, ok, type Result } from "@afrip/shared-kernel";
 import { SupabaseVillageRepository, VILLAGES_TABLE } from "@afrip/village-registry";
 import { SupabaseAssignmentRepository, SupabaseNgoRepository } from "@afrip/ngo-coordination";
 import { SupabaseRecoveryIndexRepository } from "@afrip/recovery-intelligence";
@@ -54,16 +54,17 @@ function reason(error: unknown): string {
 export function createSupabaseRuntimeFromClient(
   client: SupabaseClient,
   overrides: PlatformOverrides = {},
+  schema: string = AFRIP_SCHEMA,
 ): PlatformRuntime {
   const platform = createPlatform({
     ...overrides,
     repositories: {
-      village: new SupabaseVillageRepository(client),
-      ngo: new SupabaseNgoRepository(client),
-      assignment: new SupabaseAssignmentRepository(client),
-      recoveryIndex: new SupabaseRecoveryIndexRepository(client),
-      issue: new SupabaseIssueRepository(client),
-      beneficiary: new SupabaseBeneficiaryRepository(client),
+      village: new SupabaseVillageRepository(client, schema),
+      ngo: new SupabaseNgoRepository(client, schema),
+      assignment: new SupabaseAssignmentRepository(client, schema),
+      recoveryIndex: new SupabaseRecoveryIndexRepository(client, schema),
+      issue: new SupabaseIssueRepository(client, schema),
+      beneficiary: new SupabaseBeneficiaryRepository(client, schema),
       // An explicit per-context override still wins, so a test or a future
       // hybrid deployment can keep one context in memory.
       ...overrides.repositories,
@@ -75,11 +76,14 @@ export function createSupabaseRuntimeFromClient(
     platform,
     beneficiaryDirectory: new BeneficiaryDirectory(platform.bus),
     // A real round trip: an unreachable host, a bad key or an unmigrated schema
-    // all surface here as a not-ready Result. Readiness reports, it never
-    // throws — a probe that 500s tells the operator nothing.
+    // all surface here as a not-ready Result. It probes the SAME schema the
+    // adapters write to, so a project missing `assam_floods` (or not exposing
+    // it to PostgREST) fails readiness instead of passing on `public` and then
+    // failing on the first real write. Readiness reports, it never throws — a
+    // probe that 500s tells the operator nothing.
     checkReady: async (): Promise<Result<{ mode: PersistenceMode }>> => {
       try {
-        const result = await client.from(READY_PROBE_TABLE).select("id").limit(1);
+        const result = await client.schema(schema).from(READY_PROBE_TABLE).select("id").limit(1);
         if (result.error) {
           return err(`supabase unreachable: ${result.error.message}`);
         }
@@ -116,7 +120,9 @@ export function createSupabaseRuntime(
   // write tokens to a storage that does not exist.
   const client = createClient(url, key, { auth: { persistSession: false } });
 
-  return createSupabaseRuntimeFromClient(client, overrides);
+  // config.supabaseSchema always holds a value (SUPABASE_SCHEMA or the default),
+  // so the adapters are never left on the client's `public` default.
+  return createSupabaseRuntimeFromClient(client, overrides, config.supabaseSchema);
 }
 
 export function createPersistence(config: ApiConfig, overrides: PlatformOverrides = {}): PlatformRuntime {

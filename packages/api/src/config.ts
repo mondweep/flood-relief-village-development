@@ -1,4 +1,4 @@
-import { err, ok, type Result } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, err, ok, type Result } from "@afrip/shared-kernel";
 
 /**
  * Reported by GET /health. Kept as a literal rather than read from package.json
@@ -7,6 +7,15 @@ import { err, ok, type Result } from "@afrip/shared-kernel";
 export const API_VERSION = "0.1.0";
 
 export const DEFAULT_PORT = 8080;
+
+/**
+ * Postgres schema the AFRIP tables live in. NOT `public`: the Supabase project
+ * is shared with other applications that own `public`, so a client left on its
+ * default schema would read and write in someone else's namespace. Overridable
+ * (a review branch or a second environment may use another schema) but it
+ * always resolves to a value — there is no "unset" that falls back to `public`.
+ */
+export const DEFAULT_SUPABASE_SCHEMA = AFRIP_SCHEMA;
 
 export type PersistenceMode = "memory" | "supabase";
 
@@ -17,6 +26,8 @@ export interface ApiConfig {
   readonly persistence: PersistenceMode;
   readonly supabaseUrl: string | null;
   readonly supabaseServiceRoleKey: string | null;
+  /** Postgres schema the adapters target. Never null — see DEFAULT_SUPABASE_SCHEMA. */
+  readonly supabaseSchema: string;
   readonly version: string;
 }
 
@@ -77,6 +88,7 @@ export function loadConfig(env: Env = process.env): Result<ApiConfig> {
     persistence: persistenceResult.value,
     supabaseUrl,
     supabaseServiceRoleKey,
+    supabaseSchema: trimmed(env["SUPABASE_SCHEMA"]) ?? DEFAULT_SUPABASE_SCHEMA,
     version: API_VERSION,
   });
 }

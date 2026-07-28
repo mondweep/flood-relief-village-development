@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { API_VERSION, DEFAULT_PORT, loadConfig } from "../src/config.js";
+import { API_VERSION, DEFAULT_PORT, DEFAULT_SUPABASE_SCHEMA, loadConfig } from "../src/config.js";
 import { createPersistence, createSupabaseRuntime } from "../src/persistence.js";
 import { testConfig } from "./helpers.js";
 
@@ -15,6 +15,7 @@ describe("loadConfig", () => {
         persistence: "memory",
         supabaseUrl: null,
         supabaseServiceRoleKey: null,
+        supabaseSchema: DEFAULT_SUPABASE_SCHEMA,
         version: API_VERSION,
       },
     });
@@ -65,6 +66,61 @@ describe("loadConfig", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.persistence).toBe("supabase");
+  });
+});
+
+describe("SUPABASE_SCHEMA", () => {
+  // The default is the whole point: this Supabase project is shared, and
+  // `public` holds other applications' tables. An unset SUPABASE_SCHEMA must
+  // land on the AFRIP schema, never on the client's `public` default.
+  it("defaults to assam_floods when unset", () => {
+    const result = loadConfig({});
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.supabaseSchema).toBe("assam_floods");
+    expect(result.value.supabaseSchema).toBe(DEFAULT_SUPABASE_SCHEMA);
+    expect(result.value.supabaseSchema).not.toBe("public");
+  });
+
+  it("defaults to assam_floods in supabase mode too", () => {
+    const result = loadConfig({
+      PERSISTENCE: "supabase",
+      SUPABASE_URL: "https://x.supabase.co",
+      SUPABASE_SERVICE_ROLE_KEY: "service-role-key",
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.supabaseSchema).toBe("assam_floods");
+  });
+
+  it("reads an explicit override", () => {
+    const result = loadConfig({ SUPABASE_SCHEMA: "assam_floods_review" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.supabaseSchema).toBe("assam_floods_review");
+  });
+
+  it("trims surrounding whitespace", () => {
+    const result = loadConfig({ SUPABASE_SCHEMA: "  staging_schema  " });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.supabaseSchema).toBe("staging_schema");
+  });
+
+  // An empty or whitespace-only value is an unset value, not an instruction to
+  // fall back to `public`.
+  it("treats a blank value as unset and keeps the default", () => {
+    for (const blank of ["", "   "]) {
+      const result = loadConfig({ SUPABASE_SCHEMA: blank });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.value.supabaseSchema).toBe(DEFAULT_SUPABASE_SCHEMA);
+    }
   });
 });
 

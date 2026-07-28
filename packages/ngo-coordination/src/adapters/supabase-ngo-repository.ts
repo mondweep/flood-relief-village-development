@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { ngoId, type NgoId } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, ngoId, type NgoId } from "@afrip/shared-kernel";
 import { Ngo } from "../domain/ngo.js";
 import type { NgoRepository } from "../application/ports.js";
 import { corrupt, failed } from "./supabase-errors.js";
@@ -41,17 +41,30 @@ export function fromRow(row: NgoRow): Ngo {
 
 /** Supabase/Postgres adapter for NgoRepository (ADR 0004). */
 export class SupabaseNgoRepository implements NgoRepository {
-  constructor(private readonly client: SupabaseClient) {}
+  /**
+   * @param schema Postgres schema holding the AFRIP tables. Defaults to
+   * AFRIP_SCHEMA rather than the client's own default, which is `public` — a
+   * schema owned by other applications in this shared project.
+   */
+  constructor(
+    private readonly client: SupabaseClient,
+    private readonly schema: string = AFRIP_SCHEMA,
+  ) {}
+
+  /** Every query goes through here, so no call can forget the schema. */
+  private table(name: string) {
+    return this.client.schema(this.schema).from(name);
+  }
 
   async findById(id: NgoId): Promise<Ngo | undefined> {
-    const result = await this.client.from(NGOS_TABLE).select("*").eq("id", id).maybeSingle();
+    const result = await this.table(NGOS_TABLE).select("*").eq("id", id).maybeSingle();
     failed(NGOS_TABLE, "select", result.error);
     if (!result.data) return undefined;
     return fromRow(result.data as NgoRow);
   }
 
   async save(ngo: Ngo): Promise<void> {
-    const result = await this.client.from(NGOS_TABLE).upsert(toRow(ngo));
+    const result = await this.table(NGOS_TABLE).upsert(toRow(ngo));
     failed(NGOS_TABLE, "upsert", result.error);
   }
 }

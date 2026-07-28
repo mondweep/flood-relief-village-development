@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { unwrap, villageId } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, unwrap, villageId } from "@afrip/shared-kernel";
 import {
   DAMAGE_ASSESSMENTS_TABLE,
   SupabaseVillageRepository,
@@ -11,7 +11,7 @@ import {
   type VillageRow,
 } from "../src/adapters/supabase-village-repository.js";
 import { Village } from "../src/domain/village.js";
-import { createFakeSupabase, type FakeRow } from "./fake-supabase-client.js";
+import { DEFAULT_CLIENT_SCHEMA, createFakeSupabase, type FakeRow } from "./fake-supabase-client.js";
 
 function makeVillage(id = "village-1"): Village {
   return unwrap(
@@ -314,5 +314,45 @@ describe("SupabaseVillageRepository — corrupt rows", () => {
     await expect(
       new SupabaseVillageRepository(fake.client).findById(unwrap(villageId("village-1"))),
     ).rejects.toThrow(/corrupt row in village_registry_villages/);
+  });
+});
+
+/**
+ * The regression that matters most in a SHARED Supabase project: `public` is
+ * another application's namespace. An adapter that forgets to select a schema
+ * does not error — supabase-js quietly resolves `.from(t)` against `public` —
+ * so it would read and write over a neighbouring app's tables. These tests fail
+ * the moment any query stops naming the AFRIP schema.
+ */
+describe("SupabaseVillageRepository — schema targeting", () => {
+  it("resolves every query against assam_floods, never public", async () => {
+    const fake = createFakeSupabase();
+    const repository = new SupabaseVillageRepository(fake.client);
+
+    await repository.save(withAssessments(makeVillage()));
+    await repository.findById(unwrap(villageId("village-1")));
+    await repository.listAll();
+
+    expect(fake.calls.length).toBeGreaterThan(0);
+    expect(fake.schemasUsed()).toEqual([AFRIP_SCHEMA]);
+    expect(fake.schemasUsed()).not.toContain(DEFAULT_CLIENT_SCHEMA);
+  });
+
+  it("selects the schema explicitly instead of leaning on the client default", async () => {
+    const fake = createFakeSupabase();
+    await new SupabaseVillageRepository(fake.client).listAll();
+
+    expect(fake.schema).toHaveBeenCalledWith(AFRIP_SCHEMA);
+    expect(fake.from).not.toHaveBeenCalled();
+  });
+
+  it("honours an injected schema so a review environment can be redirected", async () => {
+    const fake = createFakeSupabase();
+    const repository = new SupabaseVillageRepository(fake.client, "assam_floods_review");
+
+    await repository.save(makeVillage());
+    await repository.listAll();
+
+    expect(fake.schemasUsed()).toEqual(["assam_floods_review"]);
   });
 });

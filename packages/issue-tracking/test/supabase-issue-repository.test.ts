@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { issueId, unwrap, villageId } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, issueId, unwrap, villageId } from "@afrip/shared-kernel";
 import {
   ISSUES_TABLE,
   SupabaseIssueRepository,
@@ -8,7 +8,7 @@ import {
   type IssueRow,
 } from "../src/adapters/supabase-issue-repository.js";
 import { Issue } from "../src/domain/issue.js";
-import { createFakeSupabase, type FakeRow } from "./fake-supabase-client.js";
+import { DEFAULT_CLIENT_SCHEMA, createFakeSupabase, type FakeRow } from "./fake-supabase-client.js";
 
 function makeIssue(id = "issue-1", village = "village-1"): Issue {
   return unwrap(
@@ -336,5 +336,42 @@ describe("SupabaseIssueRepository — corrupt rows", () => {
     await expect(new SupabaseIssueRepository(fake.client).listByStatus("open")).rejects.toThrow(
       /corrupt row in issue_tracking_issues \(id=issue-1\)/,
     );
+  });
+});
+
+/**
+ * `issue_tracking_issues` is exactly the kind of generic name another tenant of
+ * this shared project could also own. Reaching it through `public` — which is
+ * where supabase-js sends an unqualified `.from()` — is therefore not a missing
+ * table but a silently wrong one.
+ */
+describe("SupabaseIssueRepository — schema targeting", () => {
+  it("resolves every query against assam_floods, never public", async () => {
+    const fake = createFakeSupabase();
+    const repository = new SupabaseIssueRepository(fake.client);
+
+    await repository.save(resolved(makeIssue()));
+    await repository.findById(unwrap(issueId("issue-1")));
+    await repository.listByVillage(unwrap(villageId("village-1")));
+    await repository.listByStatus("open");
+
+    expect(fake.calls.length).toBeGreaterThan(0);
+    expect(fake.schemasUsed()).toEqual([AFRIP_SCHEMA]);
+    expect(fake.schemasUsed()).not.toContain(DEFAULT_CLIENT_SCHEMA);
+  });
+
+  it("selects the schema explicitly instead of leaning on the client default", async () => {
+    const fake = createFakeSupabase();
+    await new SupabaseIssueRepository(fake.client).listByStatus("open");
+
+    expect(fake.schema).toHaveBeenCalledWith(AFRIP_SCHEMA);
+    expect(fake.from).not.toHaveBeenCalled();
+  });
+
+  it("honours an injected schema so a review environment can be redirected", async () => {
+    const fake = createFakeSupabase();
+    await new SupabaseIssueRepository(fake.client, "assam_floods_review").save(makeIssue());
+
+    expect(fake.schemasUsed()).toEqual(["assam_floods_review"]);
   });
 });
