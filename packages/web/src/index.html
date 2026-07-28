@@ -1194,7 +1194,10 @@ wireForm("f-route", function (v) {
   if (!v.issueId) return { error: "issueId is required" };
   return { path: "/issues/" + encodeURIComponent(v.issueId) + "/route" };
 }, function (data, msgEl) {
-  const partyType = String(data.partyType || "").replace(/_/g, " ");
+  // Both party types the routing policy can return, spelled the way the domain
+  // spells them. Anything new falls back to the raw value, de-underscored.
+  const PARTY_LABELS = { lead_ngo: "lead NGO", government_department: "government department" };
+  const partyType = PARTY_LABELS[data.partyType] || String(data.partyType || "").replace(/_/g, " ");
   setMsg(msgEl, "ok", "Issue routed",
     "Assigned to the " + escapeHtml(partyType) + ' <code class="id">' + escapeHtml(data.party) + "</code>.");
 });
