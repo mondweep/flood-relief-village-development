@@ -1,0 +1,62 @@
+# Everything here is excluded from the build context sent to the daemon /
+# Cloud Build. Keep this tight: the context is uploaded on every deploy.
+#
+# MUST NOT be excluded (npm workspaces resolution depends on them):
+#   package.json, package-lock.json, packages/*/package.json, packages/*/src
+
+# --- dependencies & build output (rebuilt inside the image) ---
+node_modules
+**/node_modules
+dist
+**/dist
+build
+.npm
+
+# --- VCS ---
+.git
+.gitignore
+.gitattributes
+.github
+
+# --- agent / Ruflo local state (large, machine-specific, never needed) ---
+.claude
+.claude-flow
+.claude.json
+.claude*
+.agents
+.swarm
+.mcp.json
+ruvector.db
+ruvector.db-*
+
+# --- tests, coverage, fixtures: not bundled by esbuild ---
+coverage
+**/coverage
+**/test
+**/tests
+**/*.test.ts
+**/*.spec.ts
+vitest.config.ts
+
+# --- docs & prose: nothing in the build reads these ---
+*.md
+docs
+supabase/README.md
+
+# --- deployment artifacts that are not part of the container ---
+netlify
+netlify.toml
+.netlify
+scripts
+Dockerfile
+.dockerignore
+.gcloudignore
+
+# --- local env & editor noise ---
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+.vscode
+.idea

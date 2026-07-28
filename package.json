@@ -1,0 +1,27 @@
+{
+  "name": "afrip-platform",
+  "private": true,
+  "version": "0.1.0",
+  "description": "AFRIP — AI-Powered Flood Recovery & Village Development Intelligence Platform",
+  "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "build": "esbuild packages/api/src/server.ts --bundle --platform=node --target=node22 --format=esm --outfile=dist/server.js --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
+    "start": "node dist/server.js",
+    "dev": "node --experimental-strip-types --watch packages/api/src/server.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.47.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  }
+}

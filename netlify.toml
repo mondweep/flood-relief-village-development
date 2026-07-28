@@ -1,0 +1,66 @@
+# Netlify configuration — the ALTERNATIVE deployment path.
+#
+# Read docs/DEPLOYMENT.md first. Cloud Run is the recommended target for this
+# workload; Netlify is documented so the option stays open (and becomes the
+# right call once a static dashboard frontend exists and can be served from the
+# same origin as the API).
+#
+# The honest summary of what changes when you deploy here:
+#   - Netlify Functions are AWS Lambda. There is no long-lived process; the API
+#     is booted inside a Lambda container and torn down when that container is
+#     recycled.
+#   - Synchronous functions are hard-capped at 10s of wall clock (26s on some
+#     plans). Anything slower must become a background function.
+#   - The in-process InMemoryEventBus from @afrip/platform does NOT survive
+#     between invocations, and two concurrent invocations get two separate
+#     buses. PERSISTENCE=memory is therefore not merely "not durable" here, it
+#     is incoherent: each container has its own private, empty world.
+#     PERSISTENCE=supabase (wired and preferred) avoids this entirely — state
+#     lives in Postgres, not in a per-container bus.
+#   - Cold starts pay for booting the whole composition root, not just the HTTP
+#     layer.
+
+[build]
+  # `mkdir -p public` gives Netlify an empty publish directory to serve. Without
+  # it, `publish` would default to the repo root and Netlify would happily serve
+  # package.json, tsconfig.json and every .ts source file as static assets.
+  # Replace `public` with the real frontend build output when a dashboard lands.
+  command = "npm ci && npm run build && mkdir -p public"
+  publish = "public"
+
+[build.environment]
+  # Must match the esbuild --target=node22 used by `npm run build`.
+  NODE_VERSION = "22"
+  NODE_ENV = "production"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+  # dist/server.js is produced by the build command above and loaded at runtime
+  # via a dynamic import. The specifier is computed, so Netlify's bundler cannot
+  # trace it — it has to be shipped explicitly as an included file.
+  included_files = ["dist/**"]
+
+# Catch-all: every request goes to the API function. This is correct only while
+# there is no frontend. When a dashboard exists, narrow this to `/api/*` (plus
+# /health and /ready) and let the static site own the rest.
+[[redirects]]
+  from = "/*"
+  to = "/.netlify/functions/api"
+  status = 200
+  force = true
+
+# Environment variables are set in the Netlify UI (Site configuration ->
+# Environment variables) or with `netlify env:set`. They are NOT set here:
+# netlify.toml is committed, and SUPABASE_SERVICE_ROLE_KEY / API_TOKEN must
+# never be committed. See .env.example for the full list.
+#
+# Recommended (persistent):
+#   PERSISTENCE=supabase
+#   SUPABASE_URL=https://<your-project-ref>.supabase.co
+#   SUPABASE_SERVICE_ROLE_KEY=<secret>   (mark as "secret")
+#   API_TOKEN=<secret>
+#
+# Smoke test only (no durable state — see the incoherence warning above):
+#   PERSISTENCE=memory
+#   API_TOKEN=<secret>                   (mark as "secret" in the Netlify UI)

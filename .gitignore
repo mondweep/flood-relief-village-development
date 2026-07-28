@@ -1,0 +1,25 @@
+node_modules/
+dist/
+coverage/
+*.log
+
+# Local environment — real values must never be committed.
+# .env.example is the committed template; see docs/DEPLOYMENT.md.
+.env
+.env.*
+!.env.example
+
+# Netlify CLI state
+.netlify/
+
+# Ruflo / claude-flow runtime state
+ruvector.db
+.swarm/
+.claude-flow/data/
+.claude-flow/logs/
+.claude-flow/sessions/
+.claude-flow/checkpoints/
+.claude-flow/metrics/
+.claude-flow/daemon-state.json
+.claude-flow/daemon.pid
+.claude-flow/harness-active-policy.json

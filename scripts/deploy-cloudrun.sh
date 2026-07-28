@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+#
+# deploy-cloudrun.sh — build and deploy the AFRIP API to Google Cloud Run.
+#
+# Usage:
+#   ./scripts/deploy-cloudrun.sh
+#
+# Everything is parameterised via the environment; the defaults are the real
+# values for this project, so a plain invocation is the happy path:
+#
+#   PROJECT_ID   GCP project                       (default: e-vidhayak)
+#   REGION       Cloud Run region                  (default: europe-west2)
+#   SERVICE      Cloud Run service name            (default: afrip-api)
+#   PERSISTENCE  memory | supabase                 (default: supabase)
+#   SUPABASE_URL https://<ref>.supabase.co         (required when supabase)
+#   MIN_INSTANCES / MAX_INSTANCES / MEMORY / CPU / CONCURRENCY / TIMEOUT
+#
+# Secrets are NEVER passed as env vars. Set them once in this shell to seed
+# Secret Manager, then never again:
+#
+#   SUPABASE_SERVICE_ROLE_KEY=eyJ... API_TOKEN=$(openssl rand -hex 32) \
+#     ./scripts/deploy-cloudrun.sh
+#
+set -euo pipefail
+
+# Some managed/CI environments preset CLOUDSDK_AUTH_ACCESS_TOKEN to a token
+# minted for a different purpose. gcloud prefers it over the credentials from
+# `gcloud auth login`, so every call fails ACCESS_TOKEN_TYPE_UNSUPPORTED while
+# `gcloud auth list` still shows the account as active — a confusing pairing.
+# Drop it so the logged-in user's credentials are used.
+unset CLOUDSDK_AUTH_ACCESS_TOKEN
+
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+PROJECT_ID="${PROJECT_ID:-e-vidhayak}"
+REGION="${REGION:-europe-west2}"
+SERVICE="${SERVICE:-afrip-api}"
+
+# Default is `supabase`. A real deployment should persist its data; the
+# in-memory adapter loses everything on every scale-to-zero, so it is opt-in
+# for smoke tests only (PERSISTENCE=memory below). Supabase credentials are
+# checked strictly further down: missing SUPABASE_URL or the Secret Manager
+# secret is a hard failure before any Cloud Build spend.
+PERSISTENCE="${PERSISTENCE:-supabase}"
+SUPABASE_URL="${SUPABASE_URL:-}"
+
+# Sizing. See docs/DEPLOYMENT.md for why min-instances=0 is the default.
+MIN_INSTANCES="${MIN_INSTANCES:-0}"
+MAX_INSTANCES="${MAX_INSTANCES:-10}"
+MEMORY="${MEMORY:-512Mi}"
+CPU="${CPU:-1}"
+CONCURRENCY="${CONCURRENCY:-80}"
+TIMEOUT="${TIMEOUT:-300}"
+
+# Secret Manager secret names (the *names*, not the values).
+SECRET_SUPABASE_KEY="afrip-supabase-service-role-key"
+SECRET_API_TOKEN="afrip-api-token"
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# ---------------------------------------------------------------------------
+# Output helpers
+# ---------------------------------------------------------------------------
+if [[ -t 1 ]]; then
+  BOLD=$'\033[1m'; RED=$'\033[31m'; GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RESET=$'\033[0m'
+else
+  BOLD=""; RED=""; GREEN=""; YELLOW=""; RESET=""
+fi
+
+step() { printf '\n%s==> %s%s\n' "$BOLD" "$*" "$RESET"; }
+info() { printf '    %s\n' "$*"; }
+warn() { printf '%s[warn]%s %s\n' "$YELLOW" "$RESET" "$*" >&2; }
+die()  { printf '\n%s[fatal]%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------------------
+# Step 0 — preflight: gcloud present, authenticated, project reachable
+# ---------------------------------------------------------------------------
+step "Preflight checks"
+
+command -v gcloud >/dev/null 2>&1 || die \
+"gcloud CLI not found on PATH.
+  Install it: https://cloud.google.com/sdk/docs/install
+  macOS:  brew install --cask google-cloud-sdk
+  Debian: sudo apt-get install google-cloud-cli"
+
+info "gcloud: $(gcloud version --format='value(\"Google Cloud SDK\")' 2>/dev/null || echo 'unknown version')"
+
+# An "active" account is one gcloud will actually use for API calls.
+ACTIVE_ACCOUNT="$(gcloud auth list --filter=status:ACTIVE --format='value(account)' 2>/dev/null | head -n1 || true)"
+[[ -n "$ACTIVE_ACCOUNT" ]] || die \
+"No active gcloud credentials.
+  Run:  gcloud auth login mondweep@dxsure.uk
+  (CI/headless: gcloud auth activate-service-account --key-file=KEY.json)"
+info "Authenticated as: ${ACTIVE_ACCOUNT}"
+
+[[ -n "$PROJECT_ID" ]] || die "PROJECT_ID is empty. Export PROJECT_ID=e-vidhayak (or your project) and retry."
+
+# Fails loudly and specifically when the project is wrong or unreachable,
+# rather than letting a later gcloud command emit a generic 403.
+if ! gcloud projects describe "$PROJECT_ID" --format='value(projectId)' >/dev/null 2>&1; then
+  die \
+"Cannot access GCP project '${PROJECT_ID}' as ${ACTIVE_ACCOUNT}.
+  Either the project id is wrong, or this account has no access, or billing/the
+  Resource Manager API is off.
+    List what you can see:  gcloud projects list
+    Switch account:         gcloud auth login mondweep@dxsure.uk
+    Override the project:   PROJECT_ID=<other> ./scripts/deploy-cloudrun.sh"
+fi
+
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)')"
+info "Project: ${PROJECT_ID} (number ${PROJECT_NUMBER})"
+info "Region:  ${REGION}"
+info "Service: ${SERVICE}"
+
+[[ -f "${REPO_ROOT}/Dockerfile" ]] || die "No Dockerfile at ${REPO_ROOT}/Dockerfile — run this script from the repo."
+
+# Config sanity. loadConfig() in packages/api rejects PERSISTENCE=supabase
+# unless BOTH SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are present, and exits
+# non-zero — so catch it here rather than after a five-minute Cloud Build.
+if [[ "$PERSISTENCE" == "supabase" && -z "$SUPABASE_URL" ]]; then
+  die \
+"PERSISTENCE=supabase but SUPABASE_URL is unset.
+  Find it in the Supabase dashboard: Project Settings -> Data API -> Project URL.
+    export SUPABASE_URL=https://<your-project-ref>.supabase.co"
+fi
+
+# PERSISTENCE must be one of the two supported values — catch a typo here
+# rather than after a five-minute Cloud Build.
+if [[ "$PERSISTENCE" != "supabase" && "$PERSISTENCE" != "memory" ]]; then
+  die \
+"PERSISTENCE must be \"memory\" or \"supabase\" (got '${PERSISTENCE}').
+  export PERSISTENCE=supabase   # persistent, recommended
+  export PERSISTENCE=memory     # smoke tests only, see warning below"
+fi
+
+# memory mode is real, and loudly opt-in only: every scale-to-zero (the
+# default MIN_INSTANCES=0) throws away all state, and nothing is shared
+# between concurrent instances either. There is no scenario where this is
+# safe for anything but a smoke test.
+if [[ "$PERSISTENCE" == "memory" ]]; then
+  warn \
+"PERSISTENCE=memory selected. ALL DATA IS LOST on every scale-to-zero and is
+         NOT shared between concurrent instances. This mode exists for smoke
+         tests only — never point real NGO or beneficiary data at it.
+         For a real deployment: PERSISTENCE=supabase (the default)."
+fi
+
+# ---------------------------------------------------------------------------
+# Step 1 — pin the active project so every later command is unambiguous
+# ---------------------------------------------------------------------------
+step "Setting active project"
+gcloud config set project "$PROJECT_ID" --quiet
+gcloud config set run/region "$REGION" --quiet
+
+# ---------------------------------------------------------------------------
+# Step 2 — enable the APIs this deploy touches
+# ---------------------------------------------------------------------------
+# run             — the service itself
+# cloudbuild      — builds the container from source
+# artifactregistry— stores the built image
+# secretmanager   — holds the service-role key and API token
+step "Enabling required APIs (idempotent, may take a minute on first run)"
+gcloud services enable \
+  run.googleapis.com \
+  cloudbuild.googleapis.com \
+  artifactregistry.googleapis.com \
+  secretmanager.googleapis.com \
+  --project "$PROJECT_ID"
+
+# ---------------------------------------------------------------------------
+# Step 3 — Secret Manager
+# ---------------------------------------------------------------------------
+# Rule: secrets go through Secret Manager and are mounted with --set-secrets.
+# They are NEVER put in --set-env-vars, because env vars are readable by anyone
+# with run.services.get on the project and are printed in `gcloud run services
+# describe`, in the Cloud Console, and in deployment logs.
+#
+# ensure_secret <secret-name> <value-or-empty>
+#   - creates the secret if absent
+#   - adds a new version only when a value was supplied in this invocation
+#   - returns 1 (not fatal) if the secret does not exist and no value was given
+ensure_secret() {
+  local name="$1" value="${2:-}"
+  local exists=0
+  # NB: written as an if-block, not `cmd && exists=1`. Under `set -e` a bare
+  # `a && b` list that fails aborts the whole script.
+  if gcloud secrets describe "$name" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    exists=1
+  fi
+
+  if [[ "$exists" -eq 0 ]]; then
+    if [[ -z "$value" ]]; then
+      return 1
+    fi
+    info "Creating secret '${name}'"
+    gcloud secrets create "$name" \
+      --project "$PROJECT_ID" \
+      --replication-policy=automatic \
+      --quiet
+  fi
+
+  if [[ -n "$value" ]]; then
+    info "Adding new version to secret '${name}'"
+    # printf %s (no trailing newline) — a stray \n in a bearer token or JWT is a
+    # classic source of "works locally, 401 in prod".
+    printf '%s' "$value" | gcloud secrets versions add "$name" \
+      --project "$PROJECT_ID" \
+      --data-file=- \
+      --quiet >/dev/null
+  else
+    info "Secret '${name}' already exists; keeping current version"
+  fi
+  return 0
+}
+
+step "Reconciling Secret Manager secrets"
+
+# Populated with `ENV_NAME=secret-name:version` pairs for --set-secrets.
+# SECRET_COUNT is tracked separately so no `${arr[@]}` expansion of a possibly
+# empty array is needed (that is an unbound-variable error under `set -u` on
+# bash 3.2, which is still what macOS ships).
+SECRET_FLAGS=()
+SECRET_COUNT=0
+
+if ensure_secret "$SECRET_SUPABASE_KEY" "${SUPABASE_SERVICE_ROLE_KEY:-}"; then
+  SECRET_FLAGS+=("SUPABASE_SERVICE_ROLE_KEY=${SECRET_SUPABASE_KEY}:latest")
+  SECRET_COUNT=$((SECRET_COUNT + 1))
+else
+  if [[ "$PERSISTENCE" == "supabase" ]]; then
+    die \
+"PERSISTENCE=supabase but secret '${SECRET_SUPABASE_KEY}' does not exist and no
+value was supplied. Seed it once:
+
+  SUPABASE_SERVICE_ROLE_KEY='eyJ...' ./scripts/deploy-cloudrun.sh
+
+or create it by hand:
+
+  printf '%s' 'eyJ...' | gcloud secrets create ${SECRET_SUPABASE_KEY} \\
+    --project ${PROJECT_ID} --replication-policy=automatic --data-file=-
+
+The service-role key is in the Supabase dashboard under
+Project Settings -> API keys -> service_role. It bypasses RLS: server-side only."
+  else
+    warn "No Supabase secret configured — fine for PERSISTENCE=memory."
+  fi
+fi
+
+if ensure_secret "$SECRET_API_TOKEN" "${API_TOKEN:-}"; then
+  SECRET_FLAGS+=("API_TOKEN=${SECRET_API_TOKEN}:latest")
+  SECRET_COUNT=$((SECRET_COUNT + 1))
+else
+  warn \
+"Secret '${SECRET_API_TOKEN}' does not exist and no API_TOKEN was supplied.
+         The service will deploy with write endpoints UNAUTHENTICATED.
+         Generate and seed one before real use:
+           API_TOKEN=\$(openssl rand -hex 32) ./scripts/deploy-cloudrun.sh"
+fi
+
+# ---------------------------------------------------------------------------
+# Step 4 — let the runtime service account read those secrets
+# ---------------------------------------------------------------------------
+# Without secretAccessor the revision fails to start with a mount error rather
+# than anything obviously permission-shaped, so grant it explicitly.
+if [[ "$SECRET_COUNT" -gt 0 ]]; then
+  step "Granting Secret Manager access to the Cloud Run runtime service account"
+  RUNTIME_SA="${SERVICE_ACCOUNT:-${PROJECT_NUMBER}-compute@developer.gserviceaccount.com}"
+  info "Runtime service account: ${RUNTIME_SA}"
+  for flag in "${SECRET_FLAGS[@]}"; do
+    secret_name="${flag#*=}"; secret_name="${secret_name%%:*}"
+    gcloud secrets add-iam-policy-binding "$secret_name" \
+      --project "$PROJECT_ID" \
+      --member="serviceAccount:${RUNTIME_SA}" \
+      --role="roles/secretmanager.secretAccessor" \
+      --condition=None \
+      --quiet >/dev/null
+    info "  ${secret_name}: secretAccessor granted"
+  done
+fi
+
+# ---------------------------------------------------------------------------
+# Step 5 — build from source and deploy
+# ---------------------------------------------------------------------------
+# --source . makes Cloud Build build the repo Dockerfile and push the image to
+# Artifact Registry, then deploys the resulting image as a new revision.
+#
+# NOTE on --port: Cloud Run injects PORT into the container and expects the app
+# to bind 0.0.0.0:$PORT. packages/api reads `process.env.PORT ?? 8080`, so the
+# contract holds; --port 8080 just keeps the declared container port aligned
+# with the Dockerfile's EXPOSE.
+step "Building and deploying (Cloud Build; first run takes a few minutes)"
+
+ENV_VARS="NODE_ENV=production,PERSISTENCE=${PERSISTENCE}"
+if [[ -n "$SUPABASE_URL" ]]; then
+  ENV_VARS="${ENV_VARS},SUPABASE_URL=${SUPABASE_URL}"
+fi
+
+DEPLOY_ARGS=(
+  run deploy "$SERVICE"
+  --source "$REPO_ROOT"
+  --project "$PROJECT_ID"
+  --region "$REGION"
+  --platform managed
+  --port 8080
+  --allow-unauthenticated          # app-level bearer auth; /health must stay open
+  --min-instances "$MIN_INSTANCES"
+  --max-instances "$MAX_INSTANCES"
+  --memory "$MEMORY"
+  --cpu "$CPU"
+  --concurrency "$CONCURRENCY"
+  --timeout "$TIMEOUT"
+  --set-env-vars "$ENV_VARS"
+  --quiet
+)
+
+if [[ "$SECRET_COUNT" -gt 0 ]]; then
+  DEPLOY_ARGS+=(--set-secrets "$(IFS=,; echo "${SECRET_FLAGS[*]}")")
+fi
+
+if [[ -n "${SERVICE_ACCOUNT:-}" ]]; then
+  DEPLOY_ARGS+=(--service-account "$SERVICE_ACCOUNT")
+fi
+
+gcloud "${DEPLOY_ARGS[@]}"
+
+# ---------------------------------------------------------------------------
+# Step 6 — report and smoke test
+# ---------------------------------------------------------------------------
+step "Deployed"
+
+SERVICE_URL="$(gcloud run services describe "$SERVICE" \
+  --project "$PROJECT_ID" --region "$REGION" \
+  --format='value(status.url)')"
+REVISION="$(gcloud run services describe "$SERVICE" \
+  --project "$PROJECT_ID" --region "$REGION" \
+  --format='value(status.latestReadyRevisionName)')"
+
+printf '    %sService URL:%s %s\n' "$GREEN" "$RESET" "$SERVICE_URL"
+printf '    Revision:    %s\n' "$REVISION"
+
+step "Smoke test: GET ${SERVICE_URL}/health"
+if command -v curl >/dev/null 2>&1; then
+  # -f so a 5xx makes this visible; the || block keeps the script's exit code
+  # meaningful without hiding the failure.
+  if curl -fsS --max-time 30 "${SERVICE_URL}/health"; then
+    printf '\n    %shealth OK%s\n' "$GREEN" "$RESET"
+  else
+    printf '\n'
+    die \
+"/health did not return 2xx.
+  Inspect startup logs:
+    gcloud run services logs read ${SERVICE} --project ${PROJECT_ID} --region ${REGION} --limit 100
+  Common causes: the container did not bind 0.0.0.0:\$PORT within the startup
+  timeout, or a secret failed to mount. See docs/DEPLOYMENT.md#troubleshooting."
+  fi
+else
+  warn "curl not installed; skipping smoke test. Check manually: ${SERVICE_URL}/health"
+fi
+
+cat <<EOF
+
+Next:
+  Readiness :  curl -fsS ${SERVICE_URL}/ready
+  Public API:  curl -fsS ${SERVICE_URL}/public/villages
+  Authed call: curl -fsS -H "Authorization: Bearer \$API_TOKEN" ${SERVICE_URL}/villages
+  Live logs :  gcloud run services logs tail ${SERVICE} --project ${PROJECT_ID} --region ${REGION}
+EOF
