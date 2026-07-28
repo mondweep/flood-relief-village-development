@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+*.log
+.claude-flow/logs/
+.claude-flow/data/
+.claude-flow/sessions/
+.env
+.env.*
