@@ -7,18 +7,37 @@ import { unauthorized, type HttpResponse } from "./http-result.js";
  *
  * `/health` and `/ready` are Cloud Run's probes — they must answer before any
  * credential is configured. `/public/*` is the transparency projection, which is
- * public by product design and carries no beneficiary PII.
+ * public by product design and carries no beneficiary PII. `/` and `/index.html`
+ * serve the dashboard shell: it is the surface a human uses to *obtain* access,
+ * so gating it behind the very token it exists to collect would be circular.
+ * The document itself is static markup and reads no data server-side — every
+ * figure it displays comes from a subsequent request that is gated on its own.
  *
  * TODO(auth): this shared static token is a deliberate stopgap for the MVP. The
  * production path per docs/PRD.md is Supabase Auth with RLS-scoped JWTs, so that
  * an NGO field worker, a district officer and a citizen each see only the rows
  * their role permits. Replace this module — not extend it — when that lands.
  */
-const PUBLIC_EXACT_PATHS: ReadonlySet<string> = new Set(["/health", "/ready"]);
+const PUBLIC_EXACT_PATHS: ReadonlySet<string> = new Set([
+  "/",
+  "/index.html",
+  "/health",
+  "/ready",
+]);
 const PUBLIC_PREFIX = "/public/";
 
 export function isPublicPath(path: string): boolean {
-  return PUBLIC_EXACT_PATHS.has(path) || path === "/public" || path.startsWith(PUBLIC_PREFIX);
+  // Normalise the way the router does (`//` and a trailing slash are the same
+  // path to it), so the gate cannot disagree with what actually gets routed.
+  const normalised = normalise(path);
+  return (
+    PUBLIC_EXACT_PATHS.has(normalised) || normalised === "/public" || normalised.startsWith(PUBLIC_PREFIX)
+  );
+}
+
+function normalise(path: string): string {
+  const segments = path.split("/").filter((segment) => segment.length > 0);
+  return segments.length === 0 ? "/" : `/${segments.join("/")}`;
 }
 
 function bearerToken(header: string | undefined): string | null {

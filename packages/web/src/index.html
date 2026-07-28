@@ -1,0 +1,1212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="description" content="AFRIP — Assam Flood Recovery Intelligence Platform. Public recovery transparency and field operations.">
+<title>AFRIP — Flood Recovery Dashboard</title>
+<!--
+  AFRIP dashboard — single self-contained file. No build step, no framework, no CDN.
+  Everything is served from the same origin as the API, so every request uses a
+  relative path (/health, /public/villages, ...).
+
+  Layout of this file:
+    1. Styles          — tokens, layout, components, dark mode, reduced motion
+    2. Markup          — public zone (no auth) then operations zone (bearer token)
+    3. Script §1       — helpers (escaping, DOM, fetch wrapper)
+    4. Script §2       — public zone rendering
+    5. Script §3       — token session + operations forms
+-->
+<style>
+/* ------------------------------------------------------------------ *
+ * 1. Design tokens
+ * Restrained, low-chroma palette. This is disaster-recovery tooling:
+ * colour is used to classify, never to decorate.
+ * ------------------------------------------------------------------ */
+:root {
+  --bg: #f5f6f4;  --surface: #ffffff;  --surface-2: #eeefec;
+  --ink: #1b1d20; --ink-muted: #5a6069;
+  --line: #dcdedb; --line-strong: #c3c7c2;
+  --accent: #2f5d62; --accent-ink: #ffffff; --ok: #2c6b4f;
+  --warn-bg: #fdf4e3; --warn-line: #d9a441; --warn-ink: #6b4a09;
+  --danger: #a3302c; --danger-bg: #fbeceb;
+  --sev-minor-ink: #1f5f4a;      --sev-minor-bg: #e3f0ea;
+  --sev-moderate-ink: #6f5209;   --sev-moderate-bg: #f7eed8;
+  --sev-severe-ink: #8a4318;     --sev-severe-bg: #f9e8dd;
+  --sev-critical-ink: #8c2420;   --sev-critical-bg: #f8e2e1;
+
+  --radius: 10px;
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #15171a; --surface: #1c1f23; --surface-2: #23272c;
+    --ink: #e7e9ea; --ink-muted: #a0a7b0;
+    --line: #2c3138; --line-strong: #3b424a;
+    --accent: #8ab8b6; --accent-ink: #10201f; --ok: #74b892;
+    --warn-bg: #33290f; --warn-line: #c79a3d; --warn-ink: #f0dcaa;
+    --danger: #e79b96; --danger-bg: #3a1e1d;
+    --sev-minor-ink: #93cbb2;      --sev-minor-bg: #1d2f28;
+    --sev-moderate-ink: #dcc07f;   --sev-moderate-bg: #322a15;
+    --sev-severe-ink: #e5a97f;     --sev-severe-bg: #35251a;
+    --sev-critical-ink: #eda19c;   --sev-critical-bg: #37201f;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; font-family: var(--font); font-size: 16px; line-height: 1.5;
+  color: var(--ink); background: var(--bg);
+  overflow-x: hidden;            /* the page itself never scrolls sideways */
+}
+h1, h2, h3 { line-height: 1.25; margin: 0; font-weight: 600; }
+p { margin: 0; }
+a { color: inherit; }
+
+/* Visible focus everywhere — keyboard users are first-class. */
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+.skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 20;
+  background: var(--accent); color: var(--accent-ink); padding: var(--s3);
+}
+.skip-link:focus { left: 0; }
+
+.wrap { width: 100%; max-width: 900px; margin: 0 auto; padding: 0 var(--s4); }
+
+/* ------------------------------------------------------------------ *
+ * Header + connection indicator
+ * ------------------------------------------------------------------ */
+.site-header {
+  background: var(--surface); border-bottom: 1px solid var(--line);
+  padding: var(--s4) 0; position: sticky; top: 0; z-index: 10;
+}
+.header-inner { display: flex; flex-wrap: wrap; gap: var(--s3); align-items: baseline; justify-content: space-between; }
+.brand { font-size: 1.25rem; letter-spacing: 0.01em; }
+.brand span { display: block; font-size: 0.8125rem; font-weight: 400; color: var(--ink-muted); letter-spacing: 0; }
+.conn {
+  display: inline-flex; align-items: center; gap: var(--s2); font-size: 0.8125rem;
+  color: var(--ink-muted); background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 999px; padding: 6px var(--s3);
+}
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line-strong); flex: none; }
+.dot.up { background: var(--ok); }
+.dot.down { background: var(--danger); }
+.dot.pending { background: var(--warn-line); }
+
+/* ------------------------------------------------------------------ *
+ * Banners (readiness, network failure)
+ * ------------------------------------------------------------------ */
+.banners { display: grid; gap: var(--s3); }
+.banners:not(:empty) { margin-top: var(--s4); }
+.banner {
+  border: 1px solid var(--line-strong); border-left-width: 4px; border-radius: var(--radius);
+  background: var(--surface); padding: var(--s3) var(--s4);
+  display: flex; flex-wrap: wrap; gap: var(--s3); align-items: center; justify-content: space-between;
+}
+.banner p { font-size: 0.9375rem; }
+.banner strong { display: block; }
+.banner.is-danger { border-left-color: var(--danger); background: var(--danger-bg); }
+.banner.is-warn { border-left-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
+
+/* ------------------------------------------------------------------ *
+ * Sections, cards
+ * ------------------------------------------------------------------ */
+main { padding-bottom: var(--s7); }
+.zone { margin-top: var(--s6); }
+.zone-head { border-top: 2px solid var(--ink); padding-top: var(--s3); margin-bottom: var(--s4); }
+.zone-head h2 { font-size: 1.0625rem; }
+.zone-head p { font-size: 0.875rem; color: var(--ink-muted); margin-top: var(--s1); }
+.section { margin-top: var(--s5); }
+.section > h3 {
+  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--ink-muted); margin-bottom: var(--s3);
+}
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s4); }
+
+/* Summary tiles — 2 up on a phone, 4 up when there is room. */
+.tiles { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); }
+@media (min-width: 620px) { .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.tile { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: var(--s3) var(--s4); }
+.tile dt { font-size: 0.75rem; color: var(--ink-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.tile dd { margin: var(--s1) 0 0; font-size: 1.5rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.tile dd small { font-size: 0.8125rem; font-weight: 400; color: var(--ink-muted); }
+
+/* Severity breakdown row */
+.sev-row { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s3); }
+
+/* Severity chips: colour + word, never colour alone. */
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; white-space: nowrap;
+  font-size: 0.8125rem; font-weight: 600; padding: 4px 10px;
+  border: 1px solid transparent; border-radius: 999px;
+}
+.chip .swatch { width: 8px; height: 8px; border-radius: 2px; background: currentColor; flex: none; }
+.chip .count { font-variant-numeric: tabular-nums; font-weight: 500; opacity: 0.85; }
+.chip[data-severity="minor"]    { color: var(--sev-minor-ink);    background: var(--sev-minor-bg);    border-color: var(--sev-minor-ink); }
+.chip[data-severity="moderate"] { color: var(--sev-moderate-ink); background: var(--sev-moderate-bg); border-color: var(--sev-moderate-ink); }
+.chip[data-severity="severe"]   { color: var(--sev-severe-ink);   background: var(--sev-severe-bg);   border-color: var(--sev-severe-ink); }
+.chip[data-severity="critical"] { color: var(--sev-critical-ink); background: var(--sev-critical-bg); border-color: var(--sev-critical-ink); }
+.chip[data-severity="unknown"]  { color: var(--ink-muted); background: var(--surface-2); border-color: var(--line-strong); }
+
+/* Village list */
+.village-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--s2); }
+.village {
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: var(--s3) var(--s4); display: grid; gap: var(--s2);
+}
+.village-top { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: baseline; justify-content: space-between; }
+.village-name { font-weight: 600; }
+.village-meta { font-size: 0.8125rem; color: var(--ink-muted); }
+.village-id { font-family: var(--mono); font-size: 0.75rem; color: var(--ink-muted); }
+.recovery { display: flex; align-items: center; gap: var(--s3); }
+.bar { flex: 1 1 auto; height: 8px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; min-width: 80px; }
+.bar > i { display: block; height: 100%; background: var(--accent); }
+.recovery-val { font-size: 0.8125rem; font-variant-numeric: tabular-nums; color: var(--ink-muted); min-width: 8.5ch; text-align: right; }
+
+/* Fund table — scrolls inside itself, never widens the page. */
+.table-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 0.875rem; }
+th, td { text-align: left; padding: var(--s2) var(--s3); border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); font-weight: 600; }
+tbody tr:last-child td { border-bottom: 0; }
+td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* Empty / placeholder states are designed, not blank. */
+.empty {
+  border: 1px dashed var(--line-strong); border-radius: var(--radius); background: var(--surface);
+  padding: var(--s5) var(--s4); text-align: center; color: var(--ink-muted);
+}
+.empty strong { display: block; color: var(--ink); font-size: 0.9375rem; }
+.empty p { font-size: 0.875rem; margin-top: var(--s1); }
+
+/* ------------------------------------------------------------------ *
+ * Forms & buttons — 44px minimum tap targets throughout
+ * ------------------------------------------------------------------ */
+.field { display: grid; gap: 6px; margin-bottom: var(--s3); }
+.field > label { font-size: 0.875rem; font-weight: 500; }
+.hint { font-size: 0.75rem; color: var(--ink-muted); }
+input, select, textarea {
+  font: inherit; color: var(--ink); background: var(--surface); width: 100%;
+  border: 1px solid var(--line-strong); border-radius: 8px; padding: 11px var(--s3); min-height: 44px;
+}
+textarea { min-height: 88px; resize: vertical; }
+input:disabled, select:disabled, textarea:disabled { background: var(--surface-2); color: var(--ink-muted); }
+.grid-2 { display: grid; gap: var(--s3); grid-template-columns: minmax(0, 1fr); }
+@media (min-width: 560px) { .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); } .grid-2 .field { margin-bottom: 0; } }
+
+button {
+  font: inherit; font-weight: 600; min-height: 44px; padding: 11px var(--s4); cursor: pointer;
+  border-radius: 8px; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink);
+}
+button.secondary { background: var(--surface); color: var(--ink); border-color: var(--line-strong); }
+button[disabled] { opacity: 0.6; cursor: progress; }
+.actions { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center; margin-top: var(--s3); }
+
+/* Per-form message region (validation, success, duplicate warning) */
+.msg { margin-top: var(--s3); font-size: 0.875rem; border-radius: 8px; }
+.msg:empty { display: none; }
+.msg > div { padding: var(--s3); border: 1px solid var(--line-strong); border-left-width: 4px; border-radius: 8px; }
+.msg .m-error { border-left-color: var(--danger); background: var(--danger-bg); color: var(--ink); }
+.msg .m-ok { border-left-color: var(--ok); background: var(--surface-2); }
+.msg .m-dup { border-left-color: var(--warn-line); background: var(--warn-bg); color: var(--warn-ink); }
+.msg strong { display: block; margin-bottom: 2px; }
+.msg code, .id { font-family: var(--mono); font-size: 0.8125rem; word-break: break-all; }
+
+/* Operations workflows as native disclosure widgets */
+details.work { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: var(--s2); }
+details.work > summary {
+  list-style: none; cursor: pointer; padding: var(--s3) var(--s4); min-height: 44px; display: flex;
+  align-items: center; gap: var(--s3); font-weight: 600; font-size: 0.9375rem;
+}
+details.work > summary::-webkit-details-marker { display: none; }
+details.work > summary .caret { margin-left: auto; color: var(--ink-muted); transition: transform 150ms ease; }
+details.work[open] > summary .caret { transform: rotate(90deg); }
+details.work[open] > summary { border-bottom: 1px solid var(--line); }
+.work-body { padding: var(--s4); }
+.work-note { font-size: 0.8125rem; color: var(--ink-muted); margin-bottom: var(--s3); }
+
+/* Locked operations zone */
+.locked { display: grid; gap: var(--s3); }
+.locked .cmd {
+  display: block; font-family: var(--mono); font-size: 0.75rem; background: var(--surface-2);
+  border: 1px solid var(--line); border-radius: 8px; padding: var(--s3); overflow-x: auto; white-space: pre;
+}
+.token-row { display: grid; gap: var(--s3); }
+@media (min-width: 560px) { .token-row { grid-template-columns: 1fr auto; align-items: end; } }
+
+.hidden { display: none !important; }
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; border: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+footer { margin-top: var(--s6); padding-top: var(--s4); border-top: 1px solid var(--line); font-size: 0.8125rem; color: var(--ink-muted); }
+
+/* Honour the OS preference for reduced motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
+}
+</style>
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+
+<header class="site-header">
+  <div class="wrap header-inner">
+    <h1 class="brand">AFRIP <span>Flood Recovery Intelligence Platform</span></h1>
+    <p class="conn" id="conn" aria-live="polite">
+      <span class="dot pending" id="conn-dot" aria-hidden="true"></span>
+      <span id="conn-text">Checking service…</span>
+    </p>
+  </div>
+</header>
+
+<main id="main" class="wrap">
+  <!-- Readiness / network banners land here -->
+  <div class="banners" id="banners" role="region" aria-label="Service notices" aria-live="polite"></div>
+
+  <!-- ================================================================
+       ZONE 1 — PUBLIC. No credential required; loads on page open.
+       ================================================================ -->
+  <section class="zone" aria-labelledby="public-h">
+    <div class="zone-head">
+      <h2 id="public-h">Public transparency</h2>
+      <p>Open recovery data. No beneficiary details are published here.</p>
+    </div>
+
+    <section class="section" aria-labelledby="summary-h">
+      <h3 id="summary-h">Summary</h3>
+      <dl class="tiles" id="tiles">
+        <div class="tile"><dt>Villages</dt><dd id="t-villages">—</dd></div>
+        <div class="tile"><dt>Critical or severe</dt><dd id="t-acute">—</dd></div>
+        <div class="tile"><dt>With a lead NGO</dt><dd id="t-ngo">—</dd></div>
+        <div class="tile"><dt>Avg. recovery</dt><dd id="t-recovery">—</dd></div>
+      </dl>
+      <div class="sev-row" id="sev-row"></div>
+    </section>
+
+    <section class="section" aria-labelledby="villages-h">
+      <h3 id="villages-h">Villages by severity</h3>
+      <div id="villages-out" aria-live="polite" aria-busy="true">
+        <p class="empty">Loading villages…</p>
+      </div>
+    </section>
+
+    <section class="section" aria-labelledby="funds-h">
+      <h3 id="funds-h">Fund transparency</h3>
+      <div id="funds-out" aria-live="polite">
+        <p class="empty">Loading funded projects…</p>
+      </div>
+    </section>
+  </section>
+
+  <!-- ================================================================
+       ZONE 2 — OPERATIONS. Requires the bearer token.
+       ================================================================ -->
+  <section class="zone" aria-labelledby="ops-h">
+    <div class="zone-head">
+      <h2 id="ops-h">Operations</h2>
+      <p>Field and district workflows. Requires the API token.</p>
+    </div>
+
+    <!-- Token entry / session -->
+    <div class="card" id="token-card">
+      <div class="locked" id="locked-note">
+        <p><strong>Locked.</strong> Registration, assignment, aid and issue workflows need the API bearer token.</p>
+        <p class="hint">Operators can read the current token with:</p>
+        <code class="cmd">gcloud secrets versions access latest --secret=afrip-api-token --project=e-vidhayak</code>
+        <p class="hint">The token is held in <code>sessionStorage</code> for this tab only. It is never written to
+        the URL, never stored in <code>localStorage</code>, and is cleared when you disconnect or close the tab.</p>
+      </div>
+
+      <form id="token-form" class="token-row" autocomplete="off" novalidate>
+        <div class="field" style="margin-bottom:0">
+          <label for="token-input">API token</label>
+          <input id="token-input" name="token" type="password" autocomplete="current-password"
+                 spellcheck="false" placeholder="Paste the bearer token">
+        </div>
+        <div class="actions" style="margin-top:0">
+          <button type="submit" id="token-submit">Connect</button>
+        </div>
+      </form>
+
+      <div id="connected-note" class="hidden">
+        <div class="actions" style="margin-top:0">
+          <p><span class="dot up" aria-hidden="true"></span> <strong>Connected.</strong>
+             <span class="hint">Token held for this tab only.</span></p>
+          <button type="button" class="secondary" id="disconnect">Disconnect</button>
+        </div>
+      </div>
+
+      <div class="msg" id="token-msg" role="status" aria-live="polite"></div>
+    </div>
+
+    <!-- Workflows, revealed once a token is present -->
+    <div class="section hidden" id="workflows" aria-label="Operational workflows">
+
+      <details class="work">
+        <summary>Register a village<span class="caret" aria-hidden="true">›</span></summary>
+        <div class="work-body">
+          <p class="work-note">The registry rejects an assessment where affected families exceed households —
+            that rejection is shown here verbatim.</p>
+          <form id="f-village" novalidate>
+            <div class="field"><label for="v-name">Village name</label><input id="v-name" name="name" required></div>
+            <div class="grid-2">
+              <div class="field"><label for="v-district">District</label><input id="v-district" name="district" required></div>
+              <div class="field"><label for="v-state">State</label><input id="v-state" name="state" required></div>
+            </div>
+            <div class="grid-2">
+              <div class="field"><label for="v-lat">Latitude</label><input id="v-lat" name="lat" type="number" step="any" inputmode="decimal" required></div>
+              <div class="field"><label for="v-lng">Longitude</label><input id="v-lng" name="lng" type="number" step="any" inputmode="decimal" required></div>
+            </div>
+            <div class="grid-2">
+              <div class="field"><label for="v-pop">Population</label><input id="v-pop" name="population" type="number" min="0" inputmode="numeric" required></div>
+              <div class="field"><label for="v-hh">Households</label><input id="v-hh" name="households" type="number" min="0" inputmode="numeric" required></div>
+            </div>
+            <div class="grid-2">
+              <div class="field"><label for="v-af">Affected families</label><input id="v-af" name="affectedFamilies" type="number" min="0" inputmode="numeric" required></div>
+              <div class="field"><label for="v-sev">Severity</label>
+                <select id="v-sev" name="severity">
+                  <option value="minor">minor</option><option value="moderate">moderate</option>
+                  <option value="severe" selected>severe</option><option value="critical">critical</option>
+                </select>
+              </div>
+            </div>
+            <div class="actions"><button type="submit">Register village</button></div>
+            <div class="msg" role="status" aria-live="polite"></div>
+          </form>
+        </div>
+      </details>
+
+      <details class="work">
+        <summary>Register an NGO<span class="caret" aria-hidden="true">›</span></summary>
+        <div class="work-body">
+          <form id="f-ngo" novalidate>
+            <div class="field"><label for="n-name">NGO name</label><input id="n-name" name="name" required></div>
+            <div class="field">
+              <label for="n-focus">Focus areas</label>
+              <input id="n-focus" name="focusAreas" placeholder="water, shelter, health" aria-describedby="n-focus-h">
+              <span class="hint" id="n-focus-h">Comma separated.</span>
+            </div>
+            <div class="field">
+              <label for="n-cap">Capacity</label>
+              <input id="n-cap" name="capacity" type="number" min="1" inputmode="numeric" value="1" aria-describedby="n-cap-h">
+              <span class="hint" id="n-cap-h">Maximum villages this NGO may lead at once.</span>
+            </div>
+            <div class="actions"><button type="submit">Register NGO</button></div>
+            <div class="msg" role="status" aria-live="polite"></div>
+          </form>
+        </div>
+      </details>
+
+      <details class="work">
+        <summary>Assign an NGO to a village<span class="caret" aria-hidden="true">›</span></summary>
+        <div class="work-body">
+          <p class="work-note">One village, one lead NGO. Assigning a new NGO retires the incumbent assignment;
+            the history is kept, never deleted.</p>
+          <form id="f-assign" novalidate>
+            <div class="field">
+              <label for="a-village">Village ID</label>
+              <input id="a-village" name="villageId" list="dl-villages" placeholder="village-1" required>
+            </div>
+            <div class="field">
+              <label for="a-ngo">NGO ID</label>
+              <input id="a-ngo" name="ngoId" list="dl-ngos" placeholder="ngo-1" required>
+            </div>
+            <div class="actions"><button type="submit">Assign lead NGO</button></div>
+            <div class="msg" role="status" aria-live="polite"></div>
+          </form>
+        </div>
+      </details>
+
+      <details class="work">
+        <summary>Register a beneficiary<span class="caret" aria-hidden="true">›</span></summary>
+        <div class="work-body">
+          <form id="f-beneficiary" novalidate>
+            <div class="field">
+              <label for="b-village">Village ID</label>
+              <input id="b-village" name="villageId" list="dl-villages" placeholder="village-1" required>
+            </div>
+            <div class="field"><label for="b-name">Name</label><input id="b-name" name="name" required></div>
+            <div class="field">
+              <label for="b-cat">Vulnerability category</label>
+              <select id="b-cat" name="category">
+                <option value="widow">widow</option><option value="orphan">orphan</option>
+                <option value="senior_citizen">senior_citizen</option><option value="disabled">disabled</option>
+                <option value="pregnant_woman">pregnant_woman</option><option value="farmer">farmer</option>
+                <option value="small_business">small_business</option><option value="daily_wage_worker">daily_wage_worker</option>
+                <option value="student">student</option>
+              </select>
+            </div>
+            <div class="actions"><button type="submit">Register beneficiary</button></div>
+            <div class="msg" role="status" aria-live="polite"></div>
+          </form>
+        </div>
+      </details>
+
+      <details class="work">
+        <summary>Record aid<span class="caret" aria-hidden="true">›</span></summary>
+        <div class="work-body">
+          <p class="work-note">Aid is always recorded, never silently rejected. If the same aid type reached this
+            beneficiary from a different provider inside the 14-day window, the delivery is flagged as a likely duplicate.</p>
+          <form id="f-aid" novalidate>
+            <div class="field">
+              <label for="d-ben">Beneficiary ID</label>
+              <input id="d-ben" name="beneficiaryId" list="dl-beneficiaries" placeholder="beneficiary-1" required>
+            </div>
+            <div class="grid-2">
+              <div class="field"><label for="d-type">Aid type</label>
+                <select id="d-type" name="aidType">
+                  <option value="food">food</option><option value="shelter">shelter</option>
+                  <option value="medical">medical</option><option value="cash">cash</option>
+                  <option value="livelihood">livelihood</option><option value="education">education</option>
+                </select>
+              </div>
+              <div class="field"><label for="d-ptype">Provider type</label>
+                <select id="d-ptype" name="providerType">
+                  <option value="ngo">ngo</option><option value="government">government</option><option value="donor">donor</option>
+                </select>
+              </div>
+            </div>
+            <div class="field"><label for="d-pid">Provider ID</label><input id="d-pid" name="providerId" list="dl-ngos" required></div>
+            <div class="field"><label for="d-notes">Notes <span class="hint">(optional)</span></label><input id="d-notes" name="notes"></div>
+            <div class="actions"><button type="submit">Record aid</button></div>
+            <div class="msg" role="status" aria-live="polite"></div>
+          </form>
+        </div>
+      </details>
+
+      <details class="work">
+        <summary>Report an issue<span class="caret" aria-hidden="true">›</span></summary>
+        <div class="work-body">
+          <form id="f-issue" novalidate>
+            <div class="field">
+              <label for="i-village">Village ID</label>
+              <input id="i-village" name="villageId" list="dl-villages" placeholder="village-1" required>
+            </div>
+            <div class="field"><label for="i-cat">Category</label>
+              <select id="i-cat" name="category">
+                <option value="infrastructure">infrastructure</option><option value="water">water</option>
+                <option value="education">education</option><option value="health">health</option>
+                <option value="food">food</option><option value="corruption">corruption</option>
+                <option value="other">other</option>
+              </select>
+            </div>
+            <div class="field"><label for="i-desc">Description</label><textarea id="i-desc" name="description" required></textarea></div>
+            <div class="grid-2">
+              <div class="field"><label for="i-lat">GPS latitude</label><input id="i-lat" name="lat" type="number" step="any" inputmode="decimal" required></div>
+              <div class="field"><label for="i-lng">GPS longitude</label><input id="i-lng" name="lng" type="number" step="any" inputmode="decimal" required></div>
+            </div>
+            <div class="actions"><button type="submit">Report issue</button></div>
+            <div class="msg" role="status" aria-live="polite"></div>
+          </form>
+        </div>
+      </details>
+
+      <details class="work">
+        <summary>Route an issue<span class="caret" aria-hidden="true">›</span></summary>
+        <div class="work-body">
+          <p class="work-note">Routing sends the issue to the village's lead NGO where one is assigned,
+            otherwise to the responsible government department.</p>
+          <form id="f-route" novalidate>
+            <div class="field">
+              <label for="r-issue">Issue ID</label>
+              <input id="r-issue" name="issueId" list="dl-issues" placeholder="issue-1" required>
+            </div>
+            <div class="actions"><button type="submit">Route issue</button></div>
+            <div class="msg" role="status" aria-live="polite"></div>
+          </form>
+        </div>
+      </details>
+
+      <!-- Identifiers created in this tab, offered back as suggestions. In memory only. -->
+      <datalist id="dl-villages"></datalist>
+      <datalist id="dl-ngos"></datalist>
+      <datalist id="dl-beneficiaries"></datalist>
+      <datalist id="dl-issues"></datalist>
+    </div>
+  </section>
+
+  <footer>
+    <p>AFRIP · public data is aggregate and pseudonymised · operations data requires authorisation.</p>
+  </footer>
+</main>
+
+<script>
+"use strict";
+/* ==================================================================
+ * SCRIPT §1 — helpers
+ * ================================================================== */
+
+const $ = (sel, root) => (root || document).querySelector(sel);
+
+/** Escape anything that came from the API before it can touch innerHTML.
+ *  Village names, issue descriptions and error strings are all user-supplied. */
+function escapeHtml(value) {
+  return String(value === null || value === undefined ? "" : value)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+const SEVERITIES = ["critical", "severe", "moderate", "minor"];
+const SEVERITY_RANK = { critical: 0, severe: 1, moderate: 2, minor: 3 };
+
+function severityChip(severity) {
+  const known = SEVERITIES.indexOf(severity) !== -1 ? severity : "unknown";
+  const label = known === "unknown" ? "unclassified" : known;
+  // The word is always present, so the colour is never the only signal.
+  return '<span class="chip" data-severity="' + escapeHtml(known) + '">'
+    + '<span class="swatch" aria-hidden="true"></span>' + escapeHtml(label) + "</span>";
+}
+
+/** Money arrives as integer minor units; render as whole currency units. */
+function money(minor, currency) {
+  if (typeof minor !== "number" || !isFinite(minor)) return "—";
+  const major = minor / 100;
+  let text;
+  try {
+    text = major.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  } catch (_) {
+    text = String(Math.round(major));
+  }
+  return escapeHtml((currency ? currency + " " : "") + text);
+}
+
+const state = {
+  token: null,
+  villages: [],
+  /** ids minted in this tab, kept in memory only (never persisted). */
+  recent: { villages: [], ngos: [], beneficiaries: [], issues: [] }
+};
+
+/**
+ * Single fetch wrapper. Returns a plain outcome object; it never throws, so
+ * every caller can render a specific message instead of a dead button.
+ *   { ok, status, data }            — the server answered
+ *   { ok:false, network:true }      — the request never completed
+ */
+async function api(path, options) {
+  const opts = options || {};
+  const headers = { accept: "application/json" };
+  if (opts.body !== undefined) headers["content-type"] = "application/json";
+  if (opts.auth && state.token) headers["authorization"] = "Bearer " + state.token;
+
+  let response;
+  try {
+    response = await fetch(path, {
+      method: opts.method || "GET",
+      headers: headers,
+      body: opts.body === undefined ? undefined : JSON.stringify(opts.body)
+    });
+  } catch (_) {
+    return { ok: false, network: true, status: 0, data: null };
+  }
+
+  let data = null;
+  try { data = await response.json(); } catch (_) { data = null; }
+  return { ok: response.ok, status: response.status, data: data, network: false };
+}
+
+/** Message region writer. `kind` is "error" | "ok" | "dup". */
+function setMsg(el, kind, title, detail) {
+  if (!el) return;
+  if (!kind) { el.innerHTML = ""; return; }
+  el.innerHTML = '<div class="m-' + kind + '">'
+    + "<strong>" + escapeHtml(title) + "</strong>"
+    + (detail ? "<span>" + detail + "</span>" : "")
+    + "</div>";
+}
+
+/* ==================================================================
+ * SCRIPT §2 — banners, health, public zone
+ * ================================================================== */
+
+const banners = $("#banners");
+const bannerState = {};   // key -> element, so each condition shows at most once
+
+function showBanner(key, tone, title, body, retryLabel, onRetry) {
+  hideBanner(key);
+  const el = document.createElement("div");
+  el.className = "banner is-" + tone;
+  const text = document.createElement("p");
+  text.innerHTML = "<strong>" + escapeHtml(title) + "</strong>";
+  const detail = document.createElement("span");
+  detail.textContent = body;                 // textContent: no interpolation risk
+  text.appendChild(detail);
+  el.appendChild(text);
+  if (retryLabel) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "secondary";
+    btn.textContent = retryLabel;
+    btn.addEventListener("click", function () { hideBanner(key); onRetry(); });
+    el.appendChild(btn);
+  }
+  banners.appendChild(el);
+  bannerState[key] = el;
+}
+
+function hideBanner(key) {
+  const el = bannerState[key];
+  if (el && el.parentNode) el.parentNode.removeChild(el);
+  delete bannerState[key];
+}
+
+/** GET /health → { status, persistence, version, auth } */
+async function checkHealth() {
+  const dot = $("#conn-dot");
+  const text = $("#conn-text");
+  const res = await api("/health");
+  if (res.network || !res.ok || !res.data) {
+    dot.className = "dot down";
+    text.textContent = "Service unreachable";
+    return;
+  }
+  dot.className = "dot up";
+  const d = res.data;
+  text.textContent = "Live · " + (d.persistence || "unknown") + " persistence"
+    + (d.version ? " · v" + d.version : "");
+  // An unauthenticated revision is an operational fact, not a detail.
+  if (d.auth === "disabled") {
+    showBanner("auth", "warn", "Authentication is disabled on this revision. ",
+      "Every operational route is reachable without a token. Do not use this deployment for real data.");
+  } else {
+    hideBanner("auth");
+  }
+}
+
+/** GET /ready → 200 { status:"ready" } or 503 { status, persistence, error } */
+async function checkReady() {
+  const res = await api("/ready");
+  if (res.network) {
+    showBanner("ready", "danger", "Cannot reach the service. ",
+      "The dashboard could not contact the API. Check your connection, then retry.",
+      "Retry", refreshAll);
+    return;
+  }
+  if (res.status === 503) {
+    const why = res.data && res.data.error ? String(res.data.error) : "the datastore did not answer";
+    showBanner("ready", "danger", "Database unreachable. ",
+      "The API is running but its datastore is not ready — writes will fail until it recovers. Reported: " + why,
+      "Re-check", checkReady);
+    return;
+  }
+  hideBanner("ready");
+}
+
+/** GET /public/villages → { villages: [{ id,name,district,state,severity,households,affectedFamilies,recovery }] } */
+async function loadVillages() {
+  const out = $("#villages-out");
+  out.setAttribute("aria-busy", "true");
+  const res = await api("/public/villages");
+  out.setAttribute("aria-busy", "false");
+
+  if (res.network) {
+    out.innerHTML = '<div class="empty"><strong>Could not load villages</strong>'
+      + "<p>The request did not reach the service.</p></div>";
+    addRetry(out, loadVillages);
+    return;
+  }
+  if (!res.ok || !res.data || !Array.isArray(res.data.villages)) {
+    const why = res.data && res.data.error ? res.data.error : "the service returned status " + res.status;
+    out.innerHTML = '<div class="empty"><strong>Could not load villages</strong><p>' + escapeHtml(why) + "</p></div>";
+    addRetry(out, loadVillages);
+    return;
+  }
+
+  state.villages = res.data.villages;
+  hideBanner("net");
+  renderVillages(state.villages);
+  renderVillageSuggestions(state.villages);
+}
+
+function addRetry(container, fn) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "secondary";
+  btn.textContent = "Retry";
+  btn.style.marginTop = "12px";
+  btn.addEventListener("click", fn);
+  container.appendChild(btn);
+}
+
+function renderVillages(villages) {
+  const out = $("#villages-out");
+  if (villages.length === 0) {
+    out.innerHTML = '<div class="empty"><strong>No villages registered yet</strong>'
+      + "<p>Once a district officer registers a village it appears here with its severity"
+      + " classification and recovery index.</p></div>";
+    return;
+  }
+
+  const sorted = villages.slice().sort(function (a, b) {
+    const ra = SEVERITY_RANK[a.severity]; const rb = SEVERITY_RANK[b.severity];
+    const da = ra === undefined ? 9 : ra; const db = rb === undefined ? 9 : rb;
+    if (da !== db) return da - db;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+
+  const rows = sorted.map(function (v) {
+    const composite = v.recovery && typeof v.recovery.composite === "number" ? v.recovery.composite : null;
+    const pct = composite === null ? 0 : Math.max(0, Math.min(100, composite));
+    const shown = composite === null ? "not scored" : Math.round(composite * 10) / 10 + " / 100";
+    const barLabel = composite === null
+      ? "No recovery index yet"
+      : "Recovery index " + Math.round(composite) + " out of 100";
+
+    return "<li class=\"village\">"
+      + '<div class="village-top">'
+        + '<span class="village-name">' + escapeHtml(v.name) + "</span>"
+        + severityChip(v.severity)
+      + "</div>"
+      + '<p class="village-meta">' + escapeHtml(v.district) + (v.state ? ", " + escapeHtml(v.state) : "")
+        + " · " + escapeHtml(String(v.affectedFamilies)) + " of " + escapeHtml(String(v.households))
+        + " households affected</p>"
+      + '<div class="recovery">'
+        + '<span class="bar" role="img" aria-label="' + escapeHtml(barLabel) + '">'
+          + '<i style="width:' + pct + '%"></i></span>'
+        + '<span class="recovery-val">' + escapeHtml(shown) + "</span>"
+      + "</div>"
+      + '<p class="village-id">' + escapeHtml(v.id) + "</p>"
+      + "</li>";
+  }).join("");
+
+  out.innerHTML = '<ul class="village-list">' + rows + "</ul>";
+}
+
+/**
+ * GET /public/stats → { totalVillages, bySeverity{critical,severe,moderate,minor},
+ *                       villagesWithActiveNgo, averageRecoveryComposite }
+ * Degrades to figures derived from /public/villages if the endpoint is absent.
+ */
+async function loadStats() {
+  const res = await api("/public/stats");
+  if (res.ok && res.data && typeof res.data.totalVillages === "number") {
+    renderStats(res.data, true);
+  } else {
+    renderStats(deriveStats(state.villages), false);
+  }
+}
+
+function deriveStats(villages) {
+  const bySeverity = { critical: 0, severe: 0, moderate: 0, minor: 0 };
+  let sum = 0, scored = 0;
+  villages.forEach(function (v) {
+    if (Object.prototype.hasOwnProperty.call(bySeverity, v.severity)) bySeverity[v.severity] += 1;
+    if (v.recovery && typeof v.recovery.composite === "number") { sum += v.recovery.composite; scored += 1; }
+  });
+  return {
+    totalVillages: villages.length,
+    bySeverity: bySeverity,
+    villagesWithActiveNgo: null,
+    averageRecoveryComposite: scored === 0 ? null : sum / scored
+  };
+}
+
+function renderStats(stats, hasNgoFigure) {
+  const bySeverity = stats.bySeverity || {};
+  const total = typeof stats.totalVillages === "number" ? stats.totalVillages : state.villages.length;
+  const acute = (bySeverity.critical || 0) + (bySeverity.severe || 0);
+
+  $("#t-villages").textContent = String(total);
+  $("#t-acute").textContent = String(acute);
+
+  const ngoEl = $("#t-ngo");
+  if (hasNgoFigure && typeof stats.villagesWithActiveNgo === "number") {
+    ngoEl.innerHTML = escapeHtml(String(stats.villagesWithActiveNgo))
+      + " <small>of " + escapeHtml(String(total)) + "</small>";
+  } else {
+    ngoEl.innerHTML = '<small>not published</small>';
+  }
+
+  const avg = stats.averageRecoveryComposite;
+  $("#t-recovery").innerHTML = typeof avg === "number"
+    ? escapeHtml(String(Math.round(avg * 10) / 10)) + ' <small>/ 100</small>'
+    : '<small>not scored yet</small>';
+
+  $("#sev-row").innerHTML = SEVERITIES.map(function (sev) {
+    const n = bySeverity[sev] || 0;
+    return '<span class="chip" data-severity="' + sev + '">'
+      + '<span class="swatch" aria-hidden="true"></span>' + sev
+      + ' <span class="count">' + n + "</span></span>";
+  }).join("");
+}
+
+/**
+ * GET /public/funds → { projects: [{ id, villageId, name, category, fundSource,
+ *   currency, sanctionedMinor, releasedMinor, spentMinor, status }] }
+ * The fund-monitoring context is not yet wired into the platform, so this may be
+ * absent (404) or legitimately empty. Both are handled without breaking the page.
+ */
+async function loadFunds() {
+  const out = $("#funds-out");
+  const res = await api("/public/funds");
+
+  if (res.network) {
+    out.innerHTML = '<div class="empty"><strong>Fund data unavailable</strong>'
+      + "<p>The request did not reach the service.</p></div>";
+    addRetry(out, loadFunds);
+    return;
+  }
+  if (res.status === 404 || !res.data || !Array.isArray(res.data.projects)) {
+    out.innerHTML = '<div class="empty"><strong>Fund transparency not available</strong>'
+      + "<p>This deployment does not publish the fund-monitoring projection yet."
+      + " Village recovery data above is unaffected.</p></div>";
+    return;
+  }
+
+  const projects = res.data.projects;
+  if (projects.length === 0) {
+    out.innerHTML = '<div class="empty"><strong>No funded projects published yet</strong>'
+      + "<p>Sanctioned projects, releases and expenditure appear here once fund monitoring"
+      + " is reporting for this deployment.</p></div>";
+    return;
+  }
+
+  let sanctioned = 0, released = 0, spent = 0;
+  const currency = projects[0] && projects[0].currency ? projects[0].currency : "";
+  const rows = projects.map(function (p) {
+    sanctioned += p.sanctionedMinor || 0;
+    released += p.releasedMinor || 0;
+    spent += p.spentMinor || 0;
+    return "<tr>"
+      + "<td>" + escapeHtml(p.name) + "</td>"
+      + "<td>" + escapeHtml(p.category) + "</td>"
+      + "<td>" + escapeHtml(p.fundSource) + "</td>"
+      + '<td class="num">' + money(p.sanctionedMinor, p.currency) + "</td>"
+      + '<td class="num">' + money(p.releasedMinor, p.currency) + "</td>"
+      + '<td class="num">' + money(p.spentMinor, p.currency) + "</td>"
+      + "<td>" + escapeHtml(String(p.status || "").replace(/_/g, " ")) + "</td>"
+      + "</tr>";
+  }).join("");
+
+  out.innerHTML = '<div class="tiles" style="margin-bottom:12px">'
+      + '<div class="tile"><dt>Projects</dt><dd>' + projects.length + "</dd></div>"
+      + '<div class="tile"><dt>Sanctioned</dt><dd style="font-size:1.05rem">' + money(sanctioned, currency) + "</dd></div>"
+      + '<div class="tile"><dt>Released</dt><dd style="font-size:1.05rem">' + money(released, currency) + "</dd></div>"
+      + '<div class="tile"><dt>Spent</dt><dd style="font-size:1.05rem">' + money(spent, currency) + "</dd></div>"
+    + "</div>"
+    + '<div class="table-scroll"><table><caption class="sr-only">Funded projects with sanctioned, released and spent amounts</caption>'
+    + "<thead><tr><th scope=\"col\">Project</th><th scope=\"col\">Category</th><th scope=\"col\">Source</th>"
+    + "<th scope=\"col\">Sanctioned</th><th scope=\"col\">Released</th><th scope=\"col\">Spent</th>"
+    + "<th scope=\"col\">Status</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
+}
+
+/** Suggestions for the village ID inputs, built from public data. */
+function renderVillageSuggestions(villages) {
+  const dl = $("#dl-villages");
+  if (!dl) return;
+  dl.innerHTML = villages.map(function (v) {
+    return '<option value="' + escapeHtml(v.id) + '">' + escapeHtml(v.name) + " — "
+      + escapeHtml(v.district) + "</option>";
+  }).join("");
+}
+
+function rememberId(kind, id, label) {
+  const list = state.recent[kind];
+  if (!list || !id || list.some(function (e) { return e.id === id; })) return;
+  list.push({ id: id, label: label || "" });
+  const dl = $("#dl-" + kind);
+  if (!dl) return;
+  dl.innerHTML = list.map(function (e) {
+    return '<option value="' + escapeHtml(e.id) + '">' + escapeHtml(e.label) + "</option>";
+  }).join("");
+}
+
+/** Reload everything the public zone shows. Called on load and after each write. */
+async function refreshAll() {
+  await Promise.all([checkHealth(), checkReady(), loadVillages().then(loadStats), loadFunds()]);
+}
+
+/* ==================================================================
+ * SCRIPT §3 — token session and operations forms
+ * ================================================================== */
+
+const TOKEN_KEY = "afrip.token";
+const tokenForm = $("#token-form");
+const tokenInput = $("#token-input");
+const tokenMsg = $("#token-msg");
+
+function applyTokenState() {
+  const connected = Boolean(state.token);
+  $("#workflows").classList.toggle("hidden", !connected);
+  $("#locked-note").classList.toggle("hidden", connected);
+  tokenForm.classList.toggle("hidden", connected);
+  $("#connected-note").classList.toggle("hidden", !connected);
+}
+
+function setToken(token) {
+  state.token = token;
+  try { sessionStorage.setItem(TOKEN_KEY, token); } catch (_) { /* private mode: keep in memory */ }
+  applyTokenState();
+}
+
+function clearToken() {
+  state.token = null;
+  try { sessionStorage.removeItem(TOKEN_KEY); } catch (_) { /* ignore */ }
+  tokenInput.value = "";
+  applyTokenState();
+}
+
+/** Verifies a candidate token against an authenticated read before accepting it. */
+tokenForm.addEventListener("submit", async function (event) {
+  event.preventDefault();
+  const candidate = tokenInput.value.trim();
+  if (candidate === "") {
+    setMsg(tokenMsg, "error", "Enter the API token", "The field is empty.");
+    tokenInput.focus();
+    return;
+  }
+  const button = $("#token-submit");
+  button.disabled = true;
+  const previousLabel = button.textContent;
+  button.textContent = "Checking…";
+  try {
+    state.token = candidate;
+    const res = await api("/villages", { auth: true });
+    if (res.network) {
+      state.token = null;
+      setMsg(tokenMsg, "error", "Could not reach the service",
+        "The token was not sent anywhere it could be verified. Check your connection and try again.");
+      return;
+    }
+    if (res.status === 401) {
+      state.token = null;
+      setMsg(tokenMsg, "error", "Token rejected",
+        "The API did not accept that bearer token. Check the value and enter it again.");
+      tokenInput.value = "";
+      tokenInput.focus();
+      return;
+    }
+    if (!res.ok) {
+      state.token = null;
+      const why = res.data && res.data.error ? escapeHtml(res.data.error) : "status " + res.status;
+      setMsg(tokenMsg, "error", "Could not verify the token", why);
+      return;
+    }
+    setToken(candidate);
+    tokenInput.value = "";
+    setMsg(tokenMsg, "ok", "Connected", "Operational workflows are unlocked for this tab.");
+  } finally {
+    button.disabled = false;
+    button.textContent = previousLabel;
+  }
+});
+
+$("#disconnect").addEventListener("click", function () {
+  clearToken();
+  setMsg(tokenMsg, "ok", "Disconnected", "The token has been cleared from this tab.");
+  tokenInput.focus();
+});
+
+/** A 401 mid-session means the token stopped working: drop it and re-lock. */
+function handleUnauthorized(msgEl) {
+  clearToken();
+  setMsg(msgEl, "error", "Token rejected",
+    "The API rejected the stored token, so it has been cleared. Re-enter it above to continue.");
+  setMsg(tokenMsg, "error", "Token rejected", "Enter the API token again.");
+  tokenInput.focus();
+}
+
+/**
+ * Wires one workflow form.
+ *   build(values) -> { path, method, body } | { error: "message" }
+ *   done(data, msgEl, values)  renders the success state.
+ * Handles: client validation, 400 (verbatim domain error), 401, 404, 5xx,
+ * network failure with a retry affordance, and always restores the button.
+ */
+function wireForm(formId, build, done) {
+  const form = $("#" + formId);
+  if (!form) return;
+  const msgEl = $(".msg", form);
+  const button = $("button[type=submit]", form);
+
+  form.addEventListener("submit", async function (event) {
+    event.preventDefault();
+    setMsg(msgEl, null);
+
+    const values = {};
+    new FormData(form).forEach(function (value, key) { values[key] = String(value).trim(); });
+
+    const request = build(values);
+    if (request.error) {
+      setMsg(msgEl, "error", "Check this form", escapeHtml(request.error));
+      const firstInvalid = $("input, select, textarea", form);
+      if (firstInvalid) firstInvalid.focus();
+      return;
+    }
+
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = "Working…";
+    try {
+      const res = await api(request.path, { method: request.method || "POST", body: request.body, auth: true });
+
+      if (res.network) {
+        setMsg(msgEl, "error", "Network error",
+          "The request did not reach the service. Nothing was saved — submit again when you are back online.");
+        return;
+      }
+      if (res.status === 401) { handleUnauthorized(msgEl); return; }
+      if (!res.ok) {
+        // 400 and 404 carry the domain's own wording — show it verbatim, it is
+        // the most informative thing the platform produces.
+        const why = res.data && res.data.error ? res.data.error : "The service returned status " + res.status;
+        setMsg(msgEl, "error", res.status === 404 ? "Not found" : "Rejected", escapeHtml(why));
+        return;
+      }
+
+      done(res.data || {}, msgEl, values);
+      form.reset();
+      refreshAll();          // public zone reflects the write immediately
+    } finally {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  });
+}
+
+function requireFields(values, keys) {
+  for (let i = 0; i < keys.length; i += 1) {
+    if (!values[keys[i]]) return keys[i] + " is required";
+  }
+  return null;
+}
+
+function num(values, key) {
+  const parsed = Number(values[key]);
+  return isFinite(parsed) && values[key] !== "" ? parsed : null;
+}
+
+/* --- Register a village — POST /villages -> 201 { villageId } --- */
+wireForm("f-village", function (v) {
+  const missing = requireFields(v, ["name", "district", "state"]);
+  if (missing) return { error: missing };
+  const nums = { lat: num(v, "lat"), lng: num(v, "lng"), population: num(v, "population"),
+                 households: num(v, "households"), affectedFamilies: num(v, "affectedFamilies") };
+  for (const key in nums) if (nums[key] === null) return { error: key + " must be a number" };
+  return {
+    path: "/villages",
+    body: {
+      name: v.name, district: v.district, state: v.state,
+      geo: { lat: nums.lat, lng: nums.lng },
+      population: nums.population, households: nums.households,
+      affectedFamilies: nums.affectedFamilies, severity: v.severity
+    }
+  };
+}, function (data, msgEl, v) {
+  rememberId("villages", data.villageId, v.name);
+  setMsg(msgEl, "ok", "Village registered",
+    'Identifier <code class="id">' + escapeHtml(data.villageId) + "</code> — it now appears in the public list above.");
+});
+
+/* --- Register an NGO — POST /ngos -> 201 { ngoId } --- */
+wireForm("f-ngo", function (v) {
+  if (!v.name) return { error: "NGO name is required" };
+  const capacity = num(v, "capacity");
+  if (capacity === null) return { error: "capacity must be a number" };
+  const focusAreas = (v.focusAreas || "").split(",").map(function (s) { return s.trim(); })
+    .filter(function (s) { return s.length > 0; });
+  return { path: "/ngos", body: { name: v.name, focusAreas: focusAreas, capacity: capacity } };
+}, function (data, msgEl, v) {
+  rememberId("ngos", data.ngoId, v.name);
+  setMsg(msgEl, "ok", "NGO registered",
+    'Identifier <code class="id">' + escapeHtml(data.ngoId) + "</code> — use it when assigning a lead NGO.");
+});
+
+/* --- Assign a lead NGO — POST /villages/:id/assignment -> 201 { assignmentId } --- */
+wireForm("f-assign", function (v) {
+  const missing = requireFields(v, ["villageId", "ngoId"]);
+  if (missing) return { error: missing };
+  return { path: "/villages/" + encodeURIComponent(v.villageId) + "/assignment", body: { ngoId: v.ngoId } };
+}, function (data, msgEl, v) {
+  // The API reports the new assignment. If a future revision also names the
+  // assignment it retired, surface that — the One-Village-One-NGO handover is
+  // the fact an operator most needs to see.
+  const retired = data.retiredAssignmentId || data.previousAssignmentId
+    || (data.retired && data.retired.assignmentId);
+  const detail = 'Assignment <code class="id">' + escapeHtml(data.assignmentId) + "</code> is now the active lead"
+    + " for village " + escapeHtml(v.villageId) + "."
+    + (retired
+        ? ' Previous assignment <code class="id">' + escapeHtml(retired) + "</code> was retired."
+        : " Any previous assignment for this village has been retired — one village, one lead NGO.");
+  setMsg(msgEl, "ok", "Lead NGO assigned", detail);
+});
+
+/* --- Register a beneficiary — POST /beneficiaries -> 201 { beneficiaryId } --- */
+wireForm("f-beneficiary", function (v) {
+  const missing = requireFields(v, ["villageId", "name"]);
+  if (missing) return { error: missing };
+  return { path: "/beneficiaries", body: { villageId: v.villageId, name: v.name, category: v.category } };
+}, function (data, msgEl, v) {
+  rememberId("beneficiaries", data.beneficiaryId, v.category);
+  setMsg(msgEl, "ok", "Beneficiary registered",
+    'Identifier <code class="id">' + escapeHtml(data.beneficiaryId) + "</code> — record aid against this ID."
+    + " The name is not republished on the public zone.");
+});
+
+/* --- Record aid — POST /beneficiaries/:id/aid
+       -> 201 { beneficiaryId, deliveredAt, duplicate } --- */
+wireForm("f-aid", function (v) {
+  const missing = requireFields(v, ["beneficiaryId", "providerId"]);
+  if (missing) return { error: missing };
+  const body = { aidType: v.aidType, providerId: v.providerId, providerType: v.providerType };
+  if (v.notes) body.notes = v.notes;
+  return { path: "/beneficiaries/" + encodeURIComponent(v.beneficiaryId) + "/aid", body: body };
+}, function (data, msgEl, v) {
+  const when = data.deliveredAt ? new Date(data.deliveredAt).toLocaleString() : "now";
+  if (data.duplicate === true) {
+    // The flagship signal: recorded, and flagged. Never hidden in a toast.
+    setMsg(msgEl, "dup", "Possible duplicate aid",
+      "The delivery was recorded at " + escapeHtml(when) + ", and flagged: <strong>" + escapeHtml(v.aidType)
+      + "</strong> aid already reached <code class=\"id\">" + escapeHtml(data.beneficiaryId)
+      + "</code> from a different provider inside the 14-day window."
+      + " Aid is never silently rejected — verify with the other provider before the next delivery.");
+    return;
+  }
+  setMsg(msgEl, "ok", "Aid recorded",
+    escapeHtml(v.aidType) + " delivered to <code class=\"id\">" + escapeHtml(data.beneficiaryId)
+    + "</code> at " + escapeHtml(when) + ". No duplicate flag raised.");
+});
+
+/* --- Report an issue — POST /issues -> 201 { issueId } --- */
+wireForm("f-issue", function (v) {
+  const missing = requireFields(v, ["villageId", "description"]);
+  if (missing) return { error: missing };
+  const lat = num(v, "lat"); const lng = num(v, "lng");
+  if (lat === null || lng === null) return { error: "GPS latitude and longitude must be numbers" };
+  return {
+    path: "/issues",
+    body: { villageId: v.villageId, category: v.category, description: v.description, gps: { lat: lat, lng: lng } }
+  };
+}, function (data, msgEl, v) {
+  rememberId("issues", data.issueId, v.category);
+  setMsg(msgEl, "ok", "Issue reported",
+    'Identifier <code class="id">' + escapeHtml(data.issueId) + "</code> — route it to assign a responsible party.");
+});
+
+/* --- Route an issue — POST /issues/:id/route -> 200 { issueId, partyType, party } --- */
+wireForm("f-route", function (v) {
+  if (!v.issueId) return { error: "issueId is required" };
+  return { path: "/issues/" + encodeURIComponent(v.issueId) + "/route" };
+}, function (data, msgEl) {
+  const partyType = String(data.partyType || "").replace(/_/g, " ");
+  setMsg(msgEl, "ok", "Issue routed",
+    "Assigned to the " + escapeHtml(partyType) + ' <code class="id">' + escapeHtml(data.party) + "</code>.");
+});
+
+/* ==================================================================
+ * Boot
+ * ================================================================== */
+try { state.token = sessionStorage.getItem(TOKEN_KEY); } catch (_) { state.token = null; }
+applyTokenState();
+refreshAll();
+// Keep the connection indicator honest without hammering the service.
+setInterval(checkHealth, 30000);
+</script>
+</body>
+</html>
