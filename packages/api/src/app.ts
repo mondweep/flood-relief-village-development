@@ -113,6 +113,7 @@ export function createHandler(deps: RouteDeps): RequestListener {
       gate.mode,
       requestId,
       deps.runtime.ownership,
+      auth.unenrolled === true,
     );
 
     return match.handler({
@@ -122,6 +123,8 @@ export function createHandler(deps: RouteDeps): RequestListener {
       query: url.searchParams,
       body,
       actor: auth.actor,
+      ...(auth.claims === undefined ? {} : { claims: auth.claims }),
+      ...(auth.unenrolled === true ? { unenrolled: true } : {}),
       platform,
       requestId,
     });

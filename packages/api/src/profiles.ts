@@ -9,8 +9,11 @@ import {
 } from "./auth.js";
 
 /**
- * The table `00004_user_profiles.sql` creates. One row per `auth.users` row,
- * kept in step by an `after insert` trigger.
+ * The table `00004_user_profiles.sql` creates. One row per AFRIP user — which
+ * is NOT one row per `auth.users` row: `auth.users` is project-wide and this
+ * project is shared, so most accounts in it have no row here and should not.
+ * Rows are created by `POST /me/enrolment` and by 00004's administrator
+ * bootstrap, and by nothing else.
  */
 export const USER_PROFILES_TABLE = "user_profiles";
 
@@ -62,10 +65,12 @@ export class SupabaseProfileDirectory implements ProfileDirectory {
     // a 401. Returning a default actor here instead would move that boundary,
     // quietly, from this file.
     //
-    // Do not read that as a claim the boundary currently holds: 00004's signup
-    // trigger enrols neighbouring applications' users, so many of them never
-    // reach this null at all. That gap is recorded and escalated at the top of
-    // 00004; this comment describes only what this line must not do.
+    // This null is the NORMAL answer for the ~22 accounts on this project that
+    // belong to the four neighbouring applications, and it is meant to be. They
+    // are not AFRIP users, and nothing enrols them: the signup trigger that once
+    // would have is gone (it was never applied anywhere). Enrolment is an
+    // explicit act, so this returning null for a real person holding a real
+    // token is correct behaviour, not a bug to be patched away.
     const row = (result.data as ProfileRow[] | null)?.[0];
     if (row === undefined) return null;
 

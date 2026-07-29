@@ -63,6 +63,31 @@ export interface AuthorizePlatformDeps {
   readonly policy?: Record<string, PermissionRule>;
 }
 
+/**
+ * A request that proved WHO it is but is not a user of this application.
+ *
+ * It exists because of one route: enrolment. Someone holding a valid token for
+ * this Supabase project — which is shared with four unrelated applications — has
+ * to be able to reach `POST /me/enrolment` while having no AFRIP profile at all.
+ * Every other route refuses them at the gate with `user_unknown`.
+ *
+ * WHY THIS IS NOT `null`. A null actor means "no identity was presented", and
+ * `decide` ALLOWS it, because the legacy shared token and the open dev server
+ * both arrive that way and are gated before they ever reach a use case. An
+ * unenrolled holder of a real token is the opposite case: nothing else gates
+ * them, so passing null would hand a stranger an unrestricted platform. This
+ * value denies everything, including for `admin`, because an unenrolled request
+ * has no role to be admin with.
+ *
+ * The enrolment route touches no use case, so today nothing depends on this.
+ * That is exactly why it is here: the hazard is the NEXT route added to the
+ * identified-only set, which would otherwise inherit unrestricted access in
+ * silence.
+ */
+export const UNENROLLED = "unenrolled";
+
+export type PlatformActor = AuthenticatedActor | null | typeof UNENROLLED;
+
 /** Keys on `Platform` that are infrastructure, not a bounded context. */
 const PASSTHROUGH_KEYS = new Set(["bus", "eventPublisher"]);
 
@@ -111,10 +136,16 @@ const warnedUnknownKeys = new Set<string>();
 async function decide(
   key: string,
   rule: PermissionRule | undefined,
-  actor: AuthenticatedActor | null,
+  actor: PlatformActor,
   ownership: OwnershipRegistry,
   input: unknown,
 ): Promise<string | null> {
+  // 0. Identified, but not a user of this application -> deny everything.
+  //    Checked FIRST, ahead of both the null allowance and the admin grant: this
+  //    request has no AFRIP role at all, so there is no role for either rule to
+  //    reason about. See the note on UNENROLLED.
+  if (actor === UNENROLLED) return forbiddenMessage(`invoke ${key}`, "an unenrolled account");
+
   // 1. No actor -> allow.
   //
   // This is load-bearing and it is a deliberate hole, so it is stated plainly.
@@ -253,7 +284,7 @@ function wrapReadPort<T extends object>(port: T, guard: Guard): T {
  */
 export function authorizePlatform(
   platform: Platform,
-  actor: AuthenticatedActor | null,
+  actor: PlatformActor,
   deps: AuthorizePlatformDeps,
 ): Platform {
   const policy = deps.policy ?? PLATFORM_PERMISSIONS;

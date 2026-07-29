@@ -3654,6 +3654,53 @@ async function loadIdentity() {
   state.auth.user = { email: known.email || null, role: null, roleUnavailable: true };
 }
 
+/* --- Registering with AFRIP ------------------------------------------ */
+
+/**
+ * Ask the API to create this identity's AFRIP profile.
+ *
+ * Why this exists at all: the Supabase project is shared with four unrelated
+ * applications, and its user pool is project-wide. Holding a valid token
+ * therefore says nothing about whether someone is an AFRIP user, so membership
+ * is a separate, explicit act. Signing up here performs it automatically;
+ * signing in with an account that already existed elsewhere offers it as a
+ * choice, because that account did not come here to join and must not be
+ * enrolled behind its owner's back.
+ *
+ * Idempotent server-side: enrolling twice returns the existing profile and never
+ * resets a role, so a double click cannot demote anyone.
+ */
+async function enrolInAfrip() {
+  const res = await api("/me/enrolment", { method: "POST" });
+  if (res.ok) {
+    // Re-read rather than trusting the response body: /me is the one shape the
+    // rest of the page reads identity from, and having two of them is how they
+    // drift.
+    await loadIdentity();
+    return { ok: true };
+  }
+  return { ok: false, why: apiError(res, "registration failed") };
+}
+
+/** Wired once; the button only exists while the offer is on screen. */
+document.addEventListener("click", async function (event) {
+  const button = event.target && event.target.closest ? event.target.closest("[data-enrol]") : null;
+  if (!button) return;
+  event.preventDefault();
+  await withBusy(button, "Registering…", async function () {
+    const result = await enrolInAfrip();
+    if (!result.ok) {
+      setMsg($("#auth-in-msg"), "error", "Could not complete registration", esc(result.why));
+      return;
+    }
+    applyAuthState();
+    setMsg($("#auth-in-msg"), "ok", "Registered with AFRIP",
+      "Your account is now a platform user. You can report issues, sign up as a volunteer and read "
+      + "the village dashboards. An administrator assigns any role beyond that.");
+    refresh();
+  });
+});
+
 /* --- Rendering ------------------------------------------------------ */
 
 function applyAuthState() {
@@ -3674,12 +3721,20 @@ function applyAuthState() {
   $("#session-dot").className = "dot " + (connected ? "up" : "");
 
   if (connected && state.auth.noAccess) {
-    // Signed in, and refused. Say so where the workflows would have been,
-    // rather than presenting controls whose every action returns 401.
-    setMsg($("#auth-in-msg"), "info", "This account has no access to AFRIP",
+    // Signed in, and not an AFRIP user. Formerly a dead end; now an offer.
+    //
+    // The distinction this wording has to carry: the account is real and the
+    // sign-in worked. What is missing is membership of THIS platform, which is
+    // separate because the Supabase project is shared — so "no access" would be
+    // read as a fault and "ask an administrator" would be wrong, since
+    // registration is self-service. Signing in again cannot change it, and the
+    // message must not leave anyone trying.
+    setMsg($("#auth-in-msg"), "info", "You are not registered with AFRIP yet",
       "You are signed in as <strong>" + esc(user.email || "this account")
-      + "</strong>, but the platform holds no record of it, so only the public view is available. "
-      + "If you expect access here, ask the team that administers AFRIP to check your account.");
+      + "</strong>. That account exists, but it is not yet a user of this platform, so only the "
+      + "public view is available. Registering takes one step and gives you the citizen role: "
+      + "read the dashboards, report issues, and sign up as a volunteer."
+      + '<p style="margin-top:10px"><button type="button" class="btn" data-enrol>Register with AFRIP</button></p>');
   }
 
   if (connected) {
@@ -3834,10 +3889,34 @@ async function withBusy(button, label, work) {
   finally { button.disabled = false; button.textContent = original; }
 }
 
-/** Everything that must happen once a session exists, in one place. */
-async function afterSignIn(title, detail) {
+/**
+ * Everything that must happen once a session exists, in one place.
+ *
+ * `justRegistered` distinguishes the two ways of arriving here, and the
+ * distinction is deliberate rather than cosmetic. Someone who filled in AFRIP's
+ * own registration form has unambiguously asked to join AFRIP, so their profile
+ * is created for them — making them click a second "register" button after
+ * registering would be absurd. Someone who SIGNED IN may hold an account created
+ * for one of the four unrelated applications sharing this Supabase project;
+ * enrolling them automatically would be the very thing this design removed, just
+ * moved from a database trigger into the browser. They are offered the choice
+ * instead (see applyAuthState).
+ */
+async function afterSignIn(title, detail, justRegistered) {
   applyAuthState();
   await loadIdentity();
+  if (justRegistered === true && state.auth.noAccess) {
+    const enrolled = await enrolInAfrip();
+    if (!enrolled.ok) {
+      // The account exists but the profile does not, so say exactly that: the
+      // credentials are fine and signing up again would fail on a duplicate.
+      applyAuthState();
+      setMsg($("#auth-in-msg"), "error", "Account created, but registration did not complete",
+        esc(enrolled.why) + " — your sign-in works; use the button above to finish registering.");
+      refresh();
+      return;
+    }
+  }
   applyAuthState();
   setMsg(authMsg, null);
   if (title) setMsg($("#auth-in-msg"), "ok", title, detail || "");
@@ -3882,7 +3961,12 @@ $("#register-form").addEventListener("submit", async function (event) {
     // Two legitimate outcomes: a session straight away, or a confirmation email.
     // Which one depends on the project's settings, so handle both.
     if (adoptSession(res.data)) {
-      await afterSignIn("Account created", "You are signed in. An administrator assigns your role.");
+      await afterSignIn(
+        "Account created and registered",
+        "You are signed in as a citizen: read the dashboards, report issues, and sign up as a "
+          + "volunteer. An administrator assigns any role beyond that.",
+        true,
+      );
       return;
     }
     showAuthTab("signin");

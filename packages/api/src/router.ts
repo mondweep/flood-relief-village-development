@@ -1,5 +1,5 @@
 import type { Platform } from "@afrip/platform";
-import type { ActorContext } from "./auth.js";
+import type { ActorContext, VerifiedClaims } from "./auth.js";
 import type { HttpResponse } from "./http-result.js";
 
 export interface RequestContext {
@@ -18,6 +18,16 @@ export interface RequestContext {
    * Attached, not enforced: what each role may DO is ADR 0009.
    */
   readonly actor?: ActorContext | null;
+  /**
+   * The verified token's claims, when one was presented. Only the enrolment
+   * route reads them, and only because it must act for an identity the profile
+   * store does not know yet. Every other handler wants `actor`: the claims are
+   * what the token said, `actor` is what AFRIP decided, and a role read from the
+   * former would be a role the user chose for themselves.
+   */
+  readonly claims?: VerifiedClaims;
+  /** True when the caller holds a valid token but is not an AFRIP user yet. */
+  readonly unenrolled?: boolean;
   /**
    * The platform composed for THIS request (ADR 0010) — the same use cases over
    * the same repositories as ever, but publishing through a decorator that

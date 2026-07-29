@@ -51,6 +51,29 @@ const PUBLIC_EXACT_PATHS: ReadonlySet<string> = new Set([
 ]);
 const PUBLIC_PREFIX = "/public/";
 
+/**
+ * Routes reachable with a VERIFIED TOKEN BUT NO AFRIP PROFILE.
+ *
+ * Exactly one, and it should stay that way. Enrolment is the door a new user
+ * comes in through: they have signed up with Supabase and hold a genuine token,
+ * and they cannot have a profile yet, because creating one is what this route
+ * does. Refusing them `user_unknown` here would make self-registration
+ * impossible — the credential they need to register with is the one being
+ * refused.
+ *
+ * ADDING TO THIS SET IS A SECURITY DECISION, not a routing one. Every path here
+ * is reachable by any holder of a valid token for this Supabase project, which
+ * is shared with four unrelated applications — so a route added here is a route
+ * offered to ~22 accounts that have nothing to do with AFRIP. The platform
+ * handed to these requests denies every use case (see `UNENROLLED`), so the
+ * blast radius is whatever the handler does on its own.
+ */
+const IDENTIFIED_ONLY_PATHS: ReadonlySet<string> = new Set(["/me/enrolment"]);
+
+export function isIdentifiedOnlyPath(path: string): boolean {
+  return IDENTIFIED_ONLY_PATHS.has(normalise(path));
+}
+
 export function isPublicPath(path: string): boolean {
   // Normalise the way the router does (`//` and a trailing slash are the same
   // path to it), so the gate cannot disagree with what actually gets routed.
@@ -351,7 +374,26 @@ export function claimsOnlyProfiles(): ProfileDirectory {
 // ---------------------------------------------------------------------------
 
 export type AuthOutcome =
-  | { readonly authorized: true; readonly actor: ActorContext | null }
+  | {
+      readonly authorized: true;
+      readonly actor: ActorContext | null;
+      /**
+       * The verified token's claims, when one was presented. Carried so the
+       * enrolment route can create a profile for an identity the profile store
+       * does not know yet — it is the only caller, and it needs the `sub` and
+       * `email` that were signed, not ones the client re-sends.
+       */
+      readonly claims?: VerifiedClaims;
+      /**
+       * True when this request proved who it is but has no AFRIP profile, and
+       * was let through only because the path is in `IDENTIFIED_ONLY_PATHS`.
+       * `actor` is null in this case for the same reason it is null for the
+       * legacy token — nobody has been resolved — but the two must not be
+       * treated alike downstream, so they are distinguished here rather than by
+       * inference.
+       */
+      readonly unenrolled?: true;
+    }
   | { readonly authorized: false; readonly response: HttpResponse };
 
 /** Machine-readable 401 discriminants. The frontend branches on these, not on prose. */
@@ -491,7 +533,7 @@ export function createAuthGate(deps: AuthGateDeps): AuthGate {
   const legacyToken = config.apiToken;
   const active = verifier !== null || legacyToken !== null;
 
-  async function fromJwt(presented: string): Promise<AuthOutcome | null> {
+  async function fromJwt(presented: string, path: string): Promise<AuthOutcome | null> {
     if (verifier === null) return null;
     const result = await verifier.verify(presented);
     if (!result.ok) {
@@ -503,38 +545,45 @@ export function createAuthGate(deps: AuthGateDeps): AuthGate {
     }
     const actor = await profiles.resolve(result.claims);
     if (actor === null) {
-      // NOT an edge case — this branch is INTENDED as an authorization
-      // boundary, the one separating "holds a valid token for this Supabase
-      // project" from "is a user of AFRIP". Read the caveat below before
-      // relying on it: as things stand it does not carry that weight.
-      //
-      // The project is SHARED with unrelated applications (see the header of
-      // 00001_initial_schema.sql). GoTrue's user pool is per-project, and every
+      // THE authorization boundary: it separates "holds a valid token for this
+      // Supabase project" from "is a user of AFRIP", and on a SHARED project
+      // those are very different sets. GoTrue's pool is per-project, and every
       // token it mints carries the same `iss` and the same `aud: authenticated`
-      // signed by the same key — so a token belonging to a neighbouring
-      // application on this project verifies here perfectly. The only thing
-      // between such a holder and the beneficiary register is this line — IF
-      // they arrive here without a profile row.
+      // signed by the same key — so a token belonging to one of the four
+      // neighbouring applications verifies here perfectly. This line is the only
+      // thing between such a holder and the beneficiary register.
       //
-      // CAVEAT, and it currently defeats the above: the signup trigger in
-      // 00004 fires on ANY insert into `auth.users`, which on a shared project
-      // means every neighbouring application's signup is auto-enrolled here as
-      // `citizen`. Measured, not theorised. Since no route consults `role` yet
-      // (ADR 0009), `citizen` means full API access — so this branch protects
-      // far less than its shape suggests until that trigger is scoped or roles
-      // are enforced. See the header of 00004_user_profiles.sql.
+      // It now carries that weight, which it did not before. 00004 used to hang
+      // an `after insert` trigger on `auth.users` that enrolled every signup on
+      // the project as an AFRIP `citizen`, so most neighbouring users never
+      // reached this branch at all. That trigger is gone — and it was never
+      // applied to any environment, so nobody was ever enrolled by it. A profile
+      // is now created only by an explicit registration through
+      // `POST /me/enrolment`.
+      //
+      // What that does NOT do, and must not be read as doing: the credential
+      // pool is still shared, so one of those users could deliberately visit
+      // AFRIP and register themselves. PASSIVE enrolment is what was removed.
+      // The complete fix is a Supabase project of AFRIP's own; it was considered
+      // and declined.
       //
       // Which makes the tempting fix dangerous, and it will be tempting: the
       // symptom is a real person reporting "I signed up and it says I'm not a
       // user", and falling back to the claims-only actor makes that complaint
       // go away in one line. It would also admit every user of every
-      // application sharing this project. The genuine causes are that the
-      // signup trigger in 00004 is not installed, or the account predates it —
-      // both fixed by applying the migration, which backfills existing users.
-      // Diagnose with the profile lookup log; do not widen this branch.
+      // application sharing this project. The genuine cause is that they have
+      // not enrolled, and the frontend offers them the enrolment call on exactly
+      // this response code. Diagnose with the profile lookup log; do not widen
+      // this branch.
+      if (isIdentifiedOnlyPath(path)) {
+        // ...except enrolment itself, which cannot demand the profile it exists
+        // to create. `unenrolled` marks it so nothing downstream mistakes this
+        // for the no-identity-at-all case, which is ALLOWED by the platform gate.
+        return { authorized: true, actor: null, claims: result.claims, unenrolled: true };
+      }
       return { authorized: false, response: UNKNOWN_USER_RESPONSE };
     }
-    return { authorized: true, actor };
+    return { authorized: true, actor, claims: result.claims };
   }
 
   return {
@@ -553,7 +602,7 @@ export function createAuthGate(deps: AuthGateDeps): AuthGate {
         return { authorized: false, response: MISSING_TOKEN_RESPONSE };
       }
 
-      const viaJwt = await fromJwt(presented);
+      const viaJwt = await fromJwt(presented, path);
       if (viaJwt !== null) return viaJwt;
 
       if (legacyToken !== null && sameToken(presented, legacyToken)) {

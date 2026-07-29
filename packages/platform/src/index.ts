@@ -11,5 +11,7 @@ export {
   authorizePlatform,
   ForbiddenError,
   isForbiddenThrown,
+  UNENROLLED,
   type AuthorizePlatformDeps,
+  type PlatformActor,
 } from "./authorization/authorize-platform.js";

@@ -1,5 +1,11 @@
 import { randomUUID } from "node:crypto";
-import { authorizePlatform, createPlatform, type Platform, type PlatformOverrides } from "@afrip/platform";
+import {
+  UNENROLLED,
+  authorizePlatform,
+  createPlatform,
+  type Platform,
+  type PlatformOverrides,
+} from "@afrip/platform";
 import {
   ActorStampingPublisher,
   NO_OWNERSHIP,
@@ -172,7 +178,14 @@ export function platformForRequest(
   mode: AuthMode,
   requestId: string,
   ownership: OwnershipRegistry = NO_OWNERSHIP,
+  /**
+   * True when the caller proved who they are but has no AFRIP profile — the
+   * enrolment route, and nothing else. Their platform denies every use case; see
+   * `UNENROLLED`. Passing them as a plain null actor would ALLOW everything,
+   * because null means "no identity presented" and that case is gated elsewhere.
+   */
+  unenrolled = false,
 ): Platform {
   const composed = composeForActor(base, eventActorOf(actor, mode), requestId, ownership);
-  return authorizePlatform(composed, actor, { ownership });
+  return authorizePlatform(composed, unenrolled ? UNENROLLED : actor, { ownership });
 }

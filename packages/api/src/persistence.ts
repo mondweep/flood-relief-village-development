@@ -15,6 +15,7 @@ import { SupabaseIssueRepository } from "@afrip/issue-tracking";
 import { SupabaseBeneficiaryRepository } from "@afrip/beneficiary-registry";
 import type { ProfileDirectory } from "./auth.js";
 import type { ApiConfig, PersistenceMode } from "./config.js";
+import { SupabaseEnrolmentService, type EnrolmentService } from "./enrolment.js";
 import { SupabaseOwnershipRegistry } from "./ownership.js";
 import { SupabaseProfileDirectory } from "./profiles.js";
 import { BeneficiaryDirectory } from "./projections.js";
@@ -95,6 +96,12 @@ export interface PlatformRuntime {
    * ownership to remember either.
    */
   readonly ownership: OwnershipRegistry;
+  /**
+   * Where a verified identity becomes an AFRIP user. Absent in memory mode,
+   * which has no profile store — `POST /me/enrolment` answers 501 there rather
+   * than reporting a registration that went nowhere.
+   */
+  readonly enrolment?: EnrolmentService;
   /** Resolves ok when the datastore is reachable; err with a reason otherwise. */
   checkReady(): Promise<Result<{ mode: PersistenceMode }>>;
 }
@@ -181,6 +188,7 @@ export function createSupabaseRuntimeFromClient(
     // Same client, same schema as every other adapter: identities are stored
     // beside the data they govern, not in a second place that can drift.
     profiles: new SupabaseProfileDirectory(client, schema),
+    enrolment: new SupabaseEnrolmentService(client, schema),
     // The honest half of the seam above: those four contexts got no Supabase
     // adapter, so this runtime is only partly durable and says so out loud on
     // `/health`. A context whose every port the caller overrode is left off —

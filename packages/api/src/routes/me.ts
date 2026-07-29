@@ -1,5 +1,6 @@
 import { PLATFORM_PERMISSIONS } from "@afrip/platform";
 import type { UserRole } from "@afrip/shared-kernel";
+import type { ActorContext } from "../auth.js";
 import { json, type HttpResponse } from "../http-result.js";
 import type { Router } from "../router.js";
 import type { RouteDeps } from "./deps.js";
@@ -56,7 +57,64 @@ export const NO_IDENTITY_CODE = "identity_unavailable";
  * `assam_floods.user_profiles`, so a user cannot see a role here that the API
  * would not act on.
  */
-export function registerMeRoutes(router: Router, _deps: RouteDeps): void {
+/** The 401 code the frontend turns into an offer to register. */
+export const NOT_ENROLLED_CODE = "user_unknown";
+
+export function registerMeRoutes(router: Router, deps: RouteDeps): void {
+  /**
+   * Register with AFRIP.
+   *
+   * The one route reachable with a verified token and NO AFRIP profile (see
+   * `IDENTIFIED_ONLY_PATHS`), because creating that profile is what it does.
+   *
+   * This exists because the Supabase project is shared with four unrelated
+   * applications and `auth.users` is project-wide. An earlier design had a
+   * database trigger create a profile for every signup on the project, which
+   * enrolled those applications' users in AFRIP without anyone here deciding so.
+   * That trigger is gone. Membership is now something a person asks for.
+   *
+   * It is deliberately NOT a gate against those users — their credential still
+   * works, so any of them could call this. What it removes is enrolment they did
+   * not ask for. `user_profiles` records `auth_created_at` alongside
+   * `enrolled_at` so an administrator can see an account that existed for months
+   * before it turned up here, which is the shape a wandering neighbour has.
+   *
+   * Idempotent: enrolling twice returns the existing profile, and never resets a
+   * role. A district officer who clicks register again stays a district officer.
+   */
+  router.post("/me/enrolment", async (ctx): Promise<HttpResponse> => {
+    // Already enrolled: answer with the profile rather than an error. The client
+    // reaches here after a 401 it may have raced against another tab.
+    if (ctx.actor != null) return json(200, meBody(ctx.actor));
+
+    const claims = ctx.claims;
+    if (claims === undefined) {
+      // No verified token — the shared legacy token, or an open dev server.
+      // Enrolment needs a `sub` that was SIGNED; there is nobody here to enrol.
+      return {
+        ...json(401, {
+          error: "registration needs a Supabase sign-in — this request carries no verified identity",
+          code: NO_IDENTITY_CODE,
+        }),
+        headers: { "www-authenticate": 'Bearer realm="afrip"' },
+      };
+    }
+
+    const enrolment = deps.runtime.enrolment;
+    if (enrolment === undefined) {
+      // Memory-mode runtimes have no profile store to write to. Say so plainly
+      // rather than pretending to have registered someone.
+      return json(501, {
+        error: "this deployment has no profile store, so it cannot register users",
+        code: "enrolment_unavailable",
+      });
+    }
+
+    const result = await enrolment.enrol(claims);
+    if (!result.ok) return json(502, { error: result.error, code: "enrolment_failed" });
+    return json(201, meBody(result.value));
+  });
+
   router.get("/me", async (ctx): Promise<HttpResponse> => {
     const actor = ctx.actor ?? null;
     if (actor === null) {
@@ -72,12 +130,15 @@ export function registerMeRoutes(router: Router, _deps: RouteDeps): void {
       };
     }
 
-    const body: MeResponse = {
-      id: actor.id,
-      email: actor.email,
-      role: actor.role,
-      permissions: permissionsFor(actor.role),
-    };
-    return json(200, body);
+    return json(200, meBody(actor));
   });
+}
+
+function meBody(actor: ActorContext): MeResponse {
+  return {
+    id: actor.id,
+    email: actor.email,
+    role: actor.role,
+    permissions: permissionsFor(actor.role),
+  };
 }
