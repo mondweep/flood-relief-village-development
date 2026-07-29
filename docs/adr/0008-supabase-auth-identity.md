@@ -1,6 +1,6 @@
 # ADR 0008 — Supabase Auth for identity: email/password and Google, without a browser SDK
 
-**Status:** Proposed
+**Status:** Accepted — built and tested; see 0014 for the amendment made after contact with the shared Supabase project
 
 ## Context
 
