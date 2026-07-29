@@ -1,4 +1,5 @@
 import type { AddressInfo } from "node:net";
+import { SequentialIdGenerator } from "@afrip/shared-kernel";
 import { API_VERSION, createServer, type ApiConfig } from "../src/server.js";
 import { DEFAULT_SUPABASE_SCHEMA } from "../src/config.js";
 import { createMemoryRuntime, type PlatformRuntime } from "../src/persistence.js";
@@ -23,9 +24,21 @@ export function testConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
   };
 }
 
-/** Boots the real HTTP server on an ephemeral port, in-memory backed. */
+/**
+ * Boots the real HTTP server on an ephemeral port, in-memory backed.
+ *
+ * Ids are seeded with `SequentialIdGenerator` — a test-only fake — so routes
+ * keep returning deterministic ids like `village-1` for tests to assert
+ * against. Production's default (`createPlatform`'s own default, wired
+ * through `createMemoryRuntime`/`createPersistence`) is `RandomIdGenerator`;
+ * this override exists only here; see the incident note on
+ * `createPlatform` in packages/platform/src/composition-root.ts.
+ */
 export async function startTestServer(overrides: Partial<ApiConfig> = {}): Promise<TestServer> {
-  return startTestServerWith({ config: testConfig(overrides), runtime: createMemoryRuntime() });
+  return startTestServerWith({
+    config: testConfig(overrides),
+    runtime: createMemoryRuntime({ idGenerator: (prefix) => new SequentialIdGenerator(prefix) }),
+  });
 }
 
 export interface TestServerDeps {

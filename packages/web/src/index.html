@@ -560,8 +560,10 @@ footer p + p { margin-top: var(--s1); }
   <section class="view hidden" id="view-ops" aria-labelledby="h-ops">
     <div class="view-head">
       <h2 id="h-ops">Operations</h2>
-      <p>Field and district workflows. Everything that changes platform state happens here, and the
-         domain's own rejection message is shown verbatim next to the field that caused it.</p>
+      <p>Field and district workflows, and the domain's own rejection message shown verbatim next to
+         the field that caused it. Amending a village that already exists — a new assessment, a
+         severity transition, a correction with a stated reason — belongs on that village's own page,
+         where its current values are in front of you.</p>
     </div>
 
     <div class="card" id="token-card">
@@ -669,6 +671,11 @@ function dateOnly(iso) {
 }
 
 function words(value) { return String(value === null || value === undefined ? "" : value).replace(/_/g, " "); }
+/** "a", "a and b", "a, b and c" — plain text, escape at the point of use. */
+function joinList(items) {
+  if (items.length <= 1) return items.join("");
+  return items.slice(0, -1).join(", ") + " and " + items[items.length - 1];
+}
 function pct(part, whole) { return whole > 0 ? Math.max(0, Math.min(100, (part / whole) * 100)) : 0; }
 function num1(value) { return Math.round(value * 10) / 10; }
 
@@ -700,16 +707,23 @@ async function api(path, options) {
 }
 
 /**
- * True when a 404 means "this route is not deployed on this revision", as
- * opposed to "the thing you asked for does not exist". The router answers an
- * unknown path with `{"error":"not found: GET /projects"}`; the domain answers a
- * missing aggregate with `{"error":"Village not found: village-1"}`. The
- * difference decides whether a section degrades or reports an error.
+ * True when the response means "this route is not deployed on this revision",
+ * as opposed to "the thing you asked for does not exist".
+ *
+ * The router answers an unknown path with `{"error":"not found: GET /projects"}`
+ * and a known path with no handler for that verb with
+ * `{"error":"method not allowed: GET /issues"}` — both mean the read this page
+ * wants has not shipped. The domain answers a missing aggregate with
+ * `{"error":"Village not found: village-1"}`, which is a real 404 the reader
+ * needs to see. The difference decides whether a section degrades quietly or
+ * reports an error.
  */
 function isMissingRoute(res) {
-  if (!res || res.status !== 404) return false;
+  if (!res) return false;
   const message = res.data && typeof res.data.error === "string" ? res.data.error : "";
-  return /^not found:\s*(GET|POST|PUT|PATCH|DELETE)\s/i.test(message);
+  if (res.status === 404) return /^not found:\s*(GET|POST|PUT|PATCH|DELETE)\s/i.test(message);
+  if (res.status === 405) return /^method not allowed:\s*(GET|POST|PUT|PATCH|DELETE)\s/i.test(message);
+  return false;
 }
 
 function apiError(res, fallback) {
@@ -1756,11 +1770,16 @@ async function loadVillagesView() {
   const index = $("#villages-index");
   const detail = $("#village-detail");
 
+  const view = $("#view-villages");
+
   if (state.villageId) {
     head.classList.add("hidden");
     index.classList.add("hidden");
     index.innerHTML = "";
     detail.classList.remove("hidden");
+    // The section is named by the village's own heading while the detail is up,
+    // so the index heading never labels a region it is not part of.
+    view.setAttribute("aria-labelledby", "h-village-detail");
     await renderVillageDetail(state.villageId);
     return;
   }
@@ -1769,6 +1788,7 @@ async function loadVillagesView() {
   detail.innerHTML = "";
   head.classList.remove("hidden");
   index.classList.remove("hidden");
+  view.setAttribute("aria-labelledby", "h-villages");
   await renderVillagesIndex();
 }
 
@@ -1806,6 +1826,10 @@ async function renderVillageDetail(villageId) {
     + '<div id="vd-head" aria-live="polite"></div>'
     + '<div id="vd-amend"></div>'
     + '<div id="vd-panels"></div>';
+  // Tapping a row replaces the page under the pointer; move focus with it so a
+  // keyboard or screen-reader user lands in the new view rather than on nothing.
+  const main = $("#main");
+  if (main) main.focus({ preventScroll: false });
   await paintVillageDetail(villageId, true);
 }
 
@@ -1843,7 +1867,8 @@ async function paintVillageDetail(villageId, buildAmend) {
   done(headEl);
 
   if (!village && !summary) {
-    headEl.innerHTML = (profileError
+    headEl.innerHTML = '<div class="view-head"><h2 id="h-village-detail">Village not available</h2></div>'
+      + (profileError
         ? errorHtml("Could not open this village", profileError)
         : stateHtml("No village with that identifier",
             "Nothing on this deployment is registered as " + villageId + ". The link may be stale."))
@@ -1908,7 +1933,7 @@ function numTile(label, value, alertWhenPositive) {
 function villageHeadHtml(village) {
   const geo = village.geo && typeof village.geo.lat === "number" && typeof village.geo.lng === "number"
     ? num1(village.geo.lat) + ", " + num1(village.geo.lng) : null;
-  return '<div class="view-head"><h2>' + esc(village.name) + "</h2>"
+  return '<div class="view-head"><h2 id="h-village-detail">' + esc(village.name) + "</h2>"
       + "<p>" + esc(village.district) + (village.state ? ", " + esc(village.state) : "") + "</p></div>"
     + '<div class="card">'
       + '<div class="card-head"><span class="card-title">Profile</span>' + severityChip(village.severity) + "</div>"
@@ -2080,7 +2105,7 @@ function timelineNote(entries) {
     + "Newest first. Every entry above is a record the platform genuinely persists: recorded assessments and "
     + "recovery-index updates. "
     + (missing.length > 0
-        ? esc(missing.join(", ").replace(/^./, function (c) { return c.toUpperCase(); }))
+        ? esc(joinList(missing).replace(/^./, function (c) { return c.toUpperCase(); }))
           + " are not here — they emit events, but only the current value is stored, so there is no entry to "
           + "show without inventing one. "
         : "")
