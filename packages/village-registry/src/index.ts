@@ -32,7 +32,19 @@ export {
 } from "./application/update-severity.js";
 
 export {
+  CorrectVillageProfile,
+  type CorrectVillageProfileDeps,
+  type CorrectVillageProfileInput,
+  type CorrectVillageProfileOutput,
+  type CorrectableField,
+  type CorrectableValue,
+  type FieldCorrection,
+  type ProfileCorrections,
+} from "./application/correct-village-profile.js";
+
+export {
   GetVillageProfile,
+  toVillageProfile,
   type GetVillageProfileDeps,
   type GetVillageProfileInput,
   type VillageProfile,

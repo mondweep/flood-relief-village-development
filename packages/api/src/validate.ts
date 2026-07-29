@@ -103,6 +103,11 @@ export function requiredCoordinates(body: Body, key: string): Result<Coordinates
   return ok({ lat: lat.value, lng: lng.value });
 }
 
+export function optionalCoordinates(body: Body, key: string): Result<Coordinates | undefined> {
+  if (body[key] === undefined || body[key] === null) return ok(undefined);
+  return requiredCoordinates(body, key);
+}
+
 export function requiredObject(body: Body, key: string): Result<Body> {
   const value = body[key];
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
