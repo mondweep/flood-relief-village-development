@@ -1949,8 +1949,30 @@ async function loadDistrictView() {
   renderDistrictTiles(unassigned);
 }
 
+/**
+ * Villages whose position nobody has surveyed (ADR 0012).
+ *
+ * `device_gps` and `map_pin` are deliberate placements by a person who was there
+ * or knew where it was; `geocoded` and `manual_entry` are inferences. Null when
+ * the API has not reported provenance — an older revision — because a confident
+ * "0 unverified" from a deployment that cannot tell would be the worst of the
+ * three possible answers.
+ */
+function countUnverifiedPositions(villages) {
+  if (!Array.isArray(villages) || villages.length === 0) return null;
+  let known = 0;
+  let inferred = 0;
+  villages.forEach(function (village) {
+    if (typeof village.positionSource !== "string") return;
+    known += 1;
+    if (village.positionSource === "geocoded" || village.positionSource === "manual_entry") inferred += 1;
+  });
+  return known === 0 ? null : inferred;
+}
+
 function renderDistrictTiles(unassigned) {
   const stats = state.stats || deriveStats(state.villages);
+  const needsSurvey = countUnverifiedPositions(state.villages);
   const bySeverity = stats.bySeverity || {};
   const acute = (bySeverity.critical || 0) + (bySeverity.severe || 0);
   const unassignedCount = unassigned === null ? null : unassigned.length;
@@ -1968,6 +1990,22 @@ function renderDistrictTiles(unassigned) {
       + (unassignedCount === null ? "<small>unknown</small>" : esc(String(unassignedCount))) + "</dd></div>"
     + '<div class="tile"><dt>Funds spent</dt><dd>'
       + (utilisation === null ? "<small>no projects</small>" : esc(String(utilisation)) + " <small>% of sanctioned</small>")
+      + "</dd></div>"
+    /**
+     * ADR 0012 §Consequences: "the feature's real payoff is not nicer data entry
+     * but a visible data-quality gap", and it asks for exactly this tile.
+     *
+     * It counts villages whose position was inferred rather than surveyed —
+     * looked up by name or typed in. Those are the ones where a boat could be
+     * sent to the wrong place, and until now the platform could not express the
+     * question at all: a coordinate was a coordinate.
+     *
+     * Flagged (`is-alert`) when non-zero, like the missing-lead-NGO tile, because
+     * both are work queues rather than statistics.
+     */
+    + '<div class="tile' + (needsSurvey === null || needsSurvey === 0 ? "" : " is-alert")
+      + '"><dt>Position unverified</dt><dd>'
+      + (needsSurvey === null ? "<small>unknown</small>" : esc(String(needsSurvey)))
       + "</dd></div>";
 }
 

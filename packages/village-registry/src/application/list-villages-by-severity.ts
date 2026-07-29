@@ -1,5 +1,5 @@
 import { ok, type Result } from "@afrip/shared-kernel";
-import type { Severity } from "../domain/village.js";
+import type { CoordinateSource, Severity } from "../domain/village.js";
 import type { VillageRepository } from "./ports.js";
 
 export interface VillageSummary {
@@ -10,6 +10,21 @@ export interface VillageSummary {
   severity: Severity;
   affectedFamilies: number;
   households: number;
+  /**
+   * How this village's position was obtained (ADR 0012 §1) — the provenance
+   * WITHOUT the coordinate.
+   *
+   * On the summary rather than only on the full profile so that "which villages
+   * still need a surveyed position?" can be answered from a list query. ADR 0012
+   * §Consequences calls that the feature's real payoff: not nicer data entry, but
+   * a visible data-quality gap.
+   *
+   * The lat/lng is deliberately absent from this summary, as it always was.
+   * Coordinates locate flood-affected settlements and, through the beneficiary
+   * registry, vulnerable people (§Context 4); the provenance says only whether
+   * anyone has been there with a device, which is a fact about our records.
+   */
+  positionSource: CoordinateSource;
 }
 
 export interface ListVillagesBySeverityDeps {
@@ -42,6 +57,7 @@ export class ListVillagesBySeverity {
         severity: village.severity,
         affectedFamilies: village.affectedFamilies,
         households: village.households,
+        positionSource: village.geo.source,
       })),
     );
   }

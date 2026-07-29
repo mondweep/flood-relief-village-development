@@ -113,6 +113,23 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
         severity: village.severity,
         households: village.households,
         affectedFamilies: village.affectedFamilies,
+        /**
+         * How the village's position was obtained (ADR 0012 §1) — and
+         * deliberately NOT the position itself.
+         *
+         * The coordinates stay out of this projection: ADR 0012 §Context 4 notes
+         * that they locate flood-affected settlements and, through the
+         * beneficiary registry, vulnerable people. The PROVENANCE carries none of
+         * that. It says only whether anyone has been to this village with a
+         * device, which is a data-quality fact about our records rather than a
+         * fact about the place.
+         *
+         * Published rather than kept internal because ADR 0012 §Consequences says
+         * the feature's real payoff "is not nicer data entry but a visible
+         * data-quality gap" — and a transparency dashboard that hides how
+         * trustworthy its own map is has the wrong idea about transparency.
+         */
+        positionSource: village.positionSource,
         // Villages with no assessment yet simply have no index — not an error.
         recovery: index.ok
           ? { composite: index.value.composite, calculatedAt: index.value.calculatedAt }
