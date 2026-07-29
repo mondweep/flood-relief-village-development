@@ -1,4 +1,5 @@
 export type {
+  CoordinateSource,
   DamageAssessment,
   DamageAssessmentInput,
   GeoCoordinates,
@@ -6,9 +7,26 @@ export type {
   UpdateDemographicsInput,
   VillageCreateProps,
 } from "./domain/village.js";
-export { Village, isSeverity } from "./domain/village.js";
+export {
+  COORDINATE_SOURCES_BY_TRUST,
+  SURVEYED_COORDINATE_SOURCES,
+  Village,
+  coordinateTrust,
+  isAtLeastAsTrustedAs,
+  isCoordinateSource,
+  isSeverity,
+  needsSurveyedPosition,
+} from "./domain/village.js";
 
-export type { VillageRepository } from "./application/ports.js";
+export type {
+  GeocodeCandidate,
+  GeocodingService,
+  LatLng,
+  PlaceDescription,
+  PlaceQuery,
+  VillageRepository,
+} from "./application/ports.js";
+export { confirmCandidate } from "./application/ports.js";
 
 export {
   RegisterVillage,
@@ -57,6 +75,19 @@ export {
 } from "./application/list-villages-by-severity.js";
 
 export { InMemoryVillageRepository } from "./adapters/in-memory-village-repository.js";
+
+export {
+  DEFAULT_FAKE_PLACES,
+  FakeGeocoding,
+  type FakePlace,
+} from "./adapters/fake-geocoding.js";
+
+export {
+  NominatimGeocoding,
+  type FetchLike,
+  type FetchResponse,
+  type NominatimGeocodingOptions,
+} from "./adapters/nominatim-geocoding.js";
 
 export {
   DAMAGE_ASSESSMENTS_TABLE,

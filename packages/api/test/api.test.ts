@@ -304,6 +304,33 @@ describe("api server (over real HTTP)", () => {
       expect(response.body).toEqual({ error: "geo must be an object with numeric lat and lng" });
     });
 
+    // ADR 0012 §1: coordinates without provenance are the ambiguity the decision
+    // removes, so a body that omits `geo.source` is rejected at the boundary
+    // rather than defaulted to anything.
+    it("maps coordinates without a source to 400 at the boundary", async () => {
+      const { source: _source, ...geoWithoutSource } = VILLAGE_BODY.geo;
+
+      const response = await server.request(
+        "/villages",
+        jsonBody({ ...VILLAGE_BODY, geo: geoWithoutSource }),
+      );
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: "geo.source must be a string" });
+    });
+
+    it("maps an unknown coordinate source to 400 from the aggregate", async () => {
+      const response = await server.request(
+        "/villages",
+        jsonBody({ ...VILLAGE_BODY, geo: { ...VILLAGE_BODY.geo, source: "vibes" } }),
+      );
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({
+        error: "geo.source must be one of device_gps, map_pin, geocoded, manual_entry",
+      });
+    });
+
     it("maps a not-found lookup to 404", async () => {
       const response = await server.request("/villages/village-does-not-exist");
 

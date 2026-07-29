@@ -22,7 +22,7 @@ describe("id generation survives a restart", () => {
       name: "Rampur",
       district: "Barpeta",
       state: "Assam",
-      geo: { lat: 26.32, lng: 91.0 },
+      geo: { lat: 26.32, lng: 91.0, source: "manual_entry" as const },
       population: 1200,
       households: 260,
       affectedFamilies: 190,

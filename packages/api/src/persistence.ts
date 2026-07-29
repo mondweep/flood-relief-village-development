@@ -15,6 +15,7 @@ import { SupabaseIssueRepository } from "@afrip/issue-tracking";
 import { SupabaseBeneficiaryRepository } from "@afrip/beneficiary-registry";
 import type { ProfileDirectory } from "./auth.js";
 import type { ApiConfig, PersistenceMode } from "./config.js";
+import { attachAuditLog, InMemoryAuditLog, SupabaseAuditLog, type AuditLog, type AuditLogSubscriber } from "./audit.js";
 import { SupabaseEnrolmentService, type EnrolmentService } from "./enrolment.js";
 import { SupabaseOwnershipRegistry } from "./ownership.js";
 import { SupabaseProfileDirectory } from "./profiles.js";
@@ -102,6 +103,19 @@ export interface PlatformRuntime {
    * than reporting a registration that went nowhere.
    */
   readonly enrolment?: EnrolmentService;
+  /**
+   * The durable, attributed event stream (ADR 0011). Always present: in memory
+   * mode it is an `InMemoryAuditLog`, which is honest rather than convenient —
+   * a runtime whose records do not survive a restart has no durable history to
+   * keep either.
+   */
+  readonly auditLog: AuditLog;
+  /**
+   * The subscriber writing to it, so `GET /health` can surface failed writes.
+   * A silently failing audit log is the one failure mode this whole ADR exists
+   * to prevent, and a counter nobody reads is not a counter.
+   */
+  readonly auditWriter: AuditLogSubscriber;
   /** Resolves ok when the datastore is reachable; err with a reason otherwise. */
   checkReady(): Promise<Result<{ mode: PersistenceMode }>>;
 }
@@ -119,10 +133,16 @@ export function partialPersistenceOf(runtime: PlatformRuntime): PartialPersisten
 export function createMemoryRuntime(overrides: PlatformOverrides = {}): PlatformRuntime {
   const ownership = new InMemoryOwnershipRegistry();
   const platform = createBasePlatform(overrides, ownership);
+  const auditLog = new InMemoryAuditLog();
+  // Attached to the LONG-LIVED bus, which is the bus every request-scoped
+  // platform publishes into (ADR 0010), so one subscription sees everything.
+  const auditWriter = attachAuditLog(platform.bus, auditLog);
   return {
     mode: "memory",
     platform,
     ownership,
+    auditLog,
+    auditWriter,
     beneficiaryDirectory: new BeneficiaryDirectory(platform.bus),
     // `mode: "memory"` already says every context is volatile; repeating four of
     // them under a "partial" heading would imply the other six are durable.
@@ -158,6 +178,7 @@ export function createSupabaseRuntimeFromClient(
   // Same client, same schema as every other adapter — ownership is stored beside
   // the data it describes rather than in a second place that can drift.
   const ownership = new SupabaseOwnershipRegistry(client, schema);
+  const auditLog = new SupabaseAuditLog(client, schema);
   const platform = createBasePlatform({
     ...overrides,
     repositories: {
@@ -184,6 +205,8 @@ export function createSupabaseRuntimeFromClient(
     mode: "supabase",
     platform,
     ownership,
+    auditLog,
+    auditWriter: attachAuditLog(platform.bus, auditLog),
     beneficiaryDirectory: new BeneficiaryDirectory(platform.bus),
     // Same client, same schema as every other adapter: identities are stored
     // beside the data they govern, not in a second place that can drift.

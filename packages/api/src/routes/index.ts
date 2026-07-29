@@ -1,4 +1,5 @@
 import { Router } from "../router.js";
+import { registerAuditRoutes } from "./audit.js";
 import { registerBeneficiaryRoutes } from "./beneficiaries.js";
 import { registerDashboardRoutes } from "./dashboard.js";
 import { registerFundRoutes } from "./funds.js";
@@ -31,6 +32,7 @@ export function buildRouter(deps: RouteDeps): Router {
   registerVolunteerRoutes(router, deps);
   registerPlanningRoutes(router, deps);
   registerSignalRoutes(router, deps);
+  registerAuditRoutes(router, deps);
   registerMapRoutes(router, deps, deps.fetchTile === undefined ? {} : { fetchTile: deps.fetchTile });
   registerPublicRoutes(router, deps);
   return router;

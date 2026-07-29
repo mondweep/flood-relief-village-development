@@ -545,7 +545,7 @@ describe("wrapping a real platform", () => {
     name: "Majuli",
     district: "Majuli",
     state: "Assam",
-    geo: { lat: 26.95, lng: 94.17 },
+    geo: { lat: 26.95, lng: 94.17, source: "manual_entry" },
     population: 900,
     households: 200,
     affectedFamilies: 120,

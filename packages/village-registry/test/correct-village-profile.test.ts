@@ -11,7 +11,7 @@ function existingVillage(): Village {
       name: "Rampur",
       district: "Patna",
       state: "Bihar",
-      geo: { lat: 25.6, lng: 85.1 },
+      geo: { lat: 25.6, lng: 85.1, source: "manual_entry" },
       population: 1200,
       households: 250,
       affectedFamilies: 80,
@@ -101,7 +101,7 @@ describe("CorrectVillageProfile", () => {
       villageId: "village-1",
       name: "Rampur", // unchanged
       district: "Patna", // unchanged
-      geo: { lat: 25.6, lng: 85.1 }, // unchanged
+      geo: { lat: 25.6, lng: 85.1, source: "manual_entry" }, // unchanged
       population: 1240, // changed
       reason: "typo in the population only",
     });
@@ -118,15 +118,15 @@ describe("CorrectVillageProfile", () => {
 
     const result = await useCase.execute({
       villageId: "village-1",
-      geo: { lat: 25.61, lng: 85.12 },
+      geo: { lat: 25.61, lng: 85.12, source: "manual_entry" },
       reason: "GPS reading taken at the wrong hamlet",
     });
 
     expect(result.ok).toBe(true);
     if (result.ok) {
       expect(result.value.changed.geo).toEqual({
-        from: { lat: 25.6, lng: 85.1 },
-        to: { lat: 25.61, lng: 85.12 },
+        from: { lat: 25.6, lng: 85.1, source: "manual_entry" },
+        to: { lat: 25.61, lng: 85.12, source: "manual_entry" },
       });
     }
   });

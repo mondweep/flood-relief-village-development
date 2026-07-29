@@ -69,8 +69,22 @@ export interface CorrectVillageProfileDeps {
   eventPublisher: EventPublisher;
 }
 
+/**
+ * Provenance counts as part of the value (ADR 0012 §1), so re-recording the
+ * same point with a better source IS a correction. "The pin was right, but it
+ * was a geocoder's guess and now someone has stood there with a GPS" changes
+ * what the record asserts, and flips the village out of the pending-survey set
+ * — losing that to a lat/lng-only comparison would make the surveyed/inferred
+ * distinction uncorrectable.
+ */
 function sameGeo(a: GeoCoordinates, b: GeoCoordinates): boolean {
-  return a.lat === b.lat && a.lng === b.lng;
+  return (
+    a.lat === b.lat &&
+    a.lng === b.lng &&
+    a.source === b.source &&
+    a.accuracyMetres === b.accuracyMetres &&
+    a.capturedAt === b.capturedAt
+  );
 }
 
 export class CorrectVillageProfile {

@@ -8,9 +8,100 @@ export function isSeverity(value: string): value is Severity {
   return (SEVERITIES as readonly string[]).includes(value);
 }
 
+/**
+ * How a position was obtained, most trusted first (ADR 0012 §1).
+ *
+ * The ordering lives HERE, in the declaration of the type itself, rather than
+ * in comparisons scattered across callers. Two things follow: the enum and its
+ * trust order cannot drift apart, and every question about relative provenance
+ * ("is this better than what we had?", "does this still need surveying?") is
+ * answered by an index into one list.
+ *
+ * The distinction is domain-meaningful, not bookkeeping: a district officer
+ * deciding where to send a boat needs to know which positions were surveyed and
+ * which were inferred from a name by a geocoder that, for rural Assam, is
+ * frequently and confidently wrong (ADR 0012 §Context 1).
+ */
+export const COORDINATE_SOURCES_BY_TRUST = [
+  "device_gps",
+  "map_pin",
+  "geocoded",
+  "manual_entry",
+] as const;
+
+export type CoordinateSource = (typeof COORDINATE_SOURCES_BY_TRUST)[number];
+
+export function isCoordinateSource(value: unknown): value is CoordinateSource {
+  return typeof value === "string" && (COORDINATE_SOURCES_BY_TRUST as readonly string[]).includes(value);
+}
+
+/** 0 is the most trusted. Lower compares better, like a finishing position. */
+export function coordinateTrust(source: CoordinateSource): number {
+  return COORDINATE_SOURCES_BY_TRUST.indexOf(source);
+}
+
+export function isAtLeastAsTrustedAs(a: CoordinateSource, b: CoordinateSource): boolean {
+  return coordinateTrust(a) <= coordinateTrust(b);
+}
+
+/**
+ * The two ways a human establishes a position: standing in the village with a
+ * GNSS receiver, or pointing at the spot on a map. Everything else is inferred.
+ */
+export const SURVEYED_COORDINATE_SOURCES: readonly CoordinateSource[] = ["device_gps", "map_pin"];
+
+/**
+ * "Which villages still need a surveyed position?" — the operational question
+ * ADR 0012 §Consequences names as the feature's real payoff. Giving the domain
+ * the vocabulary for it is the point of the enum; a caller that has to write
+ * `geo.source === "geocoded" || geo.source === "manual_entry"` has already lost
+ * the benefit.
+ */
+export function needsSurveyedPosition(geo: GeoCoordinates): boolean {
+  return !SURVEYED_COORDINATE_SOURCES.includes(geo.source);
+}
+
 export interface GeoCoordinates {
   readonly lat: number;
   readonly lng: number;
+  /**
+   * REQUIRED. An optional provenance field would default to absent for every
+   * existing row and every lazy caller, which is precisely the ambiguity this
+   * decision exists to remove (ADR 0012 §1).
+   */
+  readonly source: CoordinateSource;
+  /** Device GPS reports this; the other three sources do not. */
+  readonly accuracyMetres?: number;
+  /** ISO instant. */
+  readonly capturedAt?: string;
+}
+
+/**
+ * Deliberately stricter than `Date.parse`, which in V8 happily accepts `"2024"`,
+ * `"March"` and a good deal else. A provenance timestamp that cannot be compared
+ * to another provenance timestamp is not worth storing.
+ */
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}[Tt]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})$/;
+
+function validateGeo(geo: GeoCoordinates): string | null {
+  if (geo.lat < -90 || geo.lat > 90) return "geo.lat must be between -90 and 90";
+  if (geo.lng < -180 || geo.lng > 180) return "geo.lng must be between -180 and 180";
+  if (!isCoordinateSource(geo.source)) {
+    return `geo.source must be one of ${COORDINATE_SOURCES_BY_TRUST.join(", ")}`;
+  }
+  if (geo.accuracyMetres !== undefined) {
+    if (!Number.isFinite(geo.accuracyMetres) || geo.accuracyMetres <= 0) {
+      return "geo.accuracyMetres must be a positive finite number when present";
+    }
+  }
+  if (geo.capturedAt !== undefined && !isIsoInstant(geo.capturedAt)) {
+    return "geo.capturedAt must be an ISO instant when present";
+  }
+  return null;
+}
+
+function isIsoInstant(value: string): boolean {
+  return ISO_INSTANT.test(value) && !Number.isNaN(Date.parse(value));
 }
 
 export interface DamageAssessment {
@@ -50,8 +141,8 @@ function validateVillageProps(props: VillageCreateProps): string | null {
   if (props.name.trim().length === 0) return "name must not be empty";
   if (props.district.trim().length === 0) return "district must not be empty";
   if (props.state.trim().length === 0) return "state must not be empty";
-  if (props.geo.lat < -90 || props.geo.lat > 90) return "geo.lat must be between -90 and 90";
-  if (props.geo.lng < -180 || props.geo.lng > 180) return "geo.lng must be between -180 and 180";
+  const geoError = validateGeo(props.geo);
+  if (geoError) return geoError;
   if (!isNonNegativeInt(props.population)) return "population must be a non-negative integer";
   if (!isNonNegativeInt(props.households)) return "households must be a non-negative integer";
   if (!isNonNegativeInt(props.affectedFamilies)) return "affectedFamilies must be a non-negative integer";

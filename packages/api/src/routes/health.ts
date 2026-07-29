@@ -24,6 +24,7 @@ export function registerHealthRoutes(router: Router, deps: RouteDeps): void {
     // by the dashboard as "this API accepts an uncredentialed request", which is
     // true of the gate's behaviour and only incidentally true of the config.
     const legacy = deps.auth?.legacyTokenEnabled ?? legacyTokenEnabled(deps.config);
+    const auditFailures = deps.runtime.auditWriter?.stats().failedWrites ?? 0;
     return json(200, {
       status: "ok",
       persistence: deps.runtime.mode,
@@ -37,6 +38,18 @@ export function registerHealthRoutes(router: Router, deps: RouteDeps): void {
       // baked into a page built from a feature branch is a lie that survives
       // every review, because nothing about it looks wrong.
       ...(deps.config.build === null ? {} : { build: deps.config.build }),
+      // ADR 0011: a silently failing audit log is the exact failure this
+      // platform cannot afford, so failures are DISCLOSED rather than only
+      // logged. Present only when non-zero — a permanent `auditWriteFailures: 0`
+      // becomes wallpaper, and the field exists to be noticed.
+      ...(auditFailures === 0
+        ? {}
+        : {
+            auditWriteFailures: auditFailures,
+            auditWriteWarning:
+              "domain events have been lost from the audit trail. Each is logged in full under " +
+              "the marker '[api] AUDIT WRITE FAILED' and can be reinserted from there.",
+          }),
       ...(partial === null ? {} : { partialPersistence: partial }),
       ...(legacy ? { legacyTokenEnabled: true, legacyTokenWarning: LEGACY_TOKEN_WARNING } : {}),
     });

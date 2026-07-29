@@ -2,7 +2,9 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { AFRIP_SCHEMA, villageId, type VillageId } from "@afrip/shared-kernel";
 import {
   Village,
+  type CoordinateSource,
   type DamageAssessment,
+  type GeoCoordinates,
   type Severity,
   type VillageCreateProps,
 } from "../domain/village.js";
@@ -20,6 +22,10 @@ export interface VillageRow {
   state: string;
   lat: number;
   lng: number;
+  /** Coordinate provenance (ADR 0012 §1, migration 00007). Not null in Postgres. */
+  geo_source: string;
+  geo_accuracy_metres: number | null;
+  geo_captured_at: string | null;
   population: number;
   households: number;
   affected_families: number;
@@ -59,6 +65,9 @@ export function toRow(village: Village): VillageRow {
     state: village.state,
     lat: village.geo.lat,
     lng: village.geo.lng,
+    geo_source: village.geo.source,
+    geo_accuracy_metres: village.geo.accuracyMetres ?? null,
+    geo_captured_at: village.geo.capturedAt ?? null,
     population: village.population,
     households: village.households,
     affected_families: village.affectedFamilies,
@@ -94,6 +103,28 @@ function toDamageAssessment(row: DamageAssessmentRow): DamageAssessment {
 }
 
 /**
+ * Note what is NOT here: a fallback to `manual_entry` when `geo_source` is
+ * missing. Migration 00007 backfills every existing row and the column is not
+ * null, so a row without provenance is a row written by something that does not
+ * know about ADR 0012 — and quietly labelling it `manual_entry` would assert a
+ * fact nobody established. `Village.create` rejects the undefined source and
+ * `fromRow` reports it as a corrupt row, which is the honest outcome.
+ */
+function toGeoCoordinates(row: VillageRow): GeoCoordinates {
+  return {
+    lat: row.lat,
+    lng: row.lng,
+    source: row.geo_source as CoordinateSource,
+    ...(row.geo_accuracy_metres === null || row.geo_accuracy_metres === undefined
+      ? {}
+      : { accuracyMetres: Number(row.geo_accuracy_metres) }),
+    ...(row.geo_captured_at === null || row.geo_captured_at === undefined
+      ? {}
+      : { capturedAt: row.geo_captured_at }),
+  };
+}
+
+/**
  * Rebuilds a Village from its row plus its damage-assessment rows, oldest
  * first. Every factory failure throws — a half-built aggregate is never
  * returned to the application.
@@ -107,7 +138,7 @@ export function fromRow(row: VillageRow, assessmentRows: readonly DamageAssessme
     name: row.name,
     district: row.district,
     state: row.state,
-    geo: { lat: row.lat, lng: row.lng },
+    geo: toGeoCoordinates(row),
     population: row.population,
     households: row.households,
     affectedFamilies: row.affected_families,

@@ -1,13 +1,13 @@
-import type { DamageAssessment, Severity } from "@afrip/village-registry";
+import type { DamageAssessment, GeoCoordinates, Severity } from "@afrip/village-registry";
 import { badRequest, fromResult, fromResultWith, json, type HttpResponse } from "../http-result.js";
 import type { RequestContext, Router } from "../router.js";
 import {
   asObject,
-  optionalCoordinates,
   optionalNumber,
+  optionalProvenancedCoordinates,
   optionalString,
-  requiredCoordinates,
   requiredNumber,
+  requiredProvenancedCoordinates,
   requiredString,
 } from "../validate.js";
 import type { RouteDeps } from "./deps.js";
@@ -38,7 +38,7 @@ export function registerVillageRoutes(router: Router, _deps: RouteDeps): void {
     if (!district.ok) return badRequest(district.error);
     const state = requiredString(body.value, "state");
     if (!state.ok) return badRequest(state.error);
-    const geo = requiredCoordinates(body.value, "geo");
+    const geo = requiredProvenancedCoordinates(body.value, "geo");
     if (!geo.ok) return badRequest(geo.error);
     const population = requiredNumber(body.value, "population");
     if (!population.ok) return badRequest(population.error);
@@ -49,13 +49,14 @@ export function registerVillageRoutes(router: Router, _deps: RouteDeps): void {
     const severity = requiredString(body.value, "severity");
     if (!severity.ok) return badRequest(severity.error);
 
-    // Severity is an enum the Village aggregate validates; we only assert it is a string.
+    // Severity and `geo.source` are both enums the Village aggregate validates;
+    // we only assert here that they are strings (ADR 0012 §1).
     return fromResult(
       await villages(ctx).registerVillage.execute({
         name: name.value,
         district: district.value,
         state: state.value,
-        geo: geo.value,
+        geo: geo.value as GeoCoordinates,
         population: population.value,
         households: households.value,
         affectedFamilies: affectedFamilies.value,
@@ -145,7 +146,7 @@ export function registerVillageRoutes(router: Router, _deps: RouteDeps): void {
     if (!district.ok) return badRequest(district.error);
     const state = optionalString(body.value, "state");
     if (!state.ok) return badRequest(state.error);
-    const geo = optionalCoordinates(body.value, "geo");
+    const geo = optionalProvenancedCoordinates(body.value, "geo");
     if (!geo.ok) return badRequest(geo.error);
     const population = optionalNumber(body.value, "population");
     if (!population.ok) return badRequest(population.error);
@@ -161,7 +162,7 @@ export function registerVillageRoutes(router: Router, _deps: RouteDeps): void {
         ...(name.value === undefined ? {} : { name: name.value }),
         ...(district.value === undefined ? {} : { district: district.value }),
         ...(state.value === undefined ? {} : { state: state.value }),
-        ...(geo.value === undefined ? {} : { geo: geo.value }),
+        ...(geo.value === undefined ? {} : { geo: geo.value as GeoCoordinates }),
         ...(population.value === undefined ? {} : { population: population.value }),
         ...(households.value === undefined ? {} : { households: households.value }),
         ...(affectedFamilies.value === undefined ? {} : { affectedFamilies: affectedFamilies.value }),

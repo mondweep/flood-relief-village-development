@@ -8,7 +8,7 @@ function baseProps(): VillageCreateProps {
     name: "Rampur",
     district: "Patna",
     state: "Bihar",
-    geo: { lat: 25.6, lng: 85.1 },
+    geo: { lat: 25.6, lng: 85.1, source: "manual_entry" },
     population: 1200,
     households: 250,
     affectedFamilies: 80,
@@ -24,7 +24,7 @@ describe("Village.create", () => {
     expect(result.value.name).toBe("Rampur");
     expect(result.value.district).toBe("Patna");
     expect(result.value.state).toBe("Bihar");
-    expect(result.value.geo).toEqual({ lat: 25.6, lng: 85.1 });
+    expect(result.value.geo).toEqual({ lat: 25.6, lng: 85.1, source: "manual_entry" });
     expect(result.value.severity).toBe("severe");
     expect(result.value.damageAssessments).toEqual([]);
     expect(result.value.latestDamageAssessment).toBeNull();
@@ -61,27 +61,27 @@ describe("Village.create", () => {
   });
 
   it("rejects latitude below -90", () => {
-    const result = Village.create({ ...baseProps(), geo: { lat: -91, lng: 0 } });
+    const result = Village.create({ ...baseProps(), geo: { lat: -91, lng: 0, source: "manual_entry" } });
     expect(result.ok).toBe(false);
   });
 
   it("rejects latitude above 90", () => {
-    const result = Village.create({ ...baseProps(), geo: { lat: 91, lng: 0 } });
+    const result = Village.create({ ...baseProps(), geo: { lat: 91, lng: 0, source: "manual_entry" } });
     expect(result.ok).toBe(false);
   });
 
   it("rejects longitude below -180", () => {
-    const result = Village.create({ ...baseProps(), geo: { lat: 0, lng: -181 } });
+    const result = Village.create({ ...baseProps(), geo: { lat: 0, lng: -181, source: "manual_entry" } });
     expect(result.ok).toBe(false);
   });
 
   it("rejects longitude above 180", () => {
-    const result = Village.create({ ...baseProps(), geo: { lat: 0, lng: 181 } });
+    const result = Village.create({ ...baseProps(), geo: { lat: 0, lng: 181, source: "manual_entry" } });
     expect(result.ok).toBe(false);
   });
 
   it("accepts boundary geo values", () => {
-    const result = Village.create({ ...baseProps(), geo: { lat: -90, lng: 180 } });
+    const result = Village.create({ ...baseProps(), geo: { lat: -90, lng: 180, source: "manual_entry" } });
     expect(result.ok).toBe(true);
   });
 

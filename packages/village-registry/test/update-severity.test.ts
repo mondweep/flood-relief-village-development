@@ -11,7 +11,7 @@ function existingVillage(): Village {
       name: "Rampur",
       district: "Patna",
       state: "Bihar",
-      geo: { lat: 25.6, lng: 85.1 },
+      geo: { lat: 25.6, lng: 85.1, source: "manual_entry" },
       population: 1200,
       households: 250,
       affectedFamilies: 80,

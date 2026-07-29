@@ -103,9 +103,63 @@ export function requiredCoordinates(body: Body, key: string): Result<Coordinates
   return ok({ lat: lat.value, lng: lng.value });
 }
 
-export function optionalCoordinates(body: Body, key: string): Result<Coordinates | undefined> {
+// `optionalCoordinates` used to live here. It had exactly one caller — the
+// village correction route — and that route now takes provenance with the
+// point, so it went with it (ADR 0012 §1). `requiredCoordinates` stays: `Issue`
+// still uses it for `gps`, and adopting the value object there is explicitly
+// follow-on work.
+
+/**
+ * Coordinates carrying their provenance (ADR 0012 §1).
+ *
+ * Separate from `requiredCoordinates` above rather than replacing it: `Issue`
+ * uses that one for its `gps` field and has the same ambiguity, but adopting
+ * this value object there is explicitly follow-on work (ADR 0012 §Consequences),
+ * and widening the shared helper would force it early and half-done.
+ *
+ * `source` is typed `string` here, not the domain union. This layer asserts the
+ * SHAPE — that a source was supplied at all — and the `Village` aggregate owns
+ * the enum, exactly as it owns `severity`. Note the asymmetry with the fields
+ * below it: `source` has no default and no absent case, because a coordinate
+ * arriving without one is the ambiguity the whole decision exists to remove,
+ * and quietly filling it in at the HTTP boundary would reintroduce it here.
+ */
+export interface ProvenancedCoordinates extends Coordinates {
+  source: string;
+  accuracyMetres?: number;
+  capturedAt?: string;
+}
+
+export function requiredProvenancedCoordinates(
+  body: Body,
+  key: string,
+): Result<ProvenancedCoordinates> {
+  const point = requiredCoordinates(body, key);
+  if (!point.ok) return err(point.error);
+
+  const record = body[key] as Body;
+  const source = requiredString(record, "source");
+  if (!source.ok) return err(`${key}.source must be a string`);
+  const accuracyMetres = optionalNumber(record, "accuracyMetres");
+  if (!accuracyMetres.ok) return err(`${key}.accuracyMetres must be a finite number when present`);
+  const capturedAt = optionalString(record, "capturedAt");
+  if (!capturedAt.ok) return err(`${key}.capturedAt must be a string when present`);
+
+  return ok({
+    lat: point.value.lat,
+    lng: point.value.lng,
+    source: source.value,
+    ...(accuracyMetres.value === undefined ? {} : { accuracyMetres: accuracyMetres.value }),
+    ...(capturedAt.value === undefined ? {} : { capturedAt: capturedAt.value }),
+  });
+}
+
+export function optionalProvenancedCoordinates(
+  body: Body,
+  key: string,
+): Result<ProvenancedCoordinates | undefined> {
   if (body[key] === undefined || body[key] === null) return ok(undefined);
-  return requiredCoordinates(body, key);
+  return requiredProvenancedCoordinates(body, key);
 }
 
 export function requiredObject(body: Body, key: string): Result<Body> {

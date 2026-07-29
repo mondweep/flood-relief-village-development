@@ -11,7 +11,7 @@ function makeVillage(id: string, name: string, severity: Severity): Village {
       name,
       district: "Patna",
       state: "Bihar",
-      geo: { lat: 25.6, lng: 85.1 },
+      geo: { lat: 25.6, lng: 85.1, source: "manual_entry" },
       population: 1000,
       households: 200,
       affectedFamilies: 50,

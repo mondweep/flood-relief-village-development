@@ -17,7 +17,7 @@ async function registerVillage(platform: Platform): Promise<string> {
     name: "Rampur",
     district: "Darbhanga",
     state: "Bihar",
-    geo: { lat: 26.15, lng: 85.9 },
+    geo: { lat: 26.15, lng: 85.9, source: "manual_entry" },
     population: 1200,
     households: 260,
     affectedFamilies: 190,
