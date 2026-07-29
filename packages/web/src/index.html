@@ -467,6 +467,52 @@ footer a { color: var(--accent-ink); }
 
 /* The origin note on the public view. Set apart from the data sections around
    it: it is context, not a reading of the platform's state. */
+/* ==================================================================== *
+ * Location capture (ADR 0012)
+ * ==================================================================== */
+/* The three methods are peers, not a primary and two fallbacks: which one is
+   right depends on where the user is standing, and GPS — the most trusted — is
+   also the only one that works with no network at all. */
+.geo-methods { display: flex; flex-wrap: wrap; gap: var(--s2); margin-bottom: var(--s2); }
+.geo-methods button { width: auto !important; font-size: 0.8125rem; padding: 7px 12px; }
+
+/* The chosen position and, inseparably, where it came from. Provenance is shown
+   with the coordinate rather than tucked away, because a number on its own is
+   exactly the ambiguity ADR 0012 exists to remove. */
+.geo-readout {
+  display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--s2);
+  padding: var(--s2) var(--s3); border: 1px solid var(--line); border-radius: 8px;
+  background: var(--surface-2); font-size: 0.8125rem;
+}
+.geo-readout code { font-size: 0.8125rem; }
+.geo-readout.is-empty { color: var(--ink-muted); }
+/* Surveyed vs inferred, at a glance. A geocoded guess and a GPS fix must not
+   look the same, which is the entire operational point of the provenance. */
+.geo-trust { font-weight: 600; padding: 1px 8px; border-radius: 999px; font-size: 0.75rem; }
+.geo-trust.surveyed { background: var(--ok-bg, #e6f4ea); color: var(--ok-ink, #137333); }
+.geo-trust.inferred { background: var(--warn-bg, #fef7e0); color: var(--warn-ink, #8a6116); }
+
+.geo-map {
+  height: 260px; margin-top: var(--s2); border: 1px solid var(--line-strong);
+  border-radius: 8px; overflow: hidden; background: var(--surface-2);
+}
+.geo-map.hidden { display: none; }
+/* Leaflet sets its own z-index stack; keep it under the header and any dialog. */
+.geo-map .leaflet-pane, .geo-map .leaflet-control { z-index: 1; }
+.geo-attribution { font-size: 0.6875rem; color: var(--ink-muted); margin-top: 4px; }
+
+/* Geocoder candidates. A list, always — never a single answer, because a
+   geocoder that returns one result invites the caller to trust it. */
+.geo-candidates { list-style: none; margin: var(--s2) 0 0; padding: 0; display: grid; gap: 6px; }
+.geo-candidates li { margin: 0; }
+.geo-candidates button {
+  width: 100% !important; text-align: left; font-size: 0.8125rem; padding: 8px 10px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 6px; cursor: pointer;
+}
+.geo-candidates button:hover { border-color: var(--line-strong); background: var(--surface-2); }
+.geo-cand-name { display: block; font-weight: 600; }
+.geo-cand-meta { display: block; color: var(--ink-muted); font-size: 0.75rem; }
+
 .origin { background: var(--surface-2); border-left: 3px solid var(--accent-ink); }
 .origin p { max-width: 68ch; }
 .origin p + p { margin-top: var(--s2); }
@@ -2889,8 +2935,7 @@ function amendSpecs(villageId) {
         n("population", "Population", { min: 0, required: true, half: true }),
         n("households", "Households", { min: 0, required: true, half: true }),
         n("affectedFamilies", "Affected families", { min: 0, required: true, half: true }),
-        n("lat", "Latitude", { step: "any", required: true, half: true }),
-        n("lng", "Longitude", { step: "any", required: true, half: true }),
+        geo("geo", "Location"),
         reasonField
       ],
       build: function (v) {
@@ -2913,12 +2958,20 @@ function amendSpecs(villageId) {
               changed[pair[1]] = { from: current[pair[1]], to: next };
             }
           });
+        // A correction only carries a position when a NEW one was captured. The
+        // control starts empty on this form rather than pre-filled with the
+        // current coordinate, and that is deliberate: pre-filling would make
+        // "leave the rest alone" impossible for a location, because re-submitting
+        // an unchanged number as `manual_entry` would silently DOWNGRADE a
+        // surveyed GPS position to a typed one. Correcting a location means
+        // capturing it again.
         const currentGeo = current.geo || {};
-        const lat = Number(v.lat);
-        const lng = Number(v.lng);
-        if (lat !== Number(currentGeo.lat) || lng !== Number(currentGeo.lng)) {
-          body.geo = { lat: lat, lng: lng };
-          changed.geo = { from: currentGeo, to: { lat: lat, lng: lng } };
+        const captured = geoValueOf("amend-profile-geo");
+        if (captured && (Number(captured.lat) !== Number(currentGeo.lat)
+                      || Number(captured.lng) !== Number(currentGeo.lng)
+                      || captured.source !== currentGeo.source)) {
+          body.geo = captured;
+          changed.geo = { from: currentGeo, to: captured };
         }
         this.localChanged = changed;
         body.reason = v.reason;
@@ -3045,8 +3098,10 @@ function syncAmendDefaults(village) {
   set("amend-profile-population", village.population);
   set("amend-profile-households", village.households);
   set("amend-profile-affectedFamilies", village.affectedFamilies);
-  set("amend-profile-lat", village.geo ? village.geo.lat : "");
-  set("amend-profile-lng", village.geo ? village.geo.lng : "");
+  // Deliberately NOT prefilling a location. See the note in the correction
+  // form's build(): re-submitting an unchanged coordinate would relabel a
+  // surveyed GPS position as `manual_entry`, silently downgrading its trust.
+  // Correcting a location means capturing it again.
 }
 
 /**
@@ -3060,6 +3115,12 @@ function wireAmendForm(spec) {
   const msgEl = $(".msg", form);
   const button = $("button[type=submit]", form);
 
+  // Same reason as the Operations engine: the capture control needs live
+  // elements and a map container that exists before Leaflet measures it.
+  spec.fields.forEach(function (field) {
+    if (field.type === "geo") renderGeoCapture(spec.id + "-" + field.name, msgEl);
+  });
+
   form.addEventListener("submit", async function (event) {
     event.preventDefault();
     setMsg(msgEl, null);
@@ -3070,6 +3131,10 @@ function wireAmendForm(spec) {
 
     for (let i = 0; i < spec.fields.length; i += 1) {
       const field = spec.fields[i];
+      // A geo field holds no form input — its value lives in the capture
+      // control — so the generic required check cannot see it. build() validates
+      // it and returns an error, which is handled below.
+      if (field.type === "geo") continue;
       if (field.required && !values[field.name]) {
         markField(form, field.name, field.label + " is required.");
         setMsg(msgEl, "error", "Check this form", esc(field.label + " is required."));
@@ -3083,7 +3148,7 @@ function wireAmendForm(spec) {
       }
     }
 
-    const request = spec.build(values);
+    const request = spec.build(values, spec.id);
     if (request.error) {
       markField(form, request.field, request.error);
       setMsg(msgEl, "error", "Check this form", esc(request.error));
@@ -4648,6 +4713,14 @@ function rememberId(kind, id, label) {
 
 const t = (name, label, extra) => Object.assign({ name: name, label: label, type: "text" }, extra || {});
 const n = (name, label, extra) => Object.assign({ name: name, label: label, type: "number" }, extra || {});
+/**
+ * A location-capture field (ADR 0012). Replaces a pair of lat/lng number inputs
+ * with GPS, a map picker and a name lookup — and records which was used, which
+ * the pair of numbers could never say.
+ */
+const geo = (name, label, extra) =>
+  Object.assign({ name: name, label: label, type: "geo" }, extra || {});
+
 const sel = (name, label, options, extra) =>
   Object.assign({ name: name, label: label, type: "select", options: options }, extra || {});
 const area = (name, label, extra) => Object.assign({ name: name, label: label, type: "textarea" }, extra || {});
@@ -4747,17 +4820,23 @@ const WORKFLOW_GROUPS = [
           t("name", "Village name", { required: true }),
           t("district", "District", { required: true, half: true }),
           t("state", "State", { required: true, half: true }),
-          n("lat", "Latitude", { step: "any", required: true, half: true }),
-          n("lng", "Longitude", { step: "any", required: true, half: true }),
+          geo("geo", "Location"),
           n("population", "Population", { min: 0, required: true, half: true }),
           n("households", "Households", { min: 0, required: true, half: true }),
           n("affectedFamilies", "Affected families", { min: 0, required: true, half: true }),
           sel("severity", "Severity", SEVERITY_OPTIONS, { value: "severe", half: true })
         ],
-        build: function (v) {
+        build: function (v, formId) {
+          // The captured position, WITH its provenance. The API requires
+          // `geo.source` (ADR 0012 §1) and refuses a bare lat/lng, so there is no
+          // path here that quietly sends an unlabelled coordinate.
+          const captured = geoValueOf(formId + "-geo");
+          if (!captured) {
+            return { error: "Set the village location first — use GPS, the map, or a name search." };
+          }
           return { path: "/villages", body: {
             name: v.name, district: v.district, state: v.state,
-            geo: { lat: Number(v.lat), lng: Number(v.lng) },
+            geo: captured,
             population: Number(v.population), households: Number(v.households),
             affectedFamilies: Number(v.affectedFamilies), severity: v.severity } };
         },
@@ -5252,6 +5331,360 @@ const WORKFLOW_GROUPS = [
 /* --- Form engine ---------------------------------------------------- */
 
 /** Renders one declared field as labelled, described, accessible markup. */
+/* ==================================================================== *
+ * Location capture (ADR 0012)
+ * ====================================================================
+ * Registering a village used to mean typing decimal latitude into a box.
+ * Nobody knows their village's decimal coordinates, so in practice that field
+ * was left to a colleague with a laptop, filled with a district centroid copied
+ * between rows, or simply wrong — and `Village.create` only checks the numbers
+ * are in range, so a plausible wrong coordinate passed silently and the disaster
+ * map was quietly built on it.
+ *
+ * Three ways in, and they are peers rather than a primary with two fallbacks,
+ * because which is right depends on where the user is standing:
+ *
+ *   GPS      — standing in the village. The most trusted, and the ONLY one that
+ *              works with no network at all, which is the same situation.
+ *   Map pin  — someone who knows the area, looking at it. Needs tiles.
+ *   Search   — a name looked up. Needs network, and for rural Assam is
+ *              frequently wrong, so it never commits without confirmation.
+ *
+ * Every path records WHERE THE NUMBER CAME FROM. That is the point: a district
+ * officer deciding where to send a boat needs to know which positions were
+ * surveyed and which were inferred, and the old model could not tell them apart.
+ */
+
+/** Loaded once, on first use. 147 KB is not charged to anyone who never opens a map. */
+let leafletLoading = null;
+
+/**
+ * Fetches the vendored Leaflet from OUR origin, never a CDN.
+ *
+ * Lazily, because ADR 0012 says the map "should load only when a capture flow is
+ * opened, not on first paint" — most visitors are reading the public
+ * transparency view and will never open one.
+ */
+function loadLeaflet() {
+  if (window.L) return Promise.resolve(window.L);
+  if (leafletLoading) return leafletLoading;
+  leafletLoading = new Promise(function (resolve, reject) {
+    const css = document.createElement("link");
+    css.rel = "stylesheet";
+    css.href = "/map/leaflet.css";
+    document.head.appendChild(css);
+    const script = document.createElement("script");
+    script.src = "/map/leaflet.js";
+    script.onload = function () { resolve(window.L); };
+    script.onerror = function () {
+      // Reset so a later attempt can retry — a failed load on a flaky connection
+      // must not permanently disable the map for the session.
+      leafletLoading = null;
+      reject(new Error("the map could not be loaded"));
+    };
+    document.head.appendChild(script);
+  });
+  return leafletLoading;
+}
+
+/**
+ * A GPS fix worse than this is offered for confirmation on the map rather than
+ * accepted outright. An indoor fix in a relief camp can be kilometres out, and
+ * ADR 0012 asks for exactly this check — the accuracy is recorded either way, so
+ * a later reader can judge it too.
+ */
+const GPS_ACCURACY_WARN_METRES = 100;
+
+/** Assam, for a map opened before any position is known. */
+const DEFAULT_MAP_CENTRE = { lat: 26.2, lng: 92.9, zoom: 7 };
+
+/** Human wording for each provenance, and whether it counts as surveyed. */
+const GEO_SOURCE_LABELS = {
+  device_gps: { label: "Device GPS", surveyed: true },
+  map_pin: { label: "Picked on map", surveyed: true },
+  geocoded: { label: "Looked up by name", surveyed: false },
+  manual_entry: { label: "Typed in", surveyed: false }
+};
+
+/** Live capture state, one entry per rendered control. */
+const geoControls = Object.create(null);
+
+/** Reads the captured position for a form, or null. Used by the workflow builder. */
+function geoValueOf(controlId) {
+  const state = geoControls[controlId];
+  return state && state.value ? state.value : null;
+}
+
+function formatLatLng(value) {
+  // Five decimals is about a metre — more would imply a precision none of these
+  // methods has, and a GPS fix is already carrying its own accuracy figure.
+  return Number(value.lat).toFixed(5) + ", " + Number(value.lng).toFixed(5);
+}
+
+function renderGeoReadout(state) {
+  const out = state.readout;
+  if (!state.value) {
+    out.className = "geo-readout is-empty";
+    out.textContent = "No position yet — use one of the options above.";
+    return;
+  }
+  const meta = GEO_SOURCE_LABELS[state.value.source] || { label: state.value.source, surveyed: false };
+  out.className = "geo-readout";
+  out.innerHTML =
+    '<code>' + esc(formatLatLng(state.value)) + "</code>"
+    + '<span class="geo-trust ' + (meta.surveyed ? "surveyed" : "inferred") + '">'
+    + esc(meta.surveyed ? "Surveyed" : "Unverified") + "</span>"
+    + '<span class="hint">' + esc(meta.label)
+    + (state.value.accuracyMetres
+        ? " · ±" + Math.round(state.value.accuracyMetres) + " m"
+        : "")
+    + "</span>"
+    + (meta.surveyed
+        ? ""
+        : '<span class="hint">Pending survey — confirm on the map when someone is on the ground.</span>');
+}
+
+/** Records a position and its provenance, and reflects it on the map if one is open. */
+function setGeoValue(state, value, options) {
+  state.value = value;
+  renderGeoReadout(state);
+  if (state.map && value && (!options || options.moveMap !== false)) {
+    state.marker.setLatLng([value.lat, value.lng]);
+    state.map.setView([value.lat, value.lng], Math.max(state.map.getZoom(), 13));
+  }
+}
+
+/**
+ * Opens the map, creating it on first use.
+ *
+ * Tiles come from OUR proxy (ADR 0012 §4), so the tile host never learns which
+ * villages a field worker is looking at. `maxZoom` matches the proxy's own bound;
+ * asking for more would produce 404s the user would read as a broken map.
+ */
+async function openGeoMap(state, msg) {
+  state.mapHost.classList.remove("hidden");
+  if (state.map) {
+    // A map created while its container was hidden has measured itself as zero
+    // by zero. Leaflet needs telling once it is visible.
+    state.map.invalidateSize();
+    return state.map;
+  }
+  let L;
+  try {
+    L = await loadLeaflet();
+  } catch (_) {
+    state.mapHost.classList.add("hidden");
+    if (msg) setMsg(msg, "error", "The map could not be loaded",
+      "You can still use GPS, or type coordinates directly. Check your connection and try again.");
+    return null;
+  }
+
+  const start = state.value || DEFAULT_MAP_CENTRE;
+  state.map = L.map(state.mapHost, { attributionControl: false })
+    .setView([start.lat, start.lng], state.value ? 13 : DEFAULT_MAP_CENTRE.zoom);
+  L.tileLayer("/map/tiles/{z}/{x}/{y}.png", { minZoom: 5, maxZoom: 18 }).addTo(state.map);
+  state.marker = L.marker([start.lat, start.lng], { draggable: true }).addTo(state.map);
+
+  // Clicking or dragging is a deliberate human placement, so it is a map_pin —
+  // one of the two surveyed levels. It overrides a geocoded suggestion, which is
+  // the confirmation step ADR 0012 requires before a looked-up position counts.
+  const place = function (latlng) {
+    setGeoValue(state, {
+      lat: latlng.lat, lng: latlng.lng,
+      source: "map_pin",
+      capturedAt: new Date().toISOString()
+    }, { moveMap: false });
+    state.marker.setLatLng(latlng);
+  };
+  state.map.on("click", function (event) { place(event.latlng); });
+  state.marker.on("dragend", function () { place(state.marker.getLatLng()); });
+  return state.map;
+}
+
+/** Builds the control inside an already-rendered form field. */
+function renderGeoCapture(controlId, msg) {
+  const host = document.getElementById(controlId);
+  if (!host || geoControls[controlId]) return;
+
+  host.innerHTML =
+    '<div class="geo-methods">'
+    + '<button type="button" data-geo-act="gps">Use my location</button>'
+    + '<button type="button" data-geo-act="map">Pick on map</button>'
+    + '<button type="button" data-geo-act="search">Search by name</button>'
+    + '<button type="button" data-geo-act="manual" class="secondary">Type coordinates</button>'
+    + "</div>"
+    + '<div class="geo-readout is-empty"></div>'
+    + '<div class="geo-map hidden"></div>'
+    + '<p class="geo-attribution hidden">Map data © OpenStreetMap contributors</p>'
+    + '<ul class="geo-candidates"></ul>';
+
+  const state = {
+    id: controlId,
+    value: null,
+    readout: host.querySelector(".geo-readout"),
+    mapHost: host.querySelector(".geo-map"),
+    attribution: host.querySelector(".geo-attribution"),
+    candidates: host.querySelector(".geo-candidates"),
+    map: null,
+    marker: null
+  };
+  geoControls[controlId] = state;
+  renderGeoReadout(state);
+
+  host.addEventListener("click", async function (event) {
+    const button = event.target.closest("[data-geo-act]");
+    if (!button) return;
+    event.preventDefault();
+    const action = button.getAttribute("data-geo-act");
+
+    if (action === "map") {
+      state.attribution.classList.remove("hidden");
+      await withBusy(button, "Loading map…", async function () { await openGeoMap(state, msg); });
+      return;
+    }
+
+    if (action === "gps") {
+      if (!navigator.geolocation) {
+        setMsg(msg, "info", "This device cannot report its location",
+          "Use the map, or type coordinates directly.");
+        return;
+      }
+      await withBusy(button, "Locating…", function () {
+        return new Promise(function (resolve) {
+          navigator.geolocation.getCurrentPosition(
+            async function (position) {
+              const accuracy = position.coords.accuracy;
+              setGeoValue(state, {
+                lat: position.coords.latitude,
+                lng: position.coords.longitude,
+                source: "device_gps",
+                accuracyMetres: accuracy,
+                capturedAt: new Date(position.timestamp).toISOString()
+              });
+              if (accuracy && accuracy > GPS_ACCURACY_WARN_METRES) {
+                // Recorded, but flagged and shown on the map for confirmation. An
+                // indoor fix can be kilometres out, and a wrong surveyed position
+                // is worse than an honest unverified one.
+                state.attribution.classList.remove("hidden");
+                await openGeoMap(state, msg);
+                setMsg(msg, "info", "That fix is not very precise",
+                  "Your device reported ±" + Math.round(accuracy) + " m. Check the pin on the map and "
+                  + "drag it if it is in the wrong place — indoors a reading can be far out.");
+              } else {
+                setMsg(msg, "ok", "Location captured",
+                  "Recorded from device GPS" + (accuracy ? " (±" + Math.round(accuracy) + " m)" : "") + ".");
+              }
+              resolve();
+            },
+            function (error) {
+              // Permission refusal is a normal path, not an error state.
+              const denied = error && error.code === 1;
+              setMsg(msg, denied ? "info" : "error",
+                denied ? "Location permission was declined" : "Your location could not be read",
+                denied
+                  ? "That is fine — pick the village on the map instead, or type coordinates."
+                  : "Try again outdoors, or pick the village on the map.");
+              resolve();
+            },
+            { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+          );
+        });
+      });
+      return;
+    }
+
+    if (action === "search") {
+      // The district on the form is what makes a lookup meaningful: it is what
+      // separates Rampur-in-Barpeta from Rampur-in-Sivasagar.
+      const form = host.closest("form") || document;
+      const nameEl = form.querySelector('[name="name"]');
+      const districtEl = form.querySelector('[name="district"]');
+      const name = nameEl ? nameEl.value.trim() : "";
+      const district = districtEl ? districtEl.value.trim() : "";
+      if (name === "" || district === "") {
+        setMsg(msg, "info", "Enter the village name and district first",
+          "A name alone is ambiguous — several districts in Assam have a village with the same name.");
+        return;
+      }
+      await withBusy(button, "Searching…", async function () {
+        const res = await api("/geocode/villages?name=" + encodeURIComponent(name)
+          + "&district=" + encodeURIComponent(district));
+        state.candidates.innerHTML = "";
+        if (res.status === 501) {
+          setMsg(msg, "info", "Name search is not available on this deployment",
+            "Use GPS or the map instead.");
+          return;
+        }
+        if (!res.ok) {
+          // "The geocoder is down" must not look like "no such village".
+          setMsg(msg, "error", "The lookup service could not be reached",
+            esc(apiError(res, "try again, or place the village on the map")));
+          return;
+        }
+        const found = (res.data && res.data.candidates) || [];
+        if (found.length === 0) {
+          setMsg(msg, "info", "No match for that name",
+            "Many small chapori settlements are missing from map data entirely. Place it on the map "
+            + "instead — a pin you drop is more trustworthy than a name lookup anyway.");
+          return;
+        }
+        setMsg(msg, "info", "Confirm which one this is",
+          "These are suggestions, not answers. Choose one and it will be shown on the map for you to "
+          + "check — village names repeat across districts.");
+        state.candidates.innerHTML = found.map(function (candidate, index) {
+          return "<li><button type=\"button\" data-geo-pick=\"" + index + "\">"
+            + '<span class="geo-cand-name">' + esc(candidate.displayName) + "</span>"
+            + '<span class="geo-cand-meta">'
+            + esc((candidate.kind || "place")) + " · confidence "
+            + Math.round((candidate.confidence || 0) * 100) + "% · " + esc(candidate.provider)
+            + "</span></button></li>";
+        }).join("");
+        state.found = found;
+      });
+      return;
+    }
+
+    if (action === "manual") {
+      const raw = window.prompt("Enter latitude and longitude, separated by a comma:",
+        state.value ? formatLatLng(state.value) : "");
+      if (raw === null) return;
+      const parts = String(raw).split(",");
+      const lat = Number(parts[0]);
+      const lng = Number(parts[1]);
+      if (parts.length !== 2 || !isFinite(lat) || !isFinite(lng)) {
+        setMsg(msg, "error", "That is not a coordinate pair", "Expected something like 26.95, 94.17.");
+        return;
+      }
+      // Honestly labelled. This is the lowest trust level and the readout says so.
+      setGeoValue(state, { lat: lat, lng: lng, source: "manual_entry" });
+      setMsg(msg, "info", "Coordinates recorded as typed",
+        "Marked unverified, because nobody has confirmed this position on the ground or on a map.");
+      return;
+    }
+  });
+
+  // Choosing a candidate does NOT commit it: it drops a pin on the map for
+  // confirmation, still labelled `geocoded`. Dragging that pin makes it a
+  // map_pin, which is the deliberate human confirmation ADR 0012 requires.
+  host.addEventListener("click", async function (event) {
+    const pick = event.target.closest("[data-geo-pick]");
+    if (!pick) return;
+    event.preventDefault();
+    const candidate = (state.found || [])[Number(pick.getAttribute("data-geo-pick"))];
+    if (!candidate) return;
+    setGeoValue(state, {
+      lat: candidate.lat, lng: candidate.lng,
+      source: "geocoded",
+      capturedAt: new Date().toISOString()
+    });
+    state.attribution.classList.remove("hidden");
+    await openGeoMap(state, msg);
+    setMsg(msg, "info", "Check this is the right village",
+      "Recorded as a name lookup, which counts as unverified. If the pin is wrong, drag it — that "
+      + "makes it a confirmed position.");
+  });
+}
+
 function fieldHtml(formId, field) {
   const id = formId + "-" + field.name;
   const hintId = id + "-hint";
@@ -5270,6 +5703,16 @@ function fieldHtml(formId, field) {
   if (field.step !== undefined) attrs.push('step="' + esc(String(field.step)) + '"');
 
   let control;
+  if (field.type === "geo") {
+    // Rendered by renderGeoCapture() once the form is in the DOM, because it
+    // needs live elements to bind to and a map container that exists before
+    // Leaflet is asked to measure it.
+    return '<div class="field" data-field="' + esc(field.name) + '" data-geo="1">'
+      + "<label>" + esc(field.label) + "</label>"
+      + '<div class="geo-capture" id="' + esc(id) + '"></div>'
+      + '<span class="field-error" id="' + esc(errorId) + '" aria-live="polite"></span>'
+      + "</div>";
+  }
   if (field.type === "select") {
     control = "<select " + attrs.join(" ") + ">" + field.options.map(function (option) {
       return '<option value="' + esc(option) + '"' + (field.value === option ? " selected" : "") + ">"
@@ -5427,6 +5870,13 @@ function wireForm(workflow) {
   const msgEl = $(".msg", form);
   const button = $("button[type=submit]", form);
 
+  // Location capture needs live elements and a map container that exists before
+  // Leaflet measures it, so it is built after the form is in the DOM rather than
+  // as part of the markup string (ADR 0012).
+  workflow.fields.forEach(function (field) {
+    if (field.type === "geo") renderGeoCapture(workflow.id + "-" + field.name, msgEl);
+  });
+
   form.addEventListener("submit", async function (event) {
     event.preventDefault();
     setMsg(msgEl, null);
@@ -5438,6 +5888,10 @@ function wireForm(workflow) {
     // Required fields first: never send a request we know will be rejected.
     for (let i = 0; i < workflow.fields.length; i += 1) {
       const field = workflow.fields[i];
+      // A geo field holds no form input — its value lives in the capture
+      // control — so the generic required check cannot see it. build() validates
+      // it and returns an error, which is handled below.
+      if (field.type === "geo") continue;
       if (field.required && !values[field.name]) {
         markField(form, field.name, field.label + " is required.");
         setMsg(msgEl, "error", "Check this form", esc(field.label + " is required."));
@@ -5451,7 +5905,7 @@ function wireForm(workflow) {
       }
     }
 
-    const request = workflow.build(values);
+    const request = workflow.build(values, workflow.id);
     if (request.error) {
       markField(form, request.field, request.error);
       setMsg(msgEl, "error", "Check this form", esc(request.error));
