@@ -128,6 +128,21 @@ a { color: inherit; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--line-strong); flex: none; }
 .dot.up { background: var(--ok); } .dot.down { background: var(--danger); } .dot.pending { background: var(--warn-line); }
 
+/* ADR 0015 — the session pill is also the global sign-out.
+   `button.pill` inherits the readout styling above; these rules only handle the
+   two states. Disabled it must look exactly like the status text it sits beside
+   (`#conn`), because a dead button that looks live is worse than a label. Live
+   it must look pressable — a control that reads as a status readout and behaves
+   as a button is the failure this styling exists to prevent. */
+button.pill { font: inherit; font-size: 0.75rem; cursor: pointer; }
+button.pill:disabled { cursor: default; opacity: 1; }
+button.pill:not(:disabled):hover { border-color: var(--line-strong); background: var(--surface); }
+button.pill:not(:disabled):focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+.pill-action {
+  border-left: 1px solid var(--line); margin-left: 2px; padding-left: var(--s2);
+  color: var(--accent-ink); font-weight: 600;
+}
+
 /* Tab bar: fixed to the bottom on a phone (thumb reach), a top strip on wider screens. */
 .nav {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
@@ -466,10 +481,16 @@ footer p + p { margin-top: var(--s1); }
         <span class="dot pending" id="conn-dot" aria-hidden="true"></span>
         <span id="conn-text">Checking service…</span>
       </p>
-      <p class="pill" id="session-pill" aria-live="polite">
+      <!-- ADR 0015: the session pill is the GLOBAL way out. It is a <button>
+           from the start rather than being swapped for one when a session
+           appears, because a control that changes element type under the user
+           loses focus and confuses assistive technology. `disabled` carries the
+           "nothing to sign out of" state instead. -->
+      <button type="button" class="pill" id="session-pill" aria-live="polite" disabled>
         <span class="dot" id="session-dot" aria-hidden="true"></span>
         <span id="session-text">Not connected</span>
-      </p>
+        <span class="pill-action hidden" id="session-signout" aria-hidden="true">Sign out</span>
+      </button>
     </div>
   </div>
 </header>
@@ -3799,6 +3820,22 @@ function applyAuthState() {
   } else {
     $("#session-text").textContent = state.authOpen ? "No credential required" : "Not signed in";
   }
+
+  // ADR 0015: the pill is the global way out. Enabled only when there is a
+  // session to end, so it never looks like a control that does nothing — and
+  // the label says what pressing it does, not what state we are in.
+  const pill = $("#session-pill");
+  pill.disabled = !connected;
+  $("#session-signout").classList.toggle("hidden", !connected);
+  $("#session-signout").setAttribute("aria-hidden", String(!connected));
+  pill.setAttribute("aria-label", connected
+    ? "Signed in as " + ($("#session-text").textContent || "this account") + ". Activate to sign out."
+    : ($("#session-text").textContent || "Not signed in"));
+
+  // Start or stop the idle clock with the session itself, so a tab that has
+  // just signed in is watched from that moment rather than from the first time
+  // the user happens to move the pointer.
+  if (connected) { if (!idleTimer) noteActivity(); } else { stopIdleWatch(); }
 }
 
 /**
@@ -4138,20 +4175,118 @@ tokenForm.addEventListener("submit", async function (event) {
 
 /* --- Sign out -------------------------------------------------------- */
 
-$("#sign-out").addEventListener("click", async function () {
+/**
+ * Ends the session. One implementation, three callers (ADR 0015): the button in
+ * the Operations panel, the header pill, and the idle timer.
+ *
+ * `busyOn` is whichever control the user actually pressed, so the spinner
+ * appears where they are looking. The idle timer passes none.
+ *
+ * The GoTrue revoke is best effort; the local session is cleared WHETHER OR NOT
+ * it answers. A sign-out that can fail is a sign-out nobody can rely on, and the
+ * offline case is precisely the one where a device is being handed to somebody
+ * else.
+ *
+ * What this cannot do: recall an access token already issued. The API verifies
+ * JWTs statelessly, so a token in flight stays valid until it expires. Signing
+ * out stops RENEWAL. That bounds what it is worth — protection against the next
+ * person holding the device, not against someone who already has a token.
+ */
+async function endSession(busyOn, title, detail) {
   const mode = state.auth.mode;
   const access = state.token;
-  await withBusy($("#sign-out"), "Signing out…", async function () {
-    // Best effort: the local session is cleared whether or not GoTrue answers,
-    // because a sign-out that can fail is a sign-out nobody can rely on.
+  stopIdleWatch();
+
+  const revoke = async function () {
     if (mode === "supabase" && access && gotrueReady()) await gotrue("/logout", {}, access);
-  });
+  };
+  if (busyOn) await withBusy(busyOn, "Signing out…", revoke);
+  else await revoke();
+
   signOutLocal();
   setMsg($("#auth-in-msg"), null);
   setMsg(tokenMsg, null);
-  setMsg(authMsg, "ok", "Signed out", "Your session has been cleared from this tab.");
+  setMsg(authMsg, "ok", title || "Signed out",
+    detail || "Your session has been cleared from this tab.");
   showAuthTab("signin");
+  applyAuthState();
   refresh();
+}
+
+$("#sign-out").addEventListener("click", function () {
+  return endSession($("#sign-out"));
+});
+
+// ADR 0015: the same action from the header, reachable in every view. Without
+// it, a signed-in user on any view but Operations has no way out on screen.
+$("#session-pill").addEventListener("click", function () {
+  if ($("#session-pill").disabled) return;
+  goto("ops");
+  return endSession($("#session-pill"));
+});
+
+/* --- Idle sign-out (ADR 0015) ---------------------------------------- */
+
+/**
+ * A tab left open renews itself indefinitely — the refresh token is spent before
+ * each expiry — so ADR 0008's "closing the tab ends the session" is true and
+ * insufficient: the failure mode is nobody closing the tab. On a tablet shared
+ * around a relief camp, that leaves the beneficiary register open.
+ *
+ * Both numbers are judgements, not measurements, and they are here in one place
+ * because they will be wrong for somebody. Too short punishes exactly the
+ * write-heavy workflows this platform exists for — a half-filled damage
+ * assessment lost while the officer reads a paper form. Too long defeats the
+ * point. Thirty minutes is longer than a form takes and shorter than a break.
+ */
+const IDLE_LIMIT_MS = 30 * 60 * 1000;
+const IDLE_WARN_MS = 60 * 1000;
+
+let idleTimer = null;
+let idleWarnTimer = null;
+let idleWarning = false;
+
+/**
+ * Signals that a person is actually present. Deliberately NOT
+ * `visibilitychange` or any timer: a backgrounded tab fires those by itself and
+ * would keep alive a session nobody is attending.
+ */
+const IDLE_EVENTS = ["pointerdown", "keydown", "touchstart", "scroll", "wheel"];
+
+function stopIdleWatch() {
+  if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+  if (idleWarnTimer) { clearTimeout(idleWarnTimer); idleWarnTimer = null; }
+  if (idleWarning) { idleWarning = false; setMsg($("#auth-in-msg"), null); }
+}
+
+function noteActivity() {
+  // Only restart the clock while there is a session to lose.
+  if (!state.token) { stopIdleWatch(); return; }
+  const wasWarning = idleWarning;
+  stopIdleWatch();
+  if (wasWarning) {
+    // They came back during the warning. Say the session was kept, because a
+    // warning that vanishes silently leaves them unsure whether it counted.
+    setMsg($("#auth-in-msg"), "ok", "Still signed in", "Your session was about to end; it has been extended.");
+  }
+  idleWarnTimer = setTimeout(function () {
+    idleWarning = true;
+    // Warned rather than ended outright: an unannounced sign-out mid-form reads
+    // as a bug, and the response to a bug is to try the same thing again — so a
+    // silent timeout costs the work twice and explains itself never.
+    setMsg($("#auth-in-msg"), "info", "Signing you out shortly",
+      "You have been inactive for a while. Move the pointer or press a key to stay signed in. "
+      + "Anything you have typed but not submitted will be lost.");
+  }, Math.max(0, IDLE_LIMIT_MS - IDLE_WARN_MS));
+  idleTimer = setTimeout(function () {
+    idleWarning = false;
+    void endSession(null, "Signed out after inactivity",
+      "Your session ended because the device was left unattended. Sign in again to continue.");
+  }, IDLE_LIMIT_MS);
+}
+
+IDLE_EVENTS.forEach(function (name) {
+  document.addEventListener(name, noteActivity, { passive: true, capture: true });
 });
 
 /* --- Sign in / register toggle --------------------------------------- */

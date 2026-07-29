@@ -16,12 +16,16 @@
 | [0012](0012-location-capture-and-coordinate-provenance.md) | Location capture: GPS, map pin or geocode, with provenance recorded | **Proposed** |
 | [0013](0013-village-detail-and-amendment.md) | Viewing and amending a village: correction is not the same as change | Accepted |
 | [0014](0014-membership-on-a-shared-supabase-project.md) | Membership is explicit: no auto-enrolment on a shared Supabase project | Accepted |
+| [0015](0015-ending-a-session.md) | Ending a session: deliberate, reachable, and automatic | Accepted |
 
 0008–0011 form one coherent change — identity, what identities may do, how identity reaches the
 code that needs it, and what gets recorded. 0008, 0009 and 0010 are **built and their migrations are
 applied**; 0011 is not started. 0014 amends 0008 after contact with the shared project: it removes
 the auto-enrolment 0008 had assumed was safe. 0012 is independent of all of them.
 
-**Built ≠ deployed.** The production service still runs the pre-0008 revision on the shared
-`API_TOKEN`, where role enforcement adds nothing because every request arrives with no actor. See
+0015 covers the other end of a session: the sign-out ADR 0008 built but left reachable from only one
+of five views, plus an idle timeout for the tab nobody closes.
+
+**Deployed.** The production service runs 0008 + 0009 + 0010 + 0014 with the shared `API_TOKEN`
+retired, so every caller signs in and role enforcement applies. See
 `docs/DEPLOYMENT.md`.
