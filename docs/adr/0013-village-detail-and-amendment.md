@@ -1,6 +1,14 @@
 # ADR 0013 — Viewing and amending a village: correction is not the same as change
 
-**Status:** Proposed
+**Status:** Accepted — implemented
+
+> **Implementation note.** Delivered as specified, with one honest shortfall: the history timeline
+> (decision 1) is thin. `GET /villages/:id/history` returns only what is genuinely persisted today —
+> damage assessments and recovery-score history. Severity transitions and profile corrections emit
+> events carrying both sides of the change, but nothing stores them, so the route returns fewer
+> entries rather than synthesising any. It gains those kinds when ADR 0011's audit log lands, at
+> which point the route reads the event stream and the response envelope simply grows more `kind`
+> values.
 
 ## Context
 

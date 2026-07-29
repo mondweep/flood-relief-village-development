@@ -15,7 +15,7 @@
 | [0011](0011-audit-trail-from-domain-events.md) | The audit trail is the domain event stream, made durable and attributed | **Proposed** |
 
 | [0012](0012-location-capture-and-coordinate-provenance.md) | Location capture: GPS, map pin or geocode, with provenance recorded | **Proposed** |
-| [0013](0013-village-detail-and-amendment.md) | Viewing and amending a village: correction is not the same as change | **Proposed** |
+| [0013](0013-village-detail-and-amendment.md) | Viewing and amending a village: correction is not the same as change | Accepted |
 
 0008–0011 form one coherent change — identity, what identities may do, how identity reaches the
 code that needs it, and what gets recorded. 0012 is independent of them. All are **Proposed**:
