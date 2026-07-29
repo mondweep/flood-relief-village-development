@@ -407,6 +407,14 @@ code.cmd { display: block; font-family: var(--mono); font-size: 0.75rem; backgro
 }
 .or::before, .or::after { content: ""; flex: 1 1 0; height: 1px; background: var(--line); }
 .pw-rules { font-size: 0.8125rem; color: var(--ink-muted); margin: calc(-1 * var(--s2)) 0 var(--s3); max-width: 42ch; }
+/* A button that reads as a link. A real <button> rather than an <a href="#">,
+   so it is keyboard-operable and announced as an action rather than as
+   navigation — and so it cannot leave a stray "#" in the address bar, which on
+   this page is the router's territory. */
+.linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--accent-ink);
+           text-decoration: underline; cursor: pointer; width: auto !important; }
+.linkish:hover { text-decoration: none; }
+.auth-form .actions > .linkish { width: auto !important; margin-top: var(--s3); display: block; }
 
 .identity { display: flex; flex-wrap: wrap; gap: var(--s3) var(--s4); align-items: center; }
 .identity .who { font-weight: 600; overflow-wrap: anywhere; }
@@ -656,6 +664,47 @@ footer p + p { margin-top: var(--s1); }
             <p class="field-error" id="signin-password-error"></p>
           </div>
           <div class="actions"><button type="submit" id="signin-submit">Sign in</button></div>
+          <p class="hint" style="margin-top:10px">
+            <button type="button" class="linkish" id="forgot-password">Forgotten your password?</button>
+          </p>
+        </form>
+
+        <!-- Step 1 of recovery: ask for the link. Note the deliberately
+             non-committal success wording in the handler — GoTrue answers 200
+             whether or not the address has an account, so that a stranger cannot
+             use this form to discover who is registered. Saying "sent!" would
+             leak exactly what that 200 is designed to hide. -->
+        <form class="auth-form hidden" id="recover-form" novalidate>
+          <p class="hint">We will email you a link that signs you in once, so you can set a new
+             password. The link expires, and using it ends any other session.</p>
+          <div class="field">
+            <label for="recover-email">Email address</label>
+            <input id="recover-email" name="email" type="email" autocomplete="email" inputmode="email"
+                   autocapitalize="none" spellcheck="false" aria-describedby="recover-email-error" required>
+            <p class="field-error" id="recover-email-error"></p>
+          </div>
+          <div class="actions">
+            <button type="submit" id="recover-submit">Email me a reset link</button>
+            <button type="button" class="linkish" id="recover-cancel">Back to sign in</button>
+          </div>
+        </form>
+
+        <!-- Step 2: reached only by following the emailed link, which arrives as
+             a URL fragment carrying `type=recovery`. At this point a session
+             already exists — the link IS the credential — so this form is not a
+             gate, it is the thing that stops the user being locked out again the
+             next time they need a password. -->
+        <form class="auth-form hidden" id="newpw-form" novalidate>
+          <p class="hint" id="newpw-who"></p>
+          <div class="field">
+            <label for="newpw-password">Choose a new password</label>
+            <input id="newpw-password" name="password" type="password" autocomplete="new-password"
+                   aria-describedby="newpw-password-error newpw-rules" required>
+            <p class="field-error" id="newpw-password-error"></p>
+          </div>
+          <p class="pw-rules" id="newpw-rules">At least 8 characters. A short phrase you will remember is
+             stronger than a short word with symbols in it.</p>
+          <div class="actions"><button type="submit" id="newpw-submit">Set new password</button></div>
         </form>
 
         <form class="auth-form hidden" id="register-form" novalidate>
@@ -4018,7 +4067,15 @@ function consumeAuthFragment() {
   history.replaceState(null, "", location.pathname + location.search + restored);
 
   if (access) {
-    return { session: { access_token: access, refresh_token: refresh, expires_in: expires } };
+    return {
+      session: { access_token: access, refresh_token: refresh, expires_in: expires },
+      // GoTrue labels the fragment: `recovery` for a reset link, `signup` for a
+      // confirmation, absent for an ordinary OAuth return. Carried through
+      // because a recovery link that silently becomes a normal sign-in leaves
+      // the user with a working session and the same forgotten password — they
+      // are back here next week, and the reset appears not to have worked.
+      recovery: params.get("type") === "recovery"
+    };
   }
   return { error: failure || "sign-in was not completed" };
 }
@@ -4099,12 +4156,31 @@ $("#sign-out").addEventListener("click", async function () {
 
 /* --- Sign in / register toggle --------------------------------------- */
 
+/**
+ * `authTab` is one of: signin | register | recover | newpw.
+ *
+ * `recover` and `newpw` are the two halves of password reset and are NOT
+ * reachable from the tab strip — the first from a link under the sign-in form,
+ * the second only by following an emailed link. The tab strip stays two buttons
+ * wide because there are still only two things a person chooses between; the
+ * other two are places they are taken.
+ */
 function showAuthTab(which) {
-  authTab = which === "register" ? "register" : "signin";
+  const known = ["signin", "register", "recover", "newpw"];
+  authTab = known.indexOf(which) === -1 ? "signin" : which;
   $("#tab-signin").setAttribute("aria-pressed", String(authTab === "signin"));
   $("#tab-register").setAttribute("aria-pressed", String(authTab === "register"));
-  $("#signin-form").classList.toggle("hidden", !gotrueReady() || authTab !== "signin");
-  $("#register-form").classList.toggle("hidden", !gotrueReady() || authTab !== "register");
+  const ready = gotrueReady();
+  $("#signin-form").classList.toggle("hidden", !ready || authTab !== "signin");
+  $("#register-form").classList.toggle("hidden", !ready || authTab !== "register");
+  $("#recover-form").classList.toggle("hidden", !ready || authTab !== "recover");
+  // The one form shown even when GoTrue looks unready: reaching it means a
+  // recovery link was followed and a session already exists, so hiding it would
+  // strand someone mid-reset over a failed config read.
+  $("#newpw-form").classList.toggle("hidden", authTab !== "newpw");
+  // The choice between signing in and registering is meaningless while setting a
+  // new password, and clicking either would silently abandon the reset.
+  $("#auth-choice").classList.toggle("hidden", !ready || authTab === "newpw");
 }
 
 $("#tab-signin").addEventListener("click", function () {
@@ -4112,6 +4188,122 @@ $("#tab-signin").addEventListener("click", function () {
 });
 $("#tab-register").addEventListener("click", function () {
   showAuthTab("register"); setMsg(authMsg, null); $("#register-email").focus();
+});
+
+/* --- Password reset -------------------------------------------------- */
+
+$("#forgot-password").addEventListener("click", function () {
+  showAuthTab("recover");
+  setMsg(authMsg, null);
+  // Carry across whatever they already typed: they came here from a failed
+  // sign-in, and retyping the address is a small insult at a bad moment.
+  const typed = $("#signin-email").value.trim();
+  if (typed !== "") $("#recover-email").value = typed;
+  $("#recover-email").focus();
+});
+
+$("#recover-cancel").addEventListener("click", function () {
+  showAuthTab("signin"); setMsg(authMsg, null); $("#signin-email").focus();
+});
+
+$("#recover-form").addEventListener("submit", async function (event) {
+  event.preventDefault();
+  clearAuthErrors("recover");
+  const email = $("#recover-email").value.trim();
+  if (email === "") { fieldError("recover", "email", "Enter your email address."); return; }
+  if (email.indexOf("@") < 1 || email.indexOf(".", email.indexOf("@")) < 0) {
+    fieldError("recover", "email", "That does not look like an email address.");
+    return;
+  }
+
+  await withBusy($("#recover-submit"), "Sending…", async function () {
+    // `redirect_to` must be on the project's allow-list in the Supabase
+    // dashboard (Authentication -> URL Configuration). If it is not, GoTrue
+    // still answers 200 and sends the mail, but the link lands on the project's
+    // default Site URL instead of here — so a reset that "worked" leaves the
+    // user somewhere that cannot complete it. That failure is invisible from
+    // this side, which is why it is written down rather than guarded.
+    const back = location.origin + location.pathname;
+    const res = await gotrue("/recover?redirect_to=" + encodeURIComponent(back), { email: email });
+
+    // Rate limiting is the one failure worth naming: GoTrue allows one mail per
+    // address per interval and answers 429, and "nothing happened" would send
+    // someone clicking the button repeatedly, extending the very cooldown they
+    // are hitting.
+    if (res.status === 429) {
+      setMsg(authMsg, "info", "A link was requested very recently",
+        "The sign-in service limits how often it sends these. Wait a minute, then try again — "
+        + "and check your spam folder in the meantime, in case the first one arrived.");
+      return;
+    }
+    if (!res.ok && res.network) {
+      setMsg(authMsg, "error", "Could not reach the sign-in service",
+        "Nothing was sent. Check your connection and try again.");
+      return;
+    }
+
+    // DELIBERATELY the same answer whether or not that address has an account.
+    // GoTrue returns 200 either way precisely so this form cannot be used to
+    // find out who is registered, and phrasing it as "sent" would hand back the
+    // fact the 200 exists to conceal. Say what we did: we asked.
+    showAuthTab("signin");
+    setMsg(authMsg, "ok", "Check your email",
+      "If <strong>" + esc(email) + "</strong> has an account, a reset link is on its way. "
+      + "It expires shortly, so use it soon. No email means no account for that address — "
+      + "you can create one from “Create an account”.");
+    $("#signin-email").value = email;
+  });
+});
+
+$("#newpw-form").addEventListener("submit", async function (event) {
+  event.preventDefault();
+  clearAuthErrors("newpw");
+  const password = $("#newpw-password").value;
+  if (password === "") { fieldError("newpw", "password", "Enter a new password."); return; }
+  if (password.length < MIN_PASSWORD) {
+    fieldError("newpw", "password", "Use at least " + MIN_PASSWORD + " characters.");
+    return;
+  }
+
+  await withBusy($("#newpw-submit"), "Saving…", async function () {
+    // PUT, not POST: this updates the user. `gotrue()` only speaks POST, so the
+    // call is made directly — the one place that is worth the duplication rather
+    // than growing a method parameter used exactly once.
+    let res;
+    try {
+      res = await fetch(state.config.supabaseUrl + "/auth/v1/user", {
+        method: "PUT",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          apikey: state.config.publishableKey,
+          authorization: "Bearer " + state.token
+        },
+        body: JSON.stringify({ password: password })
+      });
+    } catch (_) {
+      setMsg(authMsg, "error", "Could not reach the sign-in service",
+        "Your password was not changed. Try again — the link is still valid until it expires.");
+      return;
+    }
+
+    let data = null;
+    try { data = await res.json(); } catch (_) { data = null; }
+    if (!res.ok) {
+      setMsg(authMsg, "error", "Could not set the password",
+        esc(gotrueMessage({ ok: false, status: res.status, data: data }, "the request was refused"))
+        + " — the recovery link may have expired, in which case request a new one.");
+      return;
+    }
+
+    $("#newpw-password").value = "";
+    showAuthTab("signin");
+    // Already signed in: the recovery link carried a real session, and changing
+    // the password does not end it. So finish the normal post-sign-in work
+    // rather than making someone who has just proved themselves do it twice.
+    await afterSignIn("Password changed",
+      "You are signed in, and your new password will work next time.");
+  });
 });
 
 /* --- Boot the identity layer ----------------------------------------- */
@@ -4135,6 +4327,25 @@ async function startAuth(pending) {
     setMsg(authMsg, "error", "Sign-in was not completed", esc(pending.error));
   }
   if (pending && pending.session && adoptSession(pending.session)) {
+    if (pending.recovery) {
+      // A recovery link. The session is real — the link IS the credential — but
+      // stopping here to set a password is the whole point: without it they have
+      // access now and the same forgotten password next time.
+      state.auth.mode = "supabase";
+      applyAuthState();
+      await loadIdentity();
+      applyAuthState();
+      const who = state.auth.user && state.auth.user.email;
+      $("#newpw-who").innerHTML = who
+        ? "Signed in from your reset link as <strong>" + esc(who) + "</strong>. Choose a new password."
+        : "Signed in from your reset link. Choose a new password.";
+      showAuthTab("newpw");
+      setMsg(authMsg, null);
+      goto("ops");
+      $("#newpw-password").focus();
+      refresh();
+      return;
+    }
     await afterSignIn("Signed in", "Your session is held in this tab only.");
     return;
   }
