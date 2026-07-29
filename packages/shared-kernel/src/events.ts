@@ -25,10 +25,12 @@ export type EventActor =
       readonly id: string;
       readonly email: string;
       /**
-       * The application role at the time of the action. Typed as `string`, not
-       * the API's `UserRole`: the shared kernel is the package everything else
-       * depends on, so it cannot depend back on the API to learn the role list.
-       * The authoritative union lives in `packages/api/src/auth.ts`.
+       * The application role at the time of the action. Typed as `string`
+       * rather than as `UserRole` (which now lives one file over, in
+       * `authorization.ts`) on purpose: an event is a record of the past, and a
+       * role that has since been renamed or retired must still round-trip. A
+       * narrowed type here would make the audit trail unreadable the first time
+       * the role list changes.
        */
       readonly role: string;
     }

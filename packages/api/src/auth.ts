@@ -8,6 +8,7 @@ import {
   type JWTVerifyGetKey,
   type JWTPayload,
 } from "jose";
+import { DEFAULT_ROLE, type AuthenticatedActor } from "@afrip/shared-kernel";
 import type { ApiConfig } from "./config.js";
 import { json, type HttpResponse } from "./http-result.js";
 
@@ -69,38 +70,28 @@ function normalise(path: string): string {
 // ---------------------------------------------------------------------------
 
 /**
- * The role model (ADR 0009 refines what each may DO; this file only resolves
- * which one applies). Mirrors the check constraint on
- * `assam_floods.user_profiles.role` in 00004_user_profiles.sql — the two lists
- * must not drift.
+ * The role model. It lives in the shared kernel (`authorization.ts`) rather than
+ * here, because the same five names appear in a Postgres check constraint, in
+ * this gate, in an event's `actor` and in the frontend — and a second copy would
+ * drift by gaining a role in one place that the other silently treats as
+ * unknown. Re-exported so this module stays the one place the API asks "who is
+ * this?", which is all it does: what each role may DO is ADR 0009, enforced in
+ * `authorizePlatform`.
  */
-export const USER_ROLES = [
-  "admin",
-  "district_officer",
-  "ngo_coordinator",
-  "village_committee",
-  "citizen",
-] as const;
-
-export type UserRole = (typeof USER_ROLES)[number];
+export {
+  DEFAULT_ROLE,
+  USER_ROLES,
+  isUserRole,
+  type UserRole,
+} from "@afrip/shared-kernel";
 
 /**
- * Least privilege, and the only role self-registration can ever produce. The
- * database trigger in 00004 hard-codes the same default; nothing a user puts in
- * their own signup metadata can raise it.
+ * Who the current request is acting as. Null when the request carries no
+ * identity. An alias for the shared kernel's `AuthenticatedActor` — the name
+ * `ActorContext` is what the router and every route module already say, and
+ * renaming ~40 call sites to gain nothing would be churn.
  */
-export const DEFAULT_ROLE: UserRole = "citizen";
-
-export function isUserRole(value: unknown): value is UserRole {
-  return typeof value === "string" && (USER_ROLES as readonly string[]).includes(value);
-}
-
-/** Who the current request is acting as. Null when the request carries no identity. */
-export interface ActorContext {
-  readonly id: string;
-  readonly email: string;
-  readonly role: UserRole;
-}
+export type ActorContext = AuthenticatedActor;
 
 /** The claims we take off a verified token. Everything else is ignored. */
 export interface VerifiedClaims {
