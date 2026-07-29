@@ -69,6 +69,17 @@ const PUBLIC_PREFIX = "/public/";
 const TILE_PREFIX = "/map/tiles/";
 
 /**
+ * The vendored map library, served from our own origin (ADR 0012 §4). Public for
+ * the same unavoidable reason as the tiles: `<script src>` and `<link href>`
+ * cannot carry an Authorization header.
+ *
+ * The exposure is nil — Leaflet is BSD-licensed and anyone can fetch it from
+ * unpkg. Serving it here rather than linking there keeps a CDN out of the page's
+ * supply chain and out of its Content-Security-Policy.
+ */
+const VENDOR_PATHS: ReadonlySet<string> = new Set(["/map/leaflet.js", "/map/leaflet.css"]);
+
+/**
  * Routes reachable with a VERIFIED TOKEN BUT NO AFRIP PROFILE.
  *
  * Exactly one, and it should stay that way. Enrolment is the door a new user
@@ -99,7 +110,8 @@ export function isPublicPath(path: string): boolean {
     PUBLIC_EXACT_PATHS.has(normalised) ||
     normalised === "/public" ||
     normalised.startsWith(PUBLIC_PREFIX) ||
-    normalised.startsWith(TILE_PREFIX)
+    normalised.startsWith(TILE_PREFIX) ||
+    VENDOR_PATHS.has(normalised)
   );
 }
 

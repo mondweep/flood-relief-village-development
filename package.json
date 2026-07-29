@@ -11,7 +11,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "build": "esbuild packages/api/src/server.ts --bundle --platform=node --target=node22 --format=esm --loader:.html=text --outfile=dist/server.js --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
+    "build": "esbuild packages/api/src/server.ts --bundle --platform=node --target=node22 --format=esm --loader:.html=text --loader:.txt=text --outfile=dist/server.js --banner:js=\"import{createRequire}from'module';const require=createRequire(import.meta.url);\"",
     "start": "node dist/server.js",
     "dev": "npm run build && node dist/server.js"
   },

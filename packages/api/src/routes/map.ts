@@ -1,3 +1,5 @@
+import leafletCss from "../../../web/vendor/leaflet-1.9.4.css.txt";
+import leafletJs from "../../../web/vendor/leaflet-1.9.4.js.txt";
 import { badRequest, bytes, json, notFound, type HttpResponse } from "../http-result.js";
 import type { RequestContext, Router } from "../router.js";
 import type { RouteDeps } from "./deps.js";
@@ -159,8 +161,47 @@ export interface MapRouteOptions {
 
 export { TileCache };
 
+/** Leaflet's version, surfaced so the page can log what it loaded. */
+export const LEAFLET_VERSION = "1.9.4";
+
+/**
+ * A year, immutable. These two routes serve a PINNED version from the bundle, so
+ * the bytes at a given URL cannot change without a redeploy — which is exactly
+ * the condition under which a long cache is safe. `immutable` stops a phone on a
+ * poor connection revalidating 147 KB it already has.
+ */
+const VENDOR_CACHE = "public, max-age=31536000, immutable";
+
 export function registerMapRoutes(router: Router, _deps: RouteDeps, options: MapRouteOptions = {}): void {
   const fetchTile = options.fetchTile ?? fetch;
+
+  /**
+   * The map library, from our own origin (ADR 0012 §4).
+   *
+   * PUBLIC, like the tiles, and for the same unavoidable reason: these are loaded
+   * by `<script>` and `<link>`, which cannot carry an Authorization header. The
+   * exposure is nil — it is a BSD-licensed library anyone can download from
+   * unpkg — and the reason it is served here rather than linked there is that a
+   * CDN would put a third party in the page's supply chain and in its CSP.
+   *
+   * `@preserve` in Leaflet's own header carries the copyright notice its BSD
+   * 2-Clause licence requires; the full licence text is checked in beside the
+   * file at packages/web/vendor/leaflet-1.9.4.LICENSE.txt. Do not minify these
+   * further or strip comments — that notice must survive.
+   */
+  router.get("/map/leaflet.js", async (): Promise<HttpResponse> => ({
+    status: 200,
+    body: leafletJs,
+    raw: true,
+    headers: { "content-type": "text/javascript; charset=utf-8", "cache-control": VENDOR_CACHE },
+  }));
+
+  router.get("/map/leaflet.css", async (): Promise<HttpResponse> => ({
+    status: 200,
+    body: leafletCss,
+    raw: true,
+    headers: { "content-type": "text/css; charset=utf-8", "cache-control": VENDOR_CACHE },
+  }));
   const cache = options.cache ?? new TileCache();
   const now = options.now ?? (() => Date.now());
 
