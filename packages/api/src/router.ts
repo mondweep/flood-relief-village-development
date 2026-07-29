@@ -1,3 +1,4 @@
+import type { ActorContext } from "./auth.js";
 import type { HttpResponse } from "./http-result.js";
 
 export interface RequestContext {
@@ -8,6 +9,14 @@ export interface RequestContext {
   readonly query: URLSearchParams;
   /** Parsed JSON body, or undefined when the request carried none. */
   readonly body: unknown;
+  /**
+   * Who is acting (ADR 0008), or null when the request carries no identity — a
+   * public path, an open dev server, or the transitional shared token, which
+   * proves possession of a secret and nothing about a person.
+   *
+   * Attached, not enforced: what each role may DO is ADR 0009.
+   */
+  readonly actor?: ActorContext | null;
 }
 
 export type RouteHandler = (ctx: RequestContext) => Promise<HttpResponse>;

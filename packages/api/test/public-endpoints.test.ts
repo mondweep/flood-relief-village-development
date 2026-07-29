@@ -281,7 +281,7 @@ describe("public transparency endpoints", () => {
   });
 
   describe("no personal data on any public route", () => {
-    const publicPaths = ["/public/villages", "/public/funds", "/public/stats"];
+    const publicPaths = ["/public/villages", "/public/funds", "/public/stats", "/public/config"];
 
     it("exposes no beneficiary-identifying key on any public response", async () => {
       const { rampur } = await seed();

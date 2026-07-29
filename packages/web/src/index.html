@@ -14,10 +14,10 @@
   The document is a five-view application (PRD §4 Personas, §5 F3.6):
 
       Public     transparency, no credential          (landing view)
-      District   operational picture for the officer  (token)
-      NGO        the lead NGO's own villages          (token)
-      Village    one village's full profile           (token)
-      Operations every write workflow                 (token)
+      District   operational picture for the officer  (signed in)
+      NGO        the lead NGO's own villages          (signed in)
+      Village    one village's full profile           (signed in)
+      Operations every write workflow                 (signed in)
 
   Layout of this file:
     STYLES  1. tokens · 2. shell & nav · 3. components · 4. forms · 5. motion
@@ -29,13 +29,23 @@
             §5  District view
             §6  NGO view
             §7  Village view
-            §8  Operations: token session, workflow specs, form engine
+            §8  Identity (ADR 0008), workflow specs, form engine
             §9  boot
 
   Defensive by design: several endpoints this document reads are still landing.
   Every section distinguishes "the route is not deployed" (a clean, explanatory
   degrade) from "the request failed" (an error with a retry) from "there is
   nothing yet" (a first-run empty state). No section is ever silently blank.
+
+  Identity (ADR 0008): Supabase Auth, spoken to over its REST API with plain
+  fetch. No `@supabase/supabase-js`, because adding it would cost the property
+  this file exists to hold. What the page needs from the API at runtime:
+
+      GET /public/config  → { supabaseUrl, supabasePublishableKey, authProviders }
+      GET /me             → { email, role }
+
+  The publishable key is the only key that ever reaches this document. The
+  refresh loop and the OAuth fragment handling are ours to own — see §8.
 -->
 <style>
 /* ==================================================================== *
@@ -370,10 +380,52 @@ details.work[open] > summary { border-bottom: 1px solid var(--line); }
 .work-group { margin-top: var(--s5); }
 .work-group > h4 { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink-muted); margin-bottom: var(--s2); }
 
-.locked { display: grid; gap: var(--s3); }
-.locked code.cmd { display: block; font-family: var(--mono); font-size: 0.75rem; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: var(--s3); overflow-x: auto; white-space: pre; }
+code.cmd { display: block; font-family: var(--mono); font-size: 0.75rem; background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: var(--s3); overflow-x: auto; white-space: pre; }
 .token-row { display: grid; gap: var(--s3); }
 @media (min-width: 560px) { .token-row { grid-template-columns: 1fr auto; align-items: end; } }
+
+/* --- Identity: sign in, register, provider sign-in ------------------
+ * Mobile-first: every control is full width and at least 44px tall at
+ * 375px, and only widens once there is room for it to.
+ * ------------------------------------------------------------------ */
+.auth-choice { display: flex; gap: var(--s2); border-bottom: 1px solid var(--line); margin: var(--s4) 0; }
+.auth-choice button {
+  background: none; border: 0; border-bottom: 3px solid transparent; border-radius: 0;
+  color: var(--ink-muted); min-height: 46px; padding: 10px var(--s3); font-size: 0.9375rem; font-weight: 500;
+}
+.auth-choice button[aria-pressed="true"] { color: var(--ink); font-weight: 600; border-bottom-color: var(--accent); }
+.auth-form { max-width: 26rem; }
+.auth-form .actions { margin-top: var(--s4); }
+.auth-form .actions > button { width: 100%; }
+@media (min-width: 560px) { .auth-form .actions > button { width: auto; min-width: 11rem; } }
+
+.providers { display: grid; gap: var(--s2); max-width: 26rem; }
+.providers button { width: 100%; }
+.or {
+  display: flex; align-items: center; gap: var(--s3); max-width: 26rem;
+  margin: var(--s4) 0 0; font-size: 0.8125rem; color: var(--ink-faint);
+}
+.or::before, .or::after { content: ""; flex: 1 1 0; height: 1px; background: var(--line); }
+.pw-rules { font-size: 0.8125rem; color: var(--ink-muted); margin: calc(-1 * var(--s2)) 0 var(--s3); max-width: 42ch; }
+
+.identity { display: flex; flex-wrap: wrap; gap: var(--s3) var(--s4); align-items: center; }
+.identity .who { font-weight: 600; overflow-wrap: anywhere; }
+.tag {
+  display: inline-flex; align-items: center; font-size: 0.6875rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.07em; white-space: nowrap;
+  background: var(--accent-soft); color: var(--ink); border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px;
+}
+.tag.unknown { background: var(--surface-2); color: var(--ink-muted); font-weight: 500; }
+
+details.legacy { margin-top: var(--s5); border-top: 1px solid var(--line); }
+details.legacy > summary {
+  list-style: none; cursor: pointer; min-height: 46px; display: flex; align-items: center;
+  gap: var(--s2); font-size: 0.875rem; color: var(--ink-muted);
+}
+details.legacy > summary::-webkit-details-marker { display: none; }
+details.legacy > summary::before { content: "+"; font-family: var(--mono); font-size: 1rem; }
+details.legacy[open] > summary::before { content: "−"; }
+.legacy-body { padding-bottom: var(--s3); display: grid; gap: var(--s3); }
 
 footer { margin-top: var(--s6); padding-top: var(--s4); border-top: 1px solid var(--line); font-size: 0.8125rem; color: var(--ink-muted); }
 footer p + p { margin-top: var(--s1); }
@@ -555,7 +607,7 @@ footer p + p { margin-top: var(--s1); }
   </section>
 
   <!-- ================================================================
-       VIEW · OPERATIONS — every write workflow. Requires the token.
+       VIEW · OPERATIONS — every write workflow. Requires a signed-in session.
        ================================================================ -->
   <section class="view hidden" id="view-ops" aria-labelledby="h-ops">
     <div class="view-head">
@@ -566,36 +618,112 @@ footer p + p { margin-top: var(--s1); }
          where its current values are in front of you.</p>
     </div>
 
-    <div class="card" id="token-card">
-      <div class="locked" id="locked-note">
-        <p><strong>Locked.</strong> Registration, assignment, aid, fund, volunteer, planning and issue
-           workflows all need the API bearer token — as do the District, NGO and Village dashboards.</p>
-        <p class="hint">Operators can read the current token with:</p>
-        <code class="cmd">gcloud secrets versions access latest --secret=afrip-api-token --project=e-vidhayak</code>
-        <p class="hint">The token is held in <code>sessionStorage</code> for this tab only. It is never written to
-           the URL, never stored in <code>localStorage</code>, and is cleared when you disconnect or close the tab.</p>
+    <!-- Identity (ADR 0008). The browser talks to Supabase Auth over its REST
+         API with plain fetch — no SDK, so this document stays one file with no
+         external reference. -->
+    <div class="card" id="auth-card">
+
+      <!-- ---- signed out ------------------------------------------------ -->
+      <div id="auth-out">
+        <h3>Sign in</h3>
+        <p class="work-note">Registration, assignment, aid, fund, volunteer, planning and issue
+           workflows need an account — as do the District, NGO and Village dashboards. The Public
+           transparency view needs no account and is open to everyone.</p>
+
+        <div class="msg" id="auth-config-msg"></div>
+
+        <!-- Provider buttons are generated from the provider list the API
+             reports; no provider is named in this markup. -->
+        <div class="providers hidden" id="auth-providers"></div>
+        <p class="or hidden" id="auth-or">or use an email address</p>
+
+        <div class="auth-choice hidden" id="auth-choice" role="group" aria-label="Sign in or create an account">
+          <button type="button" id="tab-signin" aria-pressed="true" aria-controls="signin-form">Sign in</button>
+          <button type="button" id="tab-register" aria-pressed="false" aria-controls="register-form">Create an account</button>
+        </div>
+
+        <form class="auth-form hidden" id="signin-form" novalidate>
+          <div class="field">
+            <label for="signin-email">Email address</label>
+            <input id="signin-email" name="email" type="email" autocomplete="email" inputmode="email"
+                   autocapitalize="none" spellcheck="false" aria-describedby="signin-email-error" required>
+            <p class="field-error" id="signin-email-error"></p>
+          </div>
+          <div class="field">
+            <label for="signin-password">Password</label>
+            <input id="signin-password" name="password" type="password" autocomplete="current-password"
+                   aria-describedby="signin-password-error" required>
+            <p class="field-error" id="signin-password-error"></p>
+          </div>
+          <div class="actions"><button type="submit" id="signin-submit">Sign in</button></div>
+        </form>
+
+        <form class="auth-form hidden" id="register-form" novalidate>
+          <div class="field">
+            <label for="register-email">Email address</label>
+            <input id="register-email" name="email" type="email" autocomplete="email" inputmode="email"
+                   autocapitalize="none" spellcheck="false" aria-describedby="register-email-error" required>
+            <p class="field-error" id="register-email-error"></p>
+          </div>
+          <div class="field">
+            <label for="register-password">Choose a password</label>
+            <input id="register-password" name="password" type="password" autocomplete="new-password"
+                   aria-describedby="register-password-error pw-rules" required>
+            <p class="field-error" id="register-password-error"></p>
+          </div>
+          <p class="pw-rules" id="pw-rules">At least 8 characters. A short phrase you will remember is
+             stronger than a short word with symbols in it. Your password is sent to the sign-in service
+             and is never stored by this page.</p>
+          <div class="actions"><button type="submit" id="register-submit">Create an account</button></div>
+        </form>
+
+        <!-- Auth failures land here. role="alert" so a screen reader hears the
+             reason without having to go looking for it. -->
+        <div class="msg" id="auth-msg" role="alert" aria-live="assertive"></div>
+
+        <!-- TRANSITIONAL (ADR 0008): the API still accepts the old shared
+             API_TOKEN while the migration is in flight. Collapsed, labelled
+             legacy, and removed from the page once the API stops accepting it. -->
+        <details class="legacy" id="legacy-token">
+          <summary>Use an access token instead <span class="tag unknown">Legacy</span></summary>
+          <div class="legacy-body">
+            <p class="hint">A transitional path kept only so this page still works while accounts are
+               being rolled out. It identifies no one, so nothing done through it can be attributed to
+               a person. Prefer signing in.</p>
+            <!-- Filled from GET /health, which discloses whether the legacy path
+                 is still open. ADR 0008: an invisible transitional weakness
+                 becomes a permanent one. -->
+            <p class="hint" id="legacy-disclosure"></p>
+            <p class="hint">Operators can read the current token with:</p>
+            <code class="cmd">gcloud secrets versions access latest --secret=afrip-api-token --project=e-vidhayak</code>
+            <form id="token-form" class="token-row" autocomplete="off" novalidate>
+              <div class="field" style="margin-bottom:0">
+                <label for="token-input">Access token (legacy)</label>
+                <input id="token-input" name="token" type="password" autocomplete="off"
+                       spellcheck="false" placeholder="Paste the bearer token">
+              </div>
+              <div class="actions" style="margin-top:0">
+                <button type="submit" class="secondary" id="token-submit">Connect</button>
+              </div>
+            </form>
+            <div class="msg" id="token-msg" role="status" aria-live="polite"></div>
+          </div>
+        </details>
       </div>
 
-      <form id="token-form" class="token-row" autocomplete="off" novalidate>
-        <div class="field" style="margin-bottom:0">
-          <label for="token-input">API token</label>
-          <input id="token-input" name="token" type="password" autocomplete="current-password"
-                 spellcheck="false" placeholder="Paste the bearer token">
+      <!-- ---- signed in ------------------------------------------------- -->
+      <div id="auth-in" class="hidden">
+        <div class="identity">
+          <p><span class="dot up" aria-hidden="true"></span>
+             <span class="sr-only">Signed in as </span><span class="who" id="auth-who">—</span></p>
+          <p class="tag" id="auth-role-tag"><span class="sr-only">Role: </span><span id="auth-role">—</span></p>
+          <button type="button" class="secondary" id="sign-out">Sign out</button>
         </div>
-        <div class="actions" style="margin-top:0">
-          <button type="submit" id="token-submit">Connect</button>
-        </div>
-      </form>
-
-      <div id="connected-note" class="hidden">
-        <div class="actions" style="margin-top:0">
-          <p><span class="dot up" aria-hidden="true"></span> <strong>Connected.</strong>
-             <span class="hint">Token held for this tab only.</span></p>
-          <button type="button" class="secondary" id="disconnect">Disconnect</button>
-        </div>
+        <p class="hint" style="margin-top:12px">Your session lives in this tab only: the access token is
+           held in memory and the refresh token in <code>sessionStorage</code>. Nothing is written to
+           <code>localStorage</code> or to the address bar, and closing the tab signs you out.</p>
+        <div class="msg" id="auth-in-msg" role="status" aria-live="polite"></div>
       </div>
-
-      <div class="msg" id="token-msg" role="status" aria-live="polite"></div>
     </div>
 
     <!-- Workflow forms are generated from the WORKFLOW_GROUPS spec in script §8. -->
@@ -680,13 +808,12 @@ function pct(part, whole) { return whole > 0 ? Math.max(0, Math.min(100, (part /
 function num1(value) { return Math.round(value * 10) / 10; }
 
 /**
- * Single fetch wrapper. Never throws, so every caller renders a specific state
- * instead of a dead region.
+ * One request to our own API. Never throws, so every caller renders a specific
+ * state instead of a dead region.
  *   { ok, status, data }         — the server answered
  *   { ok:false, network:true }   — the request never completed
  */
-async function api(path, options) {
-  const opts = options || {};
+async function request(path, opts) {
   const headers = { accept: "application/json" };
   if (opts.body !== undefined) headers["content-type"] = "application/json";
   if (opts.auth !== false && state.token) headers["authorization"] = "Bearer " + state.token;
@@ -704,6 +831,81 @@ async function api(path, options) {
   let data = null;
   try { data = await response.json(); } catch (_) { data = null; }
   return { ok: response.ok, status: response.status, data: data, network: false };
+}
+
+/**
+ * Single fetch wrapper, plus the two halves of the refresh loop ADR 0008 says
+ * we own:
+ *
+ *   before  — an access token inside its last minute of life is renewed before
+ *             the request goes out, so the common case never sees a 401 at all;
+ *   after   — a 401 the API labels *expired* is retried EXACTLY ONCE behind a
+ *             fresh token. A 401 it labels *invalid* is not retried: that
+ *             credential is finished and the caller must re-authenticate.
+ *
+ * The distinction comes from the API, not from guessing — see isExpiredAuth.
+ */
+async function api(path, options) {
+  const opts = options || {};
+  if (opts.auth !== false) await ensureFreshAccessToken();
+
+  const res = await request(path, opts);
+  if (res.status !== 401 || opts.auth === false || opts.retried) return res;
+  noteRefusal(res);
+  if (state.auth.mode !== "supabase" || !isExpiredAuth(res)) return res;
+
+  const renewed = await refreshSession();
+  if (!renewed) return res;
+  return request(path, opts);
+}
+
+/**
+ * Whether authorised endpoints are readable right now — either because we hold
+ * a credential, or because this deployment demands none. Every gate in the page
+ * asks this rather than asking about the token directly, so a wide-open server
+ * does not present a locked interface over data it is already handing out.
+ */
+function unlocked() {
+  // A verified token from a neighbouring application on the shared Supabase
+  // project reaches us looking perfect — same issuer, same audience, same
+  // signing key. When the API refuses it for having no profile, presenting the
+  // operational surface anyway would offer a register of beneficiaries to
+  // someone who has never had anything to do with this platform.
+  //
+  // Do not read this as "the profile check keeps other applications out". It is
+  // measured not to: the 00004 trigger fires on any insert into `auth.users`,
+  // which on a shared project is everyone's table, so a neighbouring signup can
+  // be enrolled as `citizen` — and until ADR 0009 lands, `citizen` is not a
+  // floor, it is full access. That gap is the API's to close and is escalated;
+  // this line only handles the refusals the API does issue. Nothing a browser
+  // does could close it, and nothing here should be written as though it had.
+  if (state.auth.noAccess) return false;
+  return Boolean(state.token) || state.authOpen === true;
+}
+
+/** The last 401 this page saw, so the sign-out message can say which one it was. */
+function noteRefusal(res) {
+  const data = res && res.data && typeof res.data === "object" ? res.data : null;
+  state.auth.lastRefusal = data && typeof data.code === "string" ? data.code : null;
+  return res;
+}
+
+/**
+ * True when a 401 means "this token aged out", false when it means "this token
+ * is not one of ours". The API sends a machine-readable `code`; the prose in
+ * `error` is a fallback for a revision that predates it. Anything unrecognised
+ * is treated as *invalid*, because retrying an unknown failure with the same
+ * credential is how a refresh loop becomes a request storm.
+ */
+function isExpiredAuth(res) {
+  const data = res && res.data && typeof res.data === "object" ? res.data : null;
+  if (!data) return false;
+  const code = typeof data.code === "string" ? data.code
+    : (typeof data.error_code === "string" ? data.error_code : "");
+  if (code) return /expired/i.test(code);
+  const message = typeof data.error === "string" ? data.error
+    : (typeof data.message === "string" ? data.message : "");
+  return /expired/i.test(message);
 }
 
 /**
@@ -780,7 +982,50 @@ function setMsg(el, kind, title, detail) {
  * ==================================================================== */
 
 const state = {
+  /**
+   * The bearer credential every authorised request carries. For a Supabase
+   * session this is the access token and it lives HERE AND NOWHERE ELSE — in
+   * memory, gone on reload (ADR 0008). For the transitional legacy path it is
+   * the shared API token, which is mirrored into sessionStorage.
+   */
   token: null,
+  /** Runtime config from GET /public/config. Null until the first read finishes. */
+  config: null,
+  /**
+   * True when GET /health reports `auth: "disabled"` — the API is verifying
+   * nothing and serving every route without a credential. There is then no
+   * credential to obtain, so the page must not gate itself behind one it
+   * cannot offer. The warning banner carries the danger; this carries the fact.
+   */
+  authOpen: false,
+  /**
+   * Set once a real request has come back 401 while `authOpen` was true. A
+   * status field claiming the door is open loses to a door that just shut in
+   * our face: evidence from an actual request outranks a report about one, and
+   * without this the /health poll would keep re-opening the gate every 30s.
+   */
+  authOpenDisproved: false,
+  auth: {
+    /** null | "supabase" | "legacy" */
+    mode: null,
+    /** sessionStorage-backed. Never localStorage — ADR 0008 is explicit. */
+    refreshToken: null,
+    /** Epoch ms the access token stops being accepted. 0 when unknown. */
+    expiresAt: 0,
+    /** { email, role, roleUnavailable } from GET /me, as far as it is known. */
+    user: null,
+    /** In-flight refresh, so a burst of 401s produces one refresh, not ten. */
+    refreshing: null,
+    /** `code` from the most recent 401, so sign-out can explain itself. */
+    lastRefusal: null,
+    /**
+     * True when the API verified this token and then refused it for having no
+     * profile (`user_unknown`). The credential is genuine; it simply does not
+     * belong to this platform. Holding a token and having access are therefore
+     * different things, and every gate asks about the second.
+     */
+    noAccess: false
+  },
   view: "public",
   villageId: null,          // selection for the Village view
   ngoId: null,              // selection for the NGO view
@@ -834,7 +1079,7 @@ function loadView(view) {
   if (view === "district") { loadDistrictView(); return; }
   if (view === "ngo") { loadNgoView(); return; }
   if (view === "villages") { loadVillagesView(); return; }
-  if (view === "ops") { applyTokenState(); return; }
+  if (view === "ops") { applyAuthState(); return; }
 }
 
 /** Re-reads the current view plus the always-on service indicators. */
@@ -1003,11 +1248,38 @@ async function checkHealth() {
   const data = res.data;
   text.textContent = "Live · " + (data.persistence || "unknown")
     + (data.version ? " · v" + data.version : "");
-  if (data.auth === "disabled") {
+  // `auth` was a bare string before ADR 0008 and becomes an object once the API
+  // has more than one scheme to describe. Read both spellings rather than
+  // silently losing the "authentication is off" warning to a shape change.
+  const auth = data.auth;
+  const mode = typeof auth === "string" ? auth
+    : (auth && typeof auth === "object" && typeof auth.mode === "string" ? auth.mode : null);
+  if (mode === "disabled") {
     showBanner("auth", "warn", "Authentication is disabled on this revision. ",
-      "Every operational route is reachable without a token. Do not use this deployment for real data.");
+      "Every operational route is reachable without a credential, and nothing anyone does here can be "
+      + "attributed to a person. Do not use this deployment for real data.");
   } else {
     hideBanner("auth");
+  }
+
+  // Learning that the API demands nothing changes which parts of this page are
+  // reachable, so re-render when it flips. It flips at most once per load.
+  const open = mode === "disabled" && !state.authOpenDisproved;
+  if (open !== state.authOpen) {
+    state.authOpen = open;
+    applyAuthState();
+    if (state.config !== null) renderAuthAvailability();
+    loadView(state.view);
+  }
+
+  // The API discloses whether the transitional shared token is still accepted.
+  // Repeat it where someone would go looking for that path, in the API's own
+  // words — it is a statement about the deployment, not about this page.
+  const disclosure = $("#legacy-disclosure");
+  if (disclosure) {
+    disclosure.textContent = data.legacyTokenEnabled === true && typeof data.legacyTokenWarning === "string"
+      ? data.legacyTokenWarning
+      : "";
   }
 }
 
@@ -1050,7 +1322,7 @@ async function loadVillages() {
 /** GET /projects (auth) with a fall back to the public projection. */
 async function loadProjects() {
   if (state.projects) return state.projects;
-  let res = state.token ? await api("/projects") : { status: 404, data: null };
+  let res = unlocked() ? await api("/projects") : { status: 404, data: null };
   if (!res.ok || !res.data || !Array.isArray(res.data.projects)) {
     // /public/funds is the transparency projection and always exists; it is the
     // honest fallback when the authenticated index is not deployed.
@@ -1079,7 +1351,7 @@ async function loadAssignments() {
   if (state.assignments || state.assignmentsSupported === false) {
     return state.assignmentsSupported === false ? null : state.assignments;
   }
-  if (!state.token || state.villages.length === 0) return null;
+  if (!unlocked() || state.villages.length === 0) return null;
 
   const probe = await api("/villages/" + encodeURIComponent(state.villages[0].id) + "/assignment");
   if (isMissingRoute(probe)) { state.assignmentsSupported = false; return null; }
@@ -1268,7 +1540,7 @@ function renderFirstRun(isEmpty) {
     + "<h3>Nothing has been registered yet</h3>"
     + "<p class=\"row-meta\">This deployment's database is empty. Four steps put a village on the map:</p>"
     + "<ol>"
-      + "<li><strong>Connect.</strong> Open Operations and paste the API bearer token — it unlocks every write workflow and the three internal dashboards.</li>"
+      + "<li><strong>Sign in.</strong> Open Operations and sign in, or create an account — it unlocks every write workflow and the three internal dashboards.</li>"
       + "<li><strong>Register a village</strong> with its demographics and severity. It appears on this page immediately.</li>"
       + "<li><strong>Register an NGO, then assign it</strong> as the village's lead. One village, one NGO — the District view lists every village still without one.</li>"
       + "<li><strong>Record damage, aid, funds and issues.</strong> The recovery index recalculates from damage assessments, and the Village view shows all 11 dimensions.</li>"
@@ -1286,12 +1558,21 @@ function renderFirstRun(isEmpty) {
 function requireToken(gateId, bodyId, what) {
   const gate = $("#" + gateId);
   const body = $("#" + bodyId);
-  if (state.token) { gate.innerHTML = ""; body.classList.remove("hidden"); return true; }
+  if (unlocked()) { gate.innerHTML = ""; body.classList.remove("hidden"); return true; }
   body.classList.add("hidden");
+  // Being signed in and being allowed in are different, so the gate must not
+  // tell someone who is already signed in to go and sign in.
+  if (state.auth.noAccess) {
+    gate.innerHTML = '<div class="state"><strong>This account cannot see the ' + esc(what) + "</strong>"
+      + "<p>You are signed in, but this platform holds no record of your account, so its authorised "
+      + "dashboards stay closed. The Public view is open to everyone and is available now.</p>"
+      + '<div class="actions">' + actionButton("View public dashboard", "public", {}) + "</div></div>";
+    return false;
+  }
   gate.innerHTML = '<div class="state"><strong>Sign in to see the ' + esc(what) + "</strong>"
-    + "<p>This dashboard reads authorised endpoints. Connect the API bearer token in Operations to unlock it. "
-    + "The Public view needs no credential and is available now.</p>"
-    + '<div class="actions">' + actionButton("Open Operations", "ops", {})
+    + "<p>This dashboard reads authorised endpoints. Sign in from Operations — with an account, or with "
+    + "a provider — to unlock it. The Public view needs no account and is available now.</p>"
+    + '<div class="actions">' + actionButton("Sign in", "ops", {})
     + actionButton("View public dashboard", "public", {}) + "</div></div>";
   return false;
 }
@@ -1857,9 +2138,9 @@ async function paintVillageDetail(villageId, buildAmend) {
 
   let village = null;
   let profileError = null;
-  if (state.token) {
+  if (unlocked()) {
     const res = await api("/villages/" + encodeURIComponent(villageId));
-    if (res.status === 401) { handleUnauthorized(null); profileError = "the API rejected the stored token"; }
+    if (res.status === 401) { handleUnauthorized(null); profileError = "the API rejected your session"; }
     else if (res.ok && res.data) village = res.data;
     else profileError = apiError(res);
   }
@@ -1885,7 +2166,7 @@ async function paintVillageDetail(villageId, buildAmend) {
           : "");
 
   // Everything below the public record reads authorised endpoints.
-  if (!state.token) {
+  if (!unlocked()) {
     if (buildAmend) amendEl.innerHTML = "";
     panelsEl.innerHTML = '<div class="section"><h3>The rest of this profile</h3>'
       + '<div class="state"><strong>Connect to see the full profile</strong>'
@@ -2116,7 +2397,7 @@ function timelineNote(entries) {
 async function renderHistoryPanel(villageId, village) {
   const res = await api("/villages/" + encodeURIComponent(villageId) + "/history");
   if (isMissingRoute(res)) return localTimelineHtml(village);
-  if (res.status === 401) return errorHtml("Not authorised", "The API rejected the stored token.");
+  if (res.status === 401) return errorHtml("Not authorised", "The API rejected your session. Sign in again from Operations.");
   if (!res.ok || !res.data) {
     if (res.status === 404) {
       return stateHtml("No history yet",
@@ -2692,98 +2973,762 @@ function unavailableHtml(what) {
 }
 
 /* ====================================================================
- * SCRIPT §8 — Operations: token session, workflow specs, form engine
+ * SCRIPT §8 — Identity (ADR 0008), then workflow specs and the form engine
+ *
+ * Supabase Auth (GoTrue) is a plain REST API, so every flow here is a fetch or
+ * a redirect and this document keeps its one-file, no-dependency property. What
+ * we buy with that is having to own the two things an SDK would have owned: the
+ * refresh loop (see api() in §1) and the OAuth fragment (see consumeAuthFragment).
+ *
+ * Storage rules, from the ADR and not negotiable:
+ *   - access token  → memory only (state.token)
+ *   - refresh token → sessionStorage only, NEVER localStorage
+ *   - neither ever appears in a URL, in the console, or in a rendered string
  * ==================================================================== */
 
-const TOKEN_KEY = "afrip.token";
+const REFRESH_KEY = "afrip.auth.refresh";   // sessionStorage: refresh token
+const LEGACY_KEY  = "afrip.token";          // sessionStorage: transitional shared token
+const RETURN_KEY  = "afrip.auth.return";    // sessionStorage: hash route to restore after OAuth
+/** Renew this far ahead of expiry. Wide enough to cover a slow phone network. */
+const REFRESH_MARGIN_MS = 60000;
+const MIN_PASSWORD = 8;
+
 const tokenForm = $("#token-form");
 const tokenInput = $("#token-input");
 const tokenMsg = $("#token-msg");
+const authMsg = $("#auth-msg");
 
-function applyTokenState() {
-  const connected = Boolean(state.token);
-  $("#workflows").classList.toggle("hidden", !connected);
-  $("#locked-note").classList.toggle("hidden", connected);
-  tokenForm.classList.toggle("hidden", connected);
-  $("#connected-note").classList.toggle("hidden", !connected);
-  $("#session-dot").className = "dot " + (connected ? "up" : "");
-  $("#session-text").textContent = connected ? "Connected · this tab" : "Not connected";
+let refreshTimer = null;
+let authTab = "signin";
+
+/* --- Runtime configuration ----------------------------------------- *
+ * The page is served from the API, so it learns which Supabase project to talk
+ * to at runtime rather than being rebuilt per environment. Nothing secret comes
+ * back: the publishable key is designed to sit in a browser.
+ * -------------------------------------------------------------------- */
+
+/** Labels for providers we have a nicer name for; anything else is title-cased. */
+const PROVIDER_LABELS = { google: "Google", azure: "Microsoft", github: "GitHub", apple: "Apple", facebook: "Facebook" };
+
+function providerLabel(id) {
+  return PROVIDER_LABELS[id] || (id.charAt(0).toUpperCase() + id.slice(1));
 }
 
-function setToken(token) {
-  state.token = token;
-  try { sessionStorage.setItem(TOKEN_KEY, token); } catch (_) { /* private mode: memory only */ }
-  applyTokenState();
+/**
+ * ADR 0008: "the design should not hard-code Google anywhere except that list".
+ * A list is preferred; a per-provider boolean is accepted so the page works
+ * against either spelling of the config contract.
+ */
+function readProviders(data) {
+  const list = Array.isArray(data.authProviders) ? data.authProviders
+    : (Array.isArray(data.providers) ? data.providers : null);
+  if (list) {
+    return list.filter(function (id) { return typeof id === "string" && /^[a-z0-9_]{1,32}$/.test(id); });
+  }
+  return Object.keys(data)
+    .filter(function (key) { return /Enabled$/.test(key) && data[key] === true && key !== "legacyTokenEnabled"; })
+    .map(function (key) { return key.slice(0, -"Enabled".length).toLowerCase(); })
+    .filter(function (id) { return /^[a-z0-9_]{1,32}$/.test(id); });
 }
 
-function clearToken() {
+const UNCONFIGURED = { supabaseUrl: null, publishableKey: null, providers: [],
+                       legacyTokenEnabled: true, available: false };
+
+/** GET /public/config → { supabaseUrl, supabasePublishableKey, authProviders } */
+async function loadAuthConfig() {
+  const res = await api("/public/config", { auth: false });
+  if (!res.ok || !res.data || typeof res.data !== "object") {
+    state.config = Object.assign({}, UNCONFIGURED, {
+      reason: isMissingRoute(res) ? "missing-route" : (res.network ? "network" : "error"),
+      detail: res.network || isMissingRoute(res) ? null : apiError(res)
+    });
+    return;
+  }
+  const data = res.data;
+  const url = typeof data.supabaseUrl === "string" ? data.supabaseUrl.trim().replace(/\/+$/, "") : "";
+  const key = typeof data.supabasePublishableKey === "string" ? data.supabasePublishableKey.trim()
+    : (typeof data.supabaseAnonKey === "string" ? data.supabaseAnonKey.trim() : "");
+  /**
+   * Having a project to sign in to is not the same as the API being willing to
+   * verify what that project issues. SUPABASE_URL is also what persistence
+   * uses, so a deployment can hold a URL and a key while `AUTH_JWT=false`.
+   * Offering sign-in there would let someone authenticate successfully and then
+   * be thrown straight back out by the first 401 — so treat it as unavailable
+   * and say which of the two is missing. Absent means "not reported by this
+   * revision", which must not block anything.
+   */
+  const verifies = data.jwtEnabled !== false;
+  state.config = {
+    supabaseUrl: url || null,
+    publishableKey: key || null,
+    providers: readProviders(data),
+    // Absent means "still on", because the transitional path is only removed
+    // deliberately; assuming it is gone would brick a half-migrated deployment.
+    legacyTokenEnabled: data.legacyTokenEnabled !== false,
+    available: Boolean(url && key && verifies),
+    reason: url && key ? (verifies ? null : "jwt-off") : "unconfigured",
+    detail: null
+  };
+}
+
+function gotrueReady() {
+  return Boolean(state.config && state.config.available);
+}
+
+/**
+ * One call to GoTrue. `apikey` carries the PUBLISHABLE key — the service-role
+ * key never reaches this document and must never be added to /public/config.
+ */
+async function gotrue(path, body, accessToken) {
+  if (!gotrueReady()) return { ok: false, status: 0, data: null, network: false, unconfigured: true };
+  const headers = {
+    accept: "application/json",
+    "content-type": "application/json",
+    apikey: state.config.publishableKey
+  };
+  if (accessToken) headers["authorization"] = "Bearer " + accessToken;
+
+  let response;
+  try {
+    response = await fetch(state.config.supabaseUrl + "/auth/v1" + path, {
+      method: "POST", headers: headers, body: JSON.stringify(body || {})
+    });
+  } catch (_) {
+    return { ok: false, status: 0, data: null, network: true };
+  }
+  let data = null;
+  try { data = await response.json(); } catch (_) { data = null; }
+  return { ok: response.ok, status: response.status, data: data, network: false };
+}
+
+/**
+ * GoTrue's own wording, verbatim. "Invalid login credentials", "User already
+ * registered", "Password should be at least 6 characters" — these are better
+ * than anything we would write, and rewriting them would only hide which of the
+ * project's rules the user actually hit. Escaped at the point of rendering.
+ */
+function gotrueMessage(res, fallback) {
+  if (res && res.unconfigured) return "sign-in is not configured on this deployment";
+  if (res && res.network) return "the request did not reach the sign-in service";
+  const data = res && res.data && typeof res.data === "object" ? res.data : null;
+  if (data) {
+    const candidates = [data.error_description, data.msg, data.message, data.error_message,
+                        typeof data.error === "string" ? data.error : null];
+    for (let i = 0; i < candidates.length; i += 1) {
+      const candidate = candidates[i];
+      if (typeof candidate === "string" && candidate.trim() !== "") return candidate.trim();
+    }
+  }
+  if (res && res.status) return "the sign-in service returned status " + res.status;
+  return fallback || "unknown error";
+}
+
+/* --- Session lifecycle ---------------------------------------------- */
+
+/** Takes a GoTrue token response and becomes signed in. */
+function adoptSession(data) {
+  const access = data && typeof data.access_token === "string" ? data.access_token : "";
+  if (access === "") return false;
+
+  state.token = access;
+  state.auth.mode = "supabase";
+  if (typeof data.refresh_token === "string" && data.refresh_token !== "") {
+    state.auth.refreshToken = data.refresh_token;
+    // sessionStorage, not localStorage: closing the tab ends the session, which
+    // ADR 0008 chose deliberately for a system holding beneficiary records.
+    //
+    // ADR 0008 also predicts this will be reported as a bug, and it is not. The
+    // report will be true — people will be signed out more often than they like
+    // — and the one-word change to localStorage will look like the fix. It is
+    // not: it converts the refresh token into a credential that outlives the tab
+    // on a shared or public device, which is the specific thing this platform
+    // declined to hold. If the complaints need answering, lengthen the session
+    // at the Supabase project, do not widen where the token is kept.
+    try { sessionStorage.setItem(REFRESH_KEY, data.refresh_token); } catch (_) { /* private mode: memory only */ }
+  }
+  const ttl = Number(data.expires_in);
+  state.auth.expiresAt = Date.now() + (isFinite(ttl) && ttl > 0 ? ttl * 1000 : 3600000);
+  if (data.user && typeof data.user.email === "string") {
+    state.auth.user = Object.assign({}, state.auth.user || {}, { email: data.user.email });
+  }
+  // A real session supersedes the transitional one; leaving both would make it
+  // ambiguous which credential a write was made with.
+  try { sessionStorage.removeItem(LEGACY_KEY); } catch (_) { /* ignore */ }
+  scheduleRefresh();
+  return true;
+}
+
+/**
+ * Renew ahead of expiry so the user never meets a 401 on the happy path.
+ *
+ * The timer is the one thing on this page that talks to the sign-in service
+ * with no user present, so it must not be able to sustain itself. A token that
+ * arrives already inside its own renewal window would be renewed immediately,
+ * yield another just as short, and schedule again — one idle tab becoming
+ * steady load on GoTrue, forever, with nobody watching. When that happens we
+ * simply do not schedule: `ensureFreshAccessToken` still renews on demand, and
+ * that is paced by the user rather than by itself.
+ *
+ * So the ABSENCE of a minimum delay here is load-bearing. This function once
+ * read `Math.max(5000, …)`, which looks like exactly the kind of defensive
+ * clamp one adds without thinking — and it was the bug: it converted "a token
+ * this short should never arrive" into "renew twelve times a minute, forever".
+ * Do not add a floor. If a lifetime is too short to schedule against, the
+ * correct action is not to schedule.
+ *
+ * The API has no equivalent of this hazard: it is purely request-driven, so
+ * costing nothing while idle falls out of its shape. Here it is a property that
+ * has to be held, and one constant is enough to lose it.
+ */
+function scheduleRefresh() {
+  if (refreshTimer !== null) { clearTimeout(refreshTimer); refreshTimer = null; }
+  if (state.auth.mode !== "supabase" || !state.auth.refreshToken) return;
+  const lifetime = state.auth.expiresAt - Date.now();
+  if (lifetime <= REFRESH_MARGIN_MS) return;
+  refreshTimer = setTimeout(function () { refreshSession(); }, lifetime - REFRESH_MARGIN_MS);
+}
+
+/** Called before every authorised request. Cheap when the token is healthy. */
+async function ensureFreshAccessToken() {
+  if (state.auth.mode !== "supabase") return Boolean(state.token);
+  if (!state.auth.refreshToken) return Boolean(state.token);
+  if (state.token && state.auth.expiresAt - Date.now() > REFRESH_MARGIN_MS) return true;
+  return refreshSession();
+}
+
+/**
+ * Exchanges the refresh token for a new session. Single-flight: several requests
+ * discovering an expired token at once share one exchange, because GoTrue may
+ * rotate the refresh token and a second concurrent exchange would present one
+ * that has just been spent.
+ */
+function refreshSession() {
+  if (state.auth.refreshing) return state.auth.refreshing;
+  const presented = state.auth.refreshToken;
+  if (!presented || !gotrueReady()) return Promise.resolve(false);
+
+  const attempt = (async function () {
+    const res = await gotrue("/token?grant_type=refresh_token", { refresh_token: presented });
+    // Offline is not "your session is over" — keep it and try again later.
+    if (res.network) return false;
+    if (!res.ok || !adoptSession(res.data)) {
+      signOutLocal();
+      setMsg(authMsg, "error", "Your session has ended",
+        "The sign-in service would not renew this session — " + esc(gotrueMessage(res, "it was rejected"))
+        + ". Sign in again to continue.");
+      applyAuthState();
+      return false;
+    }
+    return true;
+  })();
+
+  state.auth.refreshing = attempt.then(
+    function (value) { state.auth.refreshing = null; return value; },
+    function () { state.auth.refreshing = null; return false; }
+  );
+  return state.auth.refreshing;
+}
+
+/** Forgets the session in this tab. Does not talk to the network. */
+function signOutLocal() {
   state.token = null;
-  try { sessionStorage.removeItem(TOKEN_KEY); } catch (_) { /* ignore */ }
-  tokenInput.value = "";
+  state.auth.mode = null;
+  state.auth.refreshToken = null;
+  state.auth.expiresAt = 0;
+  state.auth.user = null;
+  state.auth.refreshing = null;
+  state.auth.lastRefusal = null;
+  state.auth.noAccess = false;
+  if (refreshTimer !== null) { clearTimeout(refreshTimer); refreshTimer = null; }
+  try { sessionStorage.removeItem(REFRESH_KEY); } catch (_) { /* ignore */ }
+  try { sessionStorage.removeItem(LEGACY_KEY); } catch (_) { /* ignore */ }
+  if (tokenInput) tokenInput.value = "";
   state.assignments = null; state.assignmentsSupported = null; state.projects = null;
-  applyTokenState();
+  applyAuthState();
 }
+
+/**
+ * A 401 that survived the refresh-and-retry in api() means the credential is
+ * finished, not merely stale. Clear it and put the sign-in form back.
+ */
+function handleUnauthorized(msgEl) {
+  const wasLegacy = state.auth.mode === "legacy";
+  const refusal = state.auth.lastRefusal;
+  // We believed this deployment needed no credential, and it has just refused
+  // one. Whatever /health says, it is gated — stop believing it, permanently
+  // for this page load. Without this the gate below reopens, re-issues the
+  // same read, gets the same 401, and the page loops on the server.
+  const wasOpen = state.authOpen;
+  if (wasOpen) {
+    state.authOpen = false;
+    state.authOpenDisproved = true;
+  }
+  signOutLocal();
+
+  let title = wasLegacy ? "Access token rejected" : "Signed out";
+  let body = wasLegacy
+    ? "The API rejected the stored access token, so it has been cleared. Enter it again, or sign in with an account."
+    : "The API rejected your session, so it has been cleared. Sign in again to continue.";
+  if (refusal === "user_unknown") {
+    // The token verified; there is simply no profile behind it yet. Telling
+    // this user to "check their password" would send them round a loop they
+    // cannot get out of.
+    // Two populations land here and the page cannot tell them apart: an AFRIP
+    // user whose profile row is missing, and a user of another application that
+    // shares this Supabase project, whose token verifies perfectly and who has
+    // no business here at all. So state the fact and stop — "an administrator
+    // will grant you a role" would be a promise to the first and an invitation
+    // to the second.
+    title = "This account has no access to AFRIP";
+    body = "You are signed in, but this platform holds no record of your account, so it can show you "
+         + "nothing beyond the public view. If you expect to have access here, ask the team that "
+         + "administers AFRIP to check your account.";
+  } else if (refusal === "identity_unavailable") {
+    title = "This credential identifies no one";
+    body = "The route you reached needs a signed-in person, and the credential in use is the "
+         + "transitional shared token. Sign in with an account to continue.";
+  }
+  if (wasOpen) {
+    // Nobody was signed in, so "signed out" would be nonsense. This is almost
+    // always an operator turning authentication on under a page that loaded
+    // while it was off.
+    title = "This deployment now requires sign-in";
+    body = "It reported that it needed no credential, but the request was refused. "
+         + "Authentication was most likely switched on since this page was opened. Sign in to continue.";
+  }
+  if (msgEl) setMsg(msgEl, "error", title, body);
+  setMsg(authMsg, "error", title, body);
+  // Re-render on the next tick so a caller that is mid-render finishes first.
+  setTimeout(function () { if (!state.token) loadView(state.view); }, 0);
+}
+
+/* --- Who am I ------------------------------------------------------- */
+
+/** GET /me → the API's view of this credential: which person, and what role. */
+async function loadIdentity() {
+  if (!state.token) return;
+  const res = await api("/me");
+  const known = state.auth.user || {};
+  // "No profile for this identity" is a refusal to honour, not a field we
+  // failed to load: the token verified and the answer is still no. It is one of
+  // the boundary's refusals rather than the whole boundary — see unlocked().
+  state.auth.noAccess = res.status === 401 && state.auth.lastRefusal === "user_unknown";
+  if (res.ok && res.data && typeof res.data === "object") {
+    state.auth.user = {
+      email: typeof res.data.email === "string" ? res.data.email : (known.email || null),
+      role: typeof res.data.role === "string" ? res.data.role : null,
+      roleUnavailable: typeof res.data.role !== "string"
+    };
+    return;
+  }
+  // The route is not deployed yet, or this is the legacy token, which belongs
+  // to no one. Say "unknown" rather than inventing a role the user might trust.
+  //
+  // DO NOT "improve" this by decoding the access token and reading a role out of
+  // it. The obvious-looking fix is to reach into the JWT payload for `role`,
+  // `user_metadata.role` or `app_metadata.role` so that a role still shows when
+  // /me is unavailable. The first two originate in the user's own signup
+  // payload — GoTrue carries whatever they put there — so honouring either turns
+  // self-registration into self-promotion. Nothing here gates on role today, but
+  // a displayed "admin" is a claim this page would be making on the API's behalf,
+  // and the moment anyone gates a panel on `state.auth.user.role` it becomes an
+  // authorization bug. The role comes from `user_profiles` via /me or it is
+  // unknown; the fix for a missing role is to deploy /me, not to trust the token.
+  state.auth.user = { email: known.email || null, role: null, roleUnavailable: true };
+}
+
+/* --- Rendering ------------------------------------------------------ */
+
+function applyAuthState() {
+  const connected = Boolean(state.token);
+  const user = state.auth.user || {};
+  const legacy = state.auth.mode === "legacy";
+
+  // The workflows follow what the API will actually accept; the identity panel
+  // follows whether we know who is acting. On an unauthenticated deployment
+  // those differ, and conflating them is what would lock a developer out.
+  $("#workflows").classList.toggle("hidden", !unlocked());
+  $("#auth-out").classList.toggle("hidden", connected);
+  $("#auth-in").classList.toggle("hidden", !connected);
+  $("#session-dot").className = "dot " + (connected ? "up" : "");
+
+  if (connected && state.auth.noAccess) {
+    // Signed in, and refused. Say so where the workflows would have been,
+    // rather than presenting controls whose every action returns 401.
+    setMsg($("#auth-in-msg"), "info", "This account has no access to AFRIP",
+      "You are signed in as <strong>" + esc(user.email || "this account")
+      + "</strong>, but the platform holds no record of it, so only the public view is available. "
+      + "If you expect access here, ask the team that administers AFRIP to check your account.");
+  }
+
+  if (connected) {
+    const who = user.email || (legacy ? "Legacy access token" : "Signed in");
+    $("#auth-who").textContent = who;
+    const roleEl = $("#auth-role");
+    const roleTag = $("#auth-role-tag");
+    if (legacy) { roleEl.textContent = "Legacy token"; roleTag.className = "tag unknown"; }
+    else if (user.role) { roleEl.textContent = words(user.role); roleTag.className = "tag"; }
+    else { roleEl.textContent = "Role unknown"; roleTag.className = "tag unknown"; }
+    $("#session-text").textContent = who + " · this tab";
+  } else {
+    $("#session-text").textContent = state.authOpen ? "No credential required" : "Not signed in";
+  }
+}
+
+/** Shows or explains the email/provider surface, depending on what is configured. */
+function renderAuthAvailability() {
+  const cfg = state.config;
+  const ok = gotrueReady();
+  const box = $("#auth-config-msg");
+  const legacyPanel = $("#legacy-token");
+
+  $("#auth-choice").classList.toggle("hidden", !ok);
+  $("#signin-form").classList.toggle("hidden", !ok || authTab !== "signin");
+  $("#register-form").classList.toggle("hidden", !ok || authTab !== "register");
+
+  // The transitional path disappears from the page the moment the API stops
+  // accepting it — the ADR's "invisible transitional weakness" warning, honoured.
+  const legacyOffered = !cfg || cfg.legacyTokenEnabled !== false;
+  legacyPanel.classList.toggle("hidden", !legacyOffered);
+
+  if (ok) {
+    setMsg(box, null);
+    return;
+  }
+  if (state.authOpen) {
+    // There is no sign-in to offer and no credential to collect, because the
+    // API is checking none. Saying "accounts are unavailable" here would send
+    // someone hunting for a credential that does not exist.
+    setMsg(box, "info", "This deployment asks for no credential",
+      "Every route is open, so the operational workflows below are already usable and no account is "
+      + "needed. That is a deployment setting, not a feature — see the warning at the top of the page.");
+    return;
+  }
+  const reason = cfg ? cfg.reason : "network";
+  let why;
+  if (reason === "missing-route") {
+    why = "This revision does not serve <code>GET /public/config</code>, so the page cannot learn "
+        + "which Supabase project to sign you in to.";
+  } else if (reason === "network") {
+    why = "The page could not reach the service to read its sign-in configuration.";
+  } else if (reason === "unconfigured") {
+    why = "The service answered, but reported no Supabase project and publishable key.";
+  } else if (reason === "jwt-off") {
+    why = "There is a Supabase project configured, but this deployment is not verifying the tokens it "
+        + "issues (<code>AUTH_JWT</code> is off). Signing in would appear to work and then fail on the "
+        + "first request, so it is not offered.";
+  } else {
+    why = "The service could not report its sign-in configuration: <code>"
+        + esc(cfg && cfg.detail ? cfg.detail : "unknown error") + "</code>.";
+  }
+  setMsg(box, "info", "Accounts are not available on this deployment",
+    why + (legacyOffered
+      ? " The transitional access token below still works, so nothing is blocked."
+      : " There is no other way in on this revision — an operator needs to configure Supabase Auth."));
+  if (legacyOffered) legacyPanel.open = true;
+}
+
+function renderProviders() {
+  const holder = $("#auth-providers");
+  const list = gotrueReady() ? state.config.providers : [];
+  holder.innerHTML = "";
+  list.forEach(function (id) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Continue with " + providerLabel(id);   // textContent: never innerHTML
+    button.addEventListener("click", function () { startProviderSignIn(id); });
+    holder.appendChild(button);
+  });
+  holder.classList.toggle("hidden", list.length === 0);
+  $("#auth-or").classList.toggle("hidden", list.length === 0);
+}
+
+/* --- Email and password --------------------------------------------- */
+
+function fieldError(form, name, message) {
+  const input = $("#" + form + "-" + name);
+  const out = $("#" + form + "-" + name + "-error");
+  if (out) out.textContent = message || "";
+  if (input) {
+    input.closest(".field").classList.toggle("is-invalid", Boolean(message));
+    if (message) input.setAttribute("aria-invalid", "true"); else input.removeAttribute("aria-invalid");
+  }
+  return Boolean(message);
+}
+
+function clearAuthErrors(form) {
+  fieldError(form, "email", "");
+  fieldError(form, "password", "");
+  setMsg(authMsg, null);
+}
+
+/** Cheap local checks only. Everything else is the sign-in service's ruling. */
+function validateCredentials(form, email, password, isNew) {
+  let bad = false;
+  if (email === "") bad = fieldError(form, "email", "Enter your email address.") || bad;
+  else if (email.indexOf("@") < 1 || email.indexOf(".", email.indexOf("@")) < 0) {
+    bad = fieldError(form, "email", "That does not look like an email address.") || bad;
+  }
+  if (password === "") bad = fieldError(form, "password", "Enter your password.") || bad;
+  else if (isNew && password.length < MIN_PASSWORD) {
+    bad = fieldError(form, "password", "Use at least " + MIN_PASSWORD + " characters.") || bad;
+  }
+  return !bad;
+}
+
+async function withBusy(button, label, work) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = label;
+  try { return await work(); }
+  finally { button.disabled = false; button.textContent = original; }
+}
+
+/** Everything that must happen once a session exists, in one place. */
+async function afterSignIn(title, detail) {
+  applyAuthState();
+  await loadIdentity();
+  applyAuthState();
+  setMsg(authMsg, null);
+  if (title) setMsg($("#auth-in-msg"), "ok", title, detail || "");
+  refresh();
+}
+
+$("#signin-form").addEventListener("submit", async function (event) {
+  event.preventDefault();
+  clearAuthErrors("signin");
+  const email = $("#signin-email").value.trim();
+  const password = $("#signin-password").value;
+  if (!validateCredentials("signin", email, password, false)) return;
+
+  await withBusy($("#signin-submit"), "Signing in…", async function () {
+    const res = await gotrue("/token?grant_type=password", { email: email, password: password });
+    if (!res.ok || !adoptSession(res.data)) {
+      setMsg(authMsg, "error", "Could not sign in", esc(gotrueMessage(res)));
+      $("#signin-password").value = "";
+      $("#signin-password").focus();
+      return;
+    }
+    $("#signin-password").value = "";
+    await afterSignIn("Signed in",
+      "Operational workflows are unlocked, and the District, NGO and Village dashboards are now readable.");
+  });
+});
+
+$("#register-form").addEventListener("submit", async function (event) {
+  event.preventDefault();
+  clearAuthErrors("register");
+  const email = $("#register-email").value.trim();
+  const password = $("#register-password").value;
+  if (!validateCredentials("register", email, password, true)) return;
+
+  await withBusy($("#register-submit"), "Creating…", async function () {
+    const res = await gotrue("/signup", { email: email, password: password });
+    if (!res.ok) {
+      setMsg(authMsg, "error", "Could not create the account", esc(gotrueMessage(res)));
+      return;
+    }
+    $("#register-password").value = "";
+    // Two legitimate outcomes: a session straight away, or a confirmation email.
+    // Which one depends on the project's settings, so handle both.
+    if (adoptSession(res.data)) {
+      await afterSignIn("Account created", "You are signed in. An administrator assigns your role.");
+      return;
+    }
+    showAuthTab("signin");
+    $("#signin-email").value = email;
+    setMsg(authMsg, "ok", "Check your email",
+      "A confirmation link has been sent to <strong>" + esc(email)
+      + "</strong>. Open it, then sign in here.");
+    $("#signin-password").focus();
+  });
+});
+
+/* --- Provider sign-in (full-page redirect) --------------------------- */
+
+function startProviderSignIn(provider) {
+  if (!gotrueReady()) return;
+  // Remember where the user was so the redirect does not dump them on the
+  // landing view when they come back.
+  try { sessionStorage.setItem(RETURN_KEY, location.hash || "#/ops"); } catch (_) { /* ignore */ }
+  const back = location.origin + location.pathname;
+  location.assign(state.config.supabaseUrl + "/auth/v1/authorize?provider="
+    + encodeURIComponent(provider) + "&redirect_to=" + encodeURIComponent(back));
+}
+
+/**
+ * OAuth hands the session back in the URL fragment. Read it and erase it in the
+ * same synchronous step, before anything can await, render or navigate: a token
+ * left in the address bar is a token in the history, in a screenshot, and in
+ * whatever the user pastes to a colleague to show them the page.
+ *
+ * Returns { session } | { error } | null.
+ */
+function consumeAuthFragment() {
+  const raw = String(location.hash || "").replace(/^#/, "");
+  if (!/(^|&)(access_token|error|error_code|error_description)=/.test(raw)) return null;
+
+  let params;
+  try { params = new URLSearchParams(raw); } catch (_) { return null; }
+  const access = params.get("access_token");
+  const refresh = params.get("refresh_token");
+  const expires = params.get("expires_in");
+  const failure = params.get("error_description") || params.get("error_code") || params.get("error");
+
+  let back = null;
+  try {
+    back = sessionStorage.getItem(RETURN_KEY);
+    sessionStorage.removeItem(RETURN_KEY);
+  } catch (_) { back = null; }
+  const restored = back && back.charAt(0) === "#" && back.charAt(1) === "/" ? back : "#/ops";
+  history.replaceState(null, "", location.pathname + location.search + restored);
+
+  if (access) {
+    return { session: { access_token: access, refresh_token: refresh, expires_in: expires } };
+  }
+  return { error: failure || "sign-in was not completed" };
+}
+
+/* --- Transitional: the shared API token (ADR 0008, to be removed) ---- */
 
 /** Verifies a candidate token against an authorised read before accepting it. */
 tokenForm.addEventListener("submit", async function (event) {
   event.preventDefault();
   const candidate = tokenInput.value.trim();
   if (candidate === "") {
-    setMsg(tokenMsg, "error", "Enter the API token", "The field is empty.");
+    setMsg(tokenMsg, "error", "Enter the access token", "The field is empty.");
     tokenInput.focus();
     return;
   }
-  const button = $("#token-submit");
-  const label = button.textContent;
-  button.disabled = true;
-  button.textContent = "Checking…";
-  try {
+  await withBusy($("#token-submit"), "Checking…", async function () {
+    const previous = state.auth.mode;
     state.token = candidate;
+    state.auth.mode = "legacy";
     const res = await api("/villages");
     if (res.network) {
-      state.token = null;
+      state.token = null; state.auth.mode = previous;
       setMsg(tokenMsg, "error", "Could not reach the service",
         "The token was not sent anywhere it could be verified. Check your connection and try again.");
       return;
     }
     if (res.status === 401) {
-      state.token = null;
+      state.token = null; state.auth.mode = previous;
       setMsg(tokenMsg, "error", "Token rejected",
-        "The API did not accept that bearer token. Check the value and enter it again.");
+        "The API did not accept that access token. Check the value and enter it again.");
       tokenInput.value = "";
       tokenInput.focus();
       return;
     }
     if (!res.ok) {
-      state.token = null;
+      state.token = null; state.auth.mode = previous;
       setMsg(tokenMsg, "error", "Could not verify the token", esc(apiError(res)));
       return;
     }
-    setToken(candidate);
+    // Only now is it worth keeping.
+    state.auth.refreshToken = null;
+    state.auth.expiresAt = 0;
+    state.auth.user = null;
+    try { sessionStorage.setItem(LEGACY_KEY, candidate); } catch (_) { /* private mode: memory only */ }
+    try { sessionStorage.removeItem(REFRESH_KEY); } catch (_) { /* ignore */ }
     tokenInput.value = "";
-    setMsg(tokenMsg, "ok", "Connected",
-      "Operational workflows are unlocked, and the District, NGO and Village dashboards are now readable.");
+    setMsg(tokenMsg, "ok", "Connected with a legacy token",
+      "Workflows are unlocked, but nothing done this way is attributable to a person. "
+      + "Create an account when accounts are available on this deployment.");
+    applyAuthState();
+    await loadIdentity();
+    applyAuthState();
     refresh();
-  } finally {
-    button.disabled = false;
-    button.textContent = label;
-  }
+  });
 });
 
-$("#disconnect").addEventListener("click", function () {
-  clearToken();
-  setMsg(tokenMsg, "ok", "Disconnected", "The token has been cleared from this tab.");
-  tokenInput.focus();
+/* --- Sign out -------------------------------------------------------- */
+
+$("#sign-out").addEventListener("click", async function () {
+  const mode = state.auth.mode;
+  const access = state.token;
+  await withBusy($("#sign-out"), "Signing out…", async function () {
+    // Best effort: the local session is cleared whether or not GoTrue answers,
+    // because a sign-out that can fail is a sign-out nobody can rely on.
+    if (mode === "supabase" && access && gotrueReady()) await gotrue("/logout", {}, access);
+  });
+  signOutLocal();
+  setMsg($("#auth-in-msg"), null);
+  setMsg(tokenMsg, null);
+  setMsg(authMsg, "ok", "Signed out", "Your session has been cleared from this tab.");
+  showAuthTab("signin");
+  refresh();
 });
 
-/** A 401 mid-session means the token stopped working: drop it and re-lock. */
-function handleUnauthorized(msgEl) {
-  clearToken();
-  if (msgEl) {
-    setMsg(msgEl, "error", "Token rejected",
-      "The API rejected the stored token, so it has been cleared. Re-enter it above to continue.");
+/* --- Sign in / register toggle --------------------------------------- */
+
+function showAuthTab(which) {
+  authTab = which === "register" ? "register" : "signin";
+  $("#tab-signin").setAttribute("aria-pressed", String(authTab === "signin"));
+  $("#tab-register").setAttribute("aria-pressed", String(authTab === "register"));
+  $("#signin-form").classList.toggle("hidden", !gotrueReady() || authTab !== "signin");
+  $("#register-form").classList.toggle("hidden", !gotrueReady() || authTab !== "register");
+}
+
+$("#tab-signin").addEventListener("click", function () {
+  showAuthTab("signin"); setMsg(authMsg, null); $("#signin-email").focus();
+});
+$("#tab-register").addEventListener("click", function () {
+  showAuthTab("register"); setMsg(authMsg, null); $("#register-email").focus();
+});
+
+/* --- Boot the identity layer ----------------------------------------- */
+
+/**
+ * Runs once, after the fragment has already been read and erased. Order matters:
+ * a returning OAuth session wins, then a refresh token surviving a reload in
+ * this tab, then the transitional shared token.
+ */
+async function startAuth(pending) {
+  // On a slow connection this read is the only thing between the user and a
+  // card with nothing in it. Say what is happening.
+  setMsg($("#auth-config-msg"), "info", "Checking how to sign in…",
+    "Reading this deployment's sign-in configuration.");
+  await loadAuthConfig();
+  renderProviders();
+  renderAuthAvailability();
+  showAuthTab(authTab);
+
+  if (pending && pending.error) {
+    setMsg(authMsg, "error", "Sign-in was not completed", esc(pending.error));
   }
-  setMsg(tokenMsg, "error", "Token rejected", "Enter the API token again.");
+  if (pending && pending.session && adoptSession(pending.session)) {
+    await afterSignIn("Signed in", "Your session is held in this tab only.");
+    return;
+  }
+
+  let stored = null;
+  try { stored = sessionStorage.getItem(REFRESH_KEY); } catch (_) { stored = null; }
+  if (stored && gotrueReady()) {
+    // The access token did not survive the reload — by design. The refresh
+    // token did, so exchange it for a new one before showing a signed-out page.
+    state.auth.mode = "supabase";
+    state.auth.refreshToken = stored;
+    if (await refreshSession()) { await afterSignIn(null); return; }
+    return;
+  }
+  if (stored) {
+    // Nothing can be done with it now; do not leave a credential lying around.
+    state.auth.refreshToken = null;
+    try { sessionStorage.removeItem(REFRESH_KEY); } catch (_) { /* ignore */ }
+  }
+
+  let legacy = null;
+  try { legacy = sessionStorage.getItem(LEGACY_KEY); } catch (_) { legacy = null; }
+  if (legacy) {
+    state.token = legacy;
+    state.auth.mode = "legacy";
+    applyAuthState();
+    await loadIdentity();
+    applyAuthState();
+    refresh();
+    return;
+  }
+  applyAuthState();
 }
 
 /* --- Identifier suggestions ---------------------------------------- */
@@ -3642,13 +4587,22 @@ $("#ngo-select").addEventListener("change", function (event) {
 
 window.addEventListener("hashchange", applyRoute);
 
-try { state.token = sessionStorage.getItem(TOKEN_KEY); } catch (_) { state.token = null; }
+/**
+ * FIRST, synchronously, before routing, rendering or any await: if this load is
+ * an OAuth callback the tokens are sitting in the address bar. Take them and
+ * rewrite the URL now — everything after this point sees a clean location.
+ */
+const pendingAuth = consumeAuthFragment();
+
 buildWorkflows();
-applyTokenState();
+applyAuthState();
 checkHealth();
 checkReady();
 if (!location.hash) location.hash = "#/public";
 applyRoute();
+// Resolves the session (OAuth return, refresh-token reload, or legacy token)
+// and re-renders whatever it unlocks.
+startAuth(pendingAuth);
 // Keep the connection indicator honest without hammering the service.
 setInterval(checkHealth, 30000);
 </script>

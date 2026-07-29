@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { authorize } from "./auth.js";
+import { createAuthGate, type AuthGate } from "./auth.js";
 import { readJsonBody } from "./body.js";
 import {
   badRequest,
@@ -43,7 +43,16 @@ export type RequestListener = (req: IncomingMessage, res: ServerResponse) => voi
  * catch-all that turns any unhandled throw into a 500 with a generic body.
  */
 export function createHandler(deps: RouteDeps): RequestListener {
-  const router = buildRouter(deps);
+  // Built once per handler, not per request: the JWKS key set it holds is
+  // cached inside it, and a gate rebuilt per request would re-fetch keys on
+  // every call — exactly the per-request round trip to Supabase ADR 0008 rules out.
+  const gate: AuthGate =
+    deps.auth ?? createAuthGate({ config: deps.config, profiles: deps.runtime.profiles ?? null });
+
+  // The routes get the gate that is actually enforcing, so `/health` and
+  // `/public/config` report the door that is really there rather than the one
+  // the configuration implies.
+  const router = buildRouter({ ...deps, auth: gate });
 
   return (req, res) => {
     void dispatch(req)
@@ -61,7 +70,7 @@ export function createHandler(deps: RouteDeps): RequestListener {
     if (url === null) return badRequest("malformed request target");
     const path = url.pathname;
 
-    const auth = authorize(deps.config, path, req.headers.authorization);
+    const auth = await gate.authorize(path, req.headers.authorization);
     if (!auth.authorized) return auth.response;
 
     const match = router.match(method, path);
@@ -78,6 +87,13 @@ export function createHandler(deps: RouteDeps): RequestListener {
       body = parsed.value;
     }
 
-    return match.handler({ method, path, params: match.params, query: url.searchParams, body });
+    return match.handler({
+      method,
+      path,
+      params: match.params,
+      query: url.searchParams,
+      body,
+      actor: auth.actor,
+    });
   }
 }

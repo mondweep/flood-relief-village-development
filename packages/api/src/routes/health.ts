@@ -1,3 +1,4 @@
+import { authModeOf, legacyTokenEnabled, LEGACY_TOKEN_WARNING } from "../auth.js";
 import { json, serviceUnavailable, type HttpResponse } from "../http-result.js";
 import { partialPersistenceOf } from "../persistence.js";
 import type { Router } from "../router.js";
@@ -14,14 +15,24 @@ export function registerHealthRoutes(router: Router, deps: RouteDeps): void {
     // on its own would let an operator assume every context survives a restart;
     // four of them do not, and a health endpoint is exactly where that belongs.
     const partial = partialPersistenceOf(deps.runtime);
+    // ADR 0008: while the shared static token is still accepted, `/health` must
+    // say so. Present only when it IS enabled — the field exists to disclose a
+    // transitional weakness, and there is nothing to disclose once it is gone.
+    // `auth` already reports which gate is in force in every case.
+    //
+    // Both facts come off the GATE, not off config: `auth: "disabled"` is read
+    // by the dashboard as "this API accepts an uncredentialed request", which is
+    // true of the gate's behaviour and only incidentally true of the config.
+    const legacy = deps.auth?.legacyTokenEnabled ?? legacyTokenEnabled(deps.config);
     return json(200, {
       status: "ok",
       persistence: deps.runtime.mode,
       version: deps.config.version,
-      // Surfaced so an operator can see at a glance that the stopgap token gate
-      // is switched off in this revision.
-      auth: deps.config.apiToken === null ? "disabled" : "bearer",
+      // Surfaced so an operator can see at a glance which gate this revision is
+      // actually running: per-user JWTs, the legacy shared token, or nothing.
+      auth: deps.auth?.mode ?? authModeOf(deps.config),
       ...(partial === null ? {} : { partialPersistence: partial }),
+      ...(legacy ? { legacyTokenEnabled: true, legacyTokenWarning: LEGACY_TOKEN_WARNING } : {}),
     });
   });
 

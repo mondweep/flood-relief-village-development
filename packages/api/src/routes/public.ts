@@ -1,4 +1,5 @@
 import type { Severity } from "@afrip/village-registry";
+import { jwtAuthEnabled, legacyTokenEnabled } from "../auth.js";
 import { summariseFunds, toPublicFundProject, type FundTotals } from "../fund-view.js";
 import { json, type HttpResponse } from "../http-result.js";
 import type { Router } from "../router.js";
@@ -31,9 +32,65 @@ export interface PublicStats {
   readonly funds: FundTotals;
 }
 
+/**
+ * What the sign-in page needs before it holds any credential (ADR 0008). The
+ * browser talks to GoTrue directly — no SDK — so it must be told where GoTrue
+ * is and which publishable key to present.
+ */
+export interface PublicAuthConfig {
+  /** Project base URL, or null when sign-in is not configured in this revision. */
+  readonly supabaseUrl: string | null;
+  /** Publishable (anon) key. NEVER the service-role key. */
+  readonly supabasePublishableKey: string | null;
+  /** OAuth providers to offer. A list, so adding one is configuration (ADR 0008). */
+  readonly authProviders: readonly string[];
+  readonly googleEnabled: boolean;
+  /**
+   * True when this API verifies Supabase JWTs at all.
+   *
+   * LOAD-BEARING, not informational: the page gates its entire sign-in surface
+   * on it. `supabaseUrl` being present is not sufficient — SUPABASE_URL is also
+   * what PERSISTENCE=supabase needs, so a deployment can have a working project
+   * and still not be verifying its tokens (`AUTH_JWT=off`). Offering sign-in in
+   * that state produces an authentication that succeeds and is then refused on
+   * the next request. Do not remove this field or fold it into `supabaseUrl`.
+   */
+  readonly jwtEnabled: boolean;
+  /** True while the transitional shared token is still accepted. */
+  readonly legacyTokenEnabled: boolean;
+}
+
 export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
   const { villageRegistry, ngoCoordination, recoveryIntelligence, fundMonitoring } =
     deps.runtime.platform;
+
+  /**
+   * Sign-in bootstrap. Unauthenticated of necessity: it is what a page reads in
+   * order to *become* authenticated, so gating it would be circular.
+   *
+   * Answers 200 with nulls rather than 404 when auth is unconfigured. The two
+   * failures are different and the page renders them differently: "sign-in is
+   * not available in this deployment" is an operator's misconfiguration, while
+   * a missing endpoint would send a frontend developer hunting for a routing bug.
+   *
+   * Only publishable values appear here. The service-role key is never read by
+   * this module and must never be added to it — that key bypasses RLS.
+   */
+  router.get("/public/config", async (): Promise<HttpResponse> => {
+    const providers = deps.config.authProviders;
+    const body: PublicAuthConfig = {
+      supabaseUrl: deps.config.supabaseUrl,
+      supabasePublishableKey: deps.config.supabasePublishableKey,
+      authProviders: providers,
+      googleEnabled: providers.includes("google"),
+      // Off the gate for the same reason /health is: the page gates its sign-in
+      // surface on `jwtEnabled`, so it must describe the gate that will actually
+      // judge the token, not the configuration that was meant to build one.
+      jwtEnabled: deps.auth?.jwtEnabled ?? jwtAuthEnabled(deps.config),
+      legacyTokenEnabled: deps.auth?.legacyTokenEnabled ?? legacyTokenEnabled(deps.config),
+    };
+    return json(200, body);
+  });
 
   router.get("/public/villages", async (): Promise<HttpResponse> => {
     const listed = await villageRegistry.listVillagesBySeverity.execute();
