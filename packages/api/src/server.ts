@@ -53,6 +53,8 @@ export interface ServerDeps {
   readonly runtime: PlatformRuntime;
   /** Identity gate; built from config and the runtime when omitted. */
   readonly auth?: AuthGate;
+  /** Test seam for the tile proxy; see RouteDeps.fetchTile. */
+  readonly fetchTile?: typeof fetch;
 }
 
 /** Builds the HTTP server without binding a port — the seam every test drives. */

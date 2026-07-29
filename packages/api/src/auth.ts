@@ -52,6 +52,23 @@ const PUBLIC_EXACT_PATHS: ReadonlySet<string> = new Set([
 const PUBLIC_PREFIX = "/public/";
 
 /**
+ * Map tiles (ADR 0012). PUBLIC of necessity, not of preference: Leaflet loads
+ * tiles through `<img src>`, which cannot carry an Authorization header, so
+ * there is no version of this route that both works and is gated.
+ *
+ * What makes that acceptable is in `routes/map.ts`: the proxy serves only tiles
+ * overlapping Assam, between zoom 5 and 18. Outside that it 404s. So it is
+ * reachable by anyone who finds it and useful to nobody but this platform — the
+ * open-relay risk is bounded by geography rather than by a credential. Read the
+ * note on BOUNDS before widening either limit.
+ *
+ * Tiles carry no platform data. They are public OpenStreetMap imagery; the
+ * sensitive thing about a map is WHICH tiles are requested, and proxying is what
+ * keeps that from the upstream in the first place.
+ */
+const TILE_PREFIX = "/map/tiles/";
+
+/**
  * Routes reachable with a VERIFIED TOKEN BUT NO AFRIP PROFILE.
  *
  * Exactly one, and it should stay that way. Enrolment is the door a new user
@@ -79,7 +96,10 @@ export function isPublicPath(path: string): boolean {
   // path to it), so the gate cannot disagree with what actually gets routed.
   const normalised = normalise(path);
   return (
-    PUBLIC_EXACT_PATHS.has(normalised) || normalised === "/public" || normalised.startsWith(PUBLIC_PREFIX)
+    PUBLIC_EXACT_PATHS.has(normalised) ||
+    normalised === "/public" ||
+    normalised.startsWith(PUBLIC_PREFIX) ||
+    normalised.startsWith(TILE_PREFIX)
   );
 }
 

@@ -65,6 +65,8 @@ export interface TestServerDeps {
   readonly runtime: PlatformRuntime;
   /** Identity gate seam — supplied by tests that drive JWT verification. */
   readonly auth?: AuthGate;
+  /** Stubbed fetch for the tile proxy, so no test reaches OpenStreetMap. */
+  readonly fetchTile?: typeof fetch;
 }
 
 /**
@@ -72,8 +74,8 @@ export interface TestServerDeps {
  * tests use to drive a real HTTP server over a stubbed client.
  */
 export async function startTestServerWith(deps: TestServerDeps): Promise<TestServer> {
-  const { config, runtime, auth } = deps;
-  const server = createServer({ config, runtime, auth });
+  const { config, runtime, auth, fetchTile } = deps;
+  const server = createServer({ config, runtime, auth, fetchTile });
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address() as AddressInfo;

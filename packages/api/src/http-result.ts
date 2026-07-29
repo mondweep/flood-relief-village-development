@@ -11,9 +11,24 @@ export interface HttpResponse {
    * API route stays JSON, including 404s for unknown paths.
    */
   readonly raw?: boolean;
+  /**
+   * When true, `body` is a Buffer and is written byte for byte.
+   *
+   * Distinct from `raw`, which stringifies: `String(buffer)` decodes bytes as
+   * UTF-8 and silently mangles every byte sequence that is not valid UTF-8 —
+   * which for a PNG is nearly all of them. Only the map tile proxy sets this.
+   */
+  readonly binary?: boolean;
 }
 
 export const json = (status: number, body: unknown): HttpResponse => ({ status, body });
+
+/** A byte-for-byte response, for content that is not text. */
+export const bytes = (
+  status: number,
+  body: Buffer,
+  headers: Readonly<Record<string, string>>,
+): HttpResponse => ({ status, body, binary: true, headers });
 
 /**
  * Serves a pre-rendered HTML document. `cache-control` is short and revalidating:
@@ -111,13 +126,20 @@ export function fromResultWith<T>(
 }
 
 export function writeResponse(res: ServerResponse, response: HttpResponse): void {
-  const payload = response.raw === true ? String(response.body ?? "") : JSON.stringify(response.body ?? {});
+  // Buffers are written unchanged. Falling through to the string path would run
+  // `String(buffer)`, decoding the bytes as UTF-8 and corrupting every image.
+  const payload: string | Buffer =
+    response.binary === true && Buffer.isBuffer(response.body)
+      ? response.body
+      : response.raw === true
+        ? String(response.body ?? "")
+        : JSON.stringify(response.body ?? {});
   res.writeHead(response.status, {
     "content-type": "application/json; charset=utf-8",
     ...response.headers,
     // Always last: content-length is derived from the payload we are about to
     // write, so a route's own headers must never be able to contradict it.
-    "content-length": String(Buffer.byteLength(payload)),
+    "content-length": String(Buffer.isBuffer(payload) ? payload.length : Buffer.byteLength(payload)),
   });
   res.end(payload);
 }

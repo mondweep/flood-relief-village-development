@@ -13,4 +13,11 @@ export interface RouteDeps {
    * key set instead of the project's JWKS endpoint.
    */
   readonly auth?: AuthGate;
+  /**
+   * Test seam for the map tile proxy (ADR 0012): a stubbed `fetch`, so no test
+   * reaches OpenStreetMap. A suite that hit the real tile server would fail on a
+   * plane and would rate-limit us besides — Nominatim and the tile service both
+   * ban by IP.
+   */
+  readonly fetchTile?: typeof fetch;
 }
