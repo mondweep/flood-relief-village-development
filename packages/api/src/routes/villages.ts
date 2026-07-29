@@ -10,6 +10,8 @@ import {
   requiredProvenancedCoordinates,
   requiredString,
 } from "../validate.js";
+import type { AuditEntry } from "../audit.js";
+import { AUDIT_READER_ROLES } from "./audit.js";
 import type { RouteDeps } from "./deps.js";
 
 /** One entry on a village's timeline (ADR 0013). */
@@ -18,9 +20,15 @@ interface HistoryItem {
   readonly kind: string;
   readonly summary: string;
   readonly detail: unknown;
+  /**
+   * Who caused it (ADR 0011). Absent on entries drawn from the aggregate's own
+   * rows, which predate the audit log and carry no actor — absent meaning "not
+   * recorded", never "nobody".
+   */
+  readonly actor?: string;
 }
 
-export function registerVillageRoutes(router: Router, _deps: RouteDeps): void {
+export function registerVillageRoutes(router: Router, deps: RouteDeps): void {
   // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
   // from `deps.runtime.platform` at registration. The long-lived platform
   // stamps `system` onto what it publishes; only the request-scoped one knows
@@ -173,17 +181,36 @@ export function registerVillageRoutes(router: Router, _deps: RouteDeps): void {
   /**
    * The village's timeline (ADR 0013), oldest first.
    *
-   * It reports only what is genuinely persisted today:
-   *   - damage assessments, append-only on the Village aggregate;
-   *   - recovery index recalculations, from Recovery Intelligence's own history.
+   * ADR 0013 shipped this with a hole it named: severity transitions, profile
+   * corrections and NGO assignments emitted events carrying both sides of the
+   * change, but nothing stored them, so the timeline could only show the two
+   * things that happened to be persisted as rows. It said "this route grows to
+   * read the audit log when ADR 0011 lands". ADR 0011 has landed, and this is
+   * that growth.
    *
-   * Deliberately ABSENT: severity transitions, profile corrections, and NGO
-   * assignments. Those emit events carrying both sides of the change, but
-   * nothing stores them — only the current value survives — so a timeline entry
-   * for them would have to be invented, and an invented history is worse than a
-   * short one on a platform whose purpose is reconstructing what happened. The
-   * full attributed timeline arrives with the audit log (ADR 0011), which
-   * persists the event stream; this route grows to read it then.
+   * Three sources, merged:
+   *   - the AUDIT LOG (ADR 0011) — every event ever raised about this village,
+   *     with who caused it. This is now the substantive source;
+   *   - damage assessments from the aggregate;
+   *   - recovery index recalculations from Recovery Intelligence's history.
+   *
+   * The last two are kept rather than replaced by audit, and not from caution:
+   * they are the record for anything that happened BEFORE the audit log existed.
+   * A village registered last week has assessment rows and no audit rows, and
+   * dropping them would make its history look emptier than it is — which on this
+   * platform is the specific failure being designed against.
+   *
+   * That does mean an event can appear twice for records created after 00006:
+   * once from its own table, once from audit. Deduplicated below on
+   * (kind, timestamp) rather than left to the reader, since a timeline showing
+   * one assessment twice reads as two assessments.
+   *
+   * WHO SEES WHAT. Audit payloads may name beneficiaries, and ADR 0011 restricts
+   * the audit endpoints to admin and district_officer. This route is reachable
+   * by anyone who may read a village, so the audit portion is included ONLY for
+   * those two roles. Everyone else gets the timeline as it was before — real,
+   * just thinner. Widening it here would route around the restriction rather
+   * than the restriction being wrong.
    */
   router.get("/villages/:id/history", async (ctx: RequestContext): Promise<HttpResponse> => {
     const id = ctx.params["id"] ?? "";
@@ -207,12 +234,118 @@ export function registerVillageRoutes(router: Router, _deps: RouteDeps): void {
       }
     }
 
+    // ADR 0011: the attributed stream, for the roles allowed to read it.
+    const auditLog = deps.runtime.auditLog;
+    const mayReadAudit = ctx.actor != null && AUDIT_READER_ROLES.includes(ctx.actor.role);
+    let auditUnavailable = false;
+    if (auditLog !== undefined && mayReadAudit) {
+      const page = await auditLog.query({ subjectType: "village", subjectId: id, limit: 200 });
+      if (page.ok) {
+        for (const entry of page.value.entries) items.push(auditItem(entry));
+      } else {
+        // Reported, not swallowed. A timeline silently missing its audit half
+        // looks like a village where nothing happened, which is the exact wrong
+        // answer on a platform built because records vanish.
+        auditUnavailable = true;
+        console.error(`[api] audit read failed for village ${id}: ${page.error}`);
+      }
+    }
+
     // Stable sort: entries sharing a timestamp keep the order their own context
     // recorded them in, rather than being shuffled by the merge.
     items.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 
-    return json(200, { villageId: profile.value.id, history: items });
+    return json(200, {
+      villageId: profile.value.id,
+      history: dedupe(items),
+      // Says which view the reader is getting. Without it, a citizen and a
+      // district officer see different histories for the same village with
+      // nothing explaining why, and the thinner one looks like data loss.
+      attributed: mayReadAudit && auditLog !== undefined && !auditUnavailable,
+      ...(auditUnavailable ? { auditUnavailable: true } : {}),
+    });
   });
+}
+
+/**
+ * Drops the duplicate an event produces when it is both a row and an audit
+ * entry — a damage assessment recorded after 00006 is in
+ * `village_registry_damage_assessments` AND in `audit_log`.
+ *
+ * Keyed on kind plus timestamp rather than on identity, because the two sources
+ * carry no shared id: the aggregate's row has no event id and the audit entry
+ * has no assessment id. Two genuinely distinct assessments recorded in the same
+ * millisecond would collapse into one — accepted, because they are recorded by a
+ * human filling in a form and that collision does not occur in practice, whereas
+ * the duplicate does on every single one.
+ *
+ * The AUDIT entry wins where both exist: it carries the actor, and "who" is the
+ * thing ADR 0011 was built to add.
+ */
+function dedupe(items: readonly HistoryItem[]): HistoryItem[] {
+  const byKey = new Map<string, HistoryItem>();
+  const order: string[] = [];
+  for (const item of items) {
+    const key = `${item.kind}@${item.at}`;
+    if (!byKey.has(key)) order.push(key);
+    const existing = byKey.get(key);
+    if (existing === undefined || (existing.actor === undefined && item.actor !== undefined)) {
+      byKey.set(key, item);
+    }
+  }
+  return order.map((key) => byKey.get(key) as HistoryItem);
+}
+
+/** One audit entry as a timeline item, carrying the actor the other sources lack. */
+function auditItem(entry: AuditEntry): HistoryItem {
+  return {
+    at: entry.occurredAt,
+    kind: KIND_BY_EVENT[entry.eventName] ?? entry.eventName,
+    summary: summariseEvent(entry),
+    detail: entry.payload,
+    ...(entry.actorEmail === null && entry.actorRole === null
+      ? {}
+      : { actor: entry.actorEmail ?? entry.actorRole ?? "unknown" }),
+  };
+}
+
+/**
+ * Timeline `kind`s for the events a village accumulates. Only the ones with a
+ * natural existing kind are mapped; anything else falls through to its event
+ * name, which is ugly but true — inventing a friendly label for an event nobody
+ * anticipated is how a timeline starts describing things that did not happen.
+ */
+const KIND_BY_EVENT: Readonly<Record<string, string>> = {
+  "village.damage-assessed.v1": "damage-assessment",
+  "recovery.score-calculated.v1": "recovery-index",
+  "village.registered.v1": "registered",
+  "village.severity-updated.v1": "severity-change",
+  "village.profile-corrected.v1": "correction",
+};
+
+/** Plain-language one-liners. Falls back to the event name rather than guessing. */
+function summariseEvent(entry: AuditEntry): string {
+  const p = entry.payload;
+  switch (entry.eventName) {
+    case "village.registered.v1":
+      return `Village registered as ${String(p["name"] ?? "unnamed")}`;
+    case "village.severity-updated.v1":
+      // The event carries both sides, which is exactly what ADR 0013 wanted and
+      // could not show until the stream was durable.
+      return `Severity changed from ${String(p["previous"] ?? "?")} to ${String(p["severity"] ?? "?")}`;
+    case "village.profile-corrected.v1": {
+      const changed = p["changed"];
+      const fields =
+        typeof changed === "object" && changed !== null ? Object.keys(changed).join(", ") : "details";
+      return `Corrected ${fields} — ${String(p["reason"] ?? "no reason given")}`;
+    }
+    case "village.damage-assessed.v1":
+      return `Damage assessment recorded: ${String(p["housesDamaged"] ?? "?")} houses damaged`;
+    case "recovery.score-calculated.v1":
+      return `Recovery index recalculated to ${String(p["composite"] ?? "?")}`;
+    default:
+      return entry.eventName;
+  }
 }
 
 function damageAssessmentItem(assessment: DamageAssessment): HistoryItem {

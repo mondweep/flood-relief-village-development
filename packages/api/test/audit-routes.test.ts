@@ -272,3 +272,120 @@ describe("what the audit trail reports", () => {
     ).toBe(400);
   });
 });
+
+/**
+ * The village timeline, now that ADR 0011 has landed (ADR 0013 §"the full
+ * attributed timeline arrives with the audit log").
+ *
+ * The role split is the part worth testing hardest: audit payloads may name
+ * beneficiaries, so the attributed half is included only for the roles ADR 0011
+ * admits. Everyone else gets the timeline as it was — real, just thinner.
+ */
+describe("the village timeline reads the audit log", () => {
+  let server: TestServer;
+
+  afterEach(async () => {
+    await server?.close();
+  });
+
+  async function post(role: UserRole, path: string, body: unknown) {
+    return server.request(path, {
+      method: "POST",
+      token: await tokenFor(role),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function patch(role: UserRole, path: string, body: unknown) {
+    return server.request(path, {
+      method: "PATCH",
+      token: await tokenFor(role),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  async function timeline(role: UserRole) {
+    const response = await server.request("/villages/village-1/history", { token: await tokenFor(role) });
+    return response.body as {
+      history: { kind: string; summary: string; actor?: string }[];
+      attributed: boolean;
+    };
+  }
+
+  /**
+   * The hole ADR 0013 named and could not fill: a severity transition emitted an
+   * event carrying both sides, but nothing stored it, so the timeline could not
+   * show it. This is the test that it now can.
+   */
+  it("shows a severity transition, with both sides and who made it", async () => {
+    server = await boot();
+    await post("district_officer", "/villages", VILLAGE);
+    await patch("district_officer", "/villages/village-1/severity", { severity: "critical" });
+
+    const { history } = await timeline("district_officer");
+    const change = history.find((item) => item.kind === "severity-change");
+
+    expect(change, JSON.stringify(history)).toBeDefined();
+    expect(change?.summary).toContain("severe");
+    expect(change?.summary).toContain("critical");
+    expect(change?.actor).toBe(PEOPLE.district_officer.email);
+  });
+
+  it("shows a correction with its stated reason", async () => {
+    server = await boot();
+    await post("district_officer", "/villages", VILLAGE);
+    await patch("district_officer", "/villages/village-1/profile", {
+      reason: "household count was transposed",
+      households: 260,
+    });
+
+    const { history } = await timeline("district_officer");
+    const correction = history.find((item) => item.kind === "correction");
+
+    expect(correction, JSON.stringify(history)).toBeDefined();
+    expect(correction?.summary).toContain("transposed");
+    expect(correction?.actor).toBe(PEOPLE.district_officer.email);
+  });
+
+  it("withholds the attributed half from roles that may not read audit", async () => {
+    server = await boot();
+    await post("district_officer", "/villages", VILLAGE);
+    await patch("district_officer", "/villages/village-1/severity", { severity: "critical" });
+
+    const officer = await timeline("district_officer");
+    const citizen = await timeline("citizen");
+
+    expect(officer.attributed).toBe(true);
+    expect(citizen.attributed).toBe(false);
+    // The citizen sees a real timeline, just without the audit-derived entries.
+    expect(citizen.history.some((item) => item.kind === "severity-change")).toBe(false);
+    expect(citizen.history.every((item) => item.actor === undefined)).toBe(true);
+  });
+
+  /**
+   * A damage assessment is both an aggregate row and an audit entry. Showing it
+   * twice would read as two assessments — on a platform whose figures inform
+   * where relief goes, that is not a cosmetic bug.
+   */
+  it("does not show an assessment twice when it is both a row and an audit entry", async () => {
+    server = await boot();
+    await post("district_officer", "/villages", VILLAGE);
+    await post("district_officer", "/villages/village-1/damage-assessments", {
+      housesDamaged: 40,
+      schoolsDamaged: 1,
+      healthCentresDamaged: 0,
+      waterSourcesDamaged: 3,
+      agricultureHectaresLost: 22,
+      livestockLost: 8,
+    });
+
+    const { history } = await timeline("district_officer");
+    const assessments = history.filter((item) => item.kind === "damage-assessment");
+
+    expect(assessments).toHaveLength(1);
+    // And the surviving copy is the attributed one — "who" is what ADR 0011 added.
+    expect(assessments[0]?.actor).toBe(PEOPLE.district_officer.email);
+  });
+});
