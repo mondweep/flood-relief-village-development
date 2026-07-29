@@ -246,15 +246,33 @@ Project Settings -> API keys -> service_role. It bypasses RLS: server-side only.
   fi
 fi
 
-if ensure_secret "$SECRET_API_TOKEN" "${API_TOKEN:-}"; then
+# LEGACY_API_TOKEN=off retires the shared static token (ADR 0008's transitional
+# concession). Retiring it is the POINT of ADR 0008, and specifically of ADR
+# 0009: a request carrying the shared token arrives with no actor at all, and a
+# null actor is ALLOWED through every permission check by design — so while the
+# token is live, role enforcement and the beneficiary-register lockout do not
+# apply to anyone holding it. It also identifies nobody, so nothing that request
+# does can be attributed in the audit trail.
+#
+# The secret itself is left in Secret Manager, unmounted. Deleting it would make
+# a rollback to a pre-0008 revision fail to start, and those revisions are the
+# rollback path for the deploy that retires it.
+if [[ "${LEGACY_API_TOKEN:-on}" == "off" ]]; then
+  info "LEGACY_API_TOKEN=off — the shared static token will NOT be mounted."
+  info "Every caller must now sign in; /health will report auth=supabase-jwt."
+elif ensure_secret "$SECRET_API_TOKEN" "${API_TOKEN:-}"; then
   SECRET_FLAGS+=("API_TOKEN=${SECRET_API_TOKEN}:latest")
   SECRET_COUNT=$((SECRET_COUNT + 1))
+  warn \
+"The shared API_TOKEN is still mounted. It identifies nobody and bypasses ADR
+         0009's role checks entirely (a null actor is allowed everywhere), so the
+         beneficiary register is reachable by anyone holding it. Retire it with:
+           LEGACY_API_TOKEN=off ./scripts/deploy-cloudrun.sh"
 else
   warn \
 "Secret '${SECRET_API_TOKEN}' does not exist and no API_TOKEN was supplied.
-         The service will deploy with write endpoints UNAUTHENTICATED.
-         Generate and seed one before real use:
-           API_TOKEN=\$(openssl rand -hex 32) ./scripts/deploy-cloudrun.sh"
+         With AUTH_JWT on this is fine — callers sign in instead. With AUTH_JWT
+         off it would deploy write endpoints UNAUTHENTICATED."
 fi
 
 # ---------------------------------------------------------------------------
@@ -293,6 +311,43 @@ step "Building and deploying (Cloud Build; first run takes a few minutes)"
 ENV_VARS="NODE_ENV=production,PERSISTENCE=${PERSISTENCE}"
 if [[ -n "$SUPABASE_URL" ]]; then
   ENV_VARS="${ENV_VARS},SUPABASE_URL=${SUPABASE_URL}"
+fi
+
+# Identity (ADR 0008). AUTH_JWT defaults ON in loadConfig the moment SUPABASE_URL
+# is set, so this is passed explicitly to make the choice visible in the revision
+# rather than implied by the absence of a variable.
+ENV_VARS="${ENV_VARS},AUTH_JWT=${AUTH_JWT:-on}"
+
+# Stamp the source revision, so /health — and the page footer that reads it —
+# name the branch actually serving rather than one written into the markup.
+# `--source` uploads the WORKING TREE, so this reports what was really shipped,
+# including any uncommitted change; `-dirty` is appended when that is the case,
+# because a commit id that silently omits local edits is a false provenance.
+GIT_BRANCH="${GIT_BRANCH:-$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
+GIT_COMMIT="${GIT_COMMIT:-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+  GIT_COMMIT="${GIT_COMMIT}-dirty"
+  warn "Working tree has uncommitted changes; deploying them as ${GIT_COMMIT}."
+fi
+GIT_REPOSITORY="${GIT_REPOSITORY:-https://github.com/mondweep/flood-relief-village-development}"
+ENV_VARS="${ENV_VARS},GIT_BRANCH=${GIT_BRANCH},GIT_COMMIT=${GIT_COMMIT},GIT_REPOSITORY=${GIT_REPOSITORY}"
+info "Source revision: ${GIT_BRANCH} @ ${GIT_COMMIT}"
+
+# The PUBLISHABLE (anon) key is NOT a secret and is deliberately an env var: the
+# browser needs it to talk to GoTrue at all, and `GET /public/config` serves it
+# to every visitor. Putting it in Secret Manager would imply a confidentiality it
+# does not have, and would cost a secret access on every cold start to publish a
+# value that is already public. The SERVICE-ROLE key is the opposite and stays in
+# Secret Manager below — do not confuse the two.
+if [[ -n "${SUPABASE_PUBLISHABLE_KEY:-}" ]]; then
+  ENV_VARS="${ENV_VARS},SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}"
+fi
+
+# Which social providers the sign-in page offers. It only draws buttons; enabling
+# a provider is done in the Supabase dashboard, and listing one here that is not
+# configured there produces a button that fails on click.
+if [[ -n "${AUTH_PROVIDERS:-}" ]]; then
+  ENV_VARS="${ENV_VARS},AUTH_PROVIDERS=${AUTH_PROVIDERS}"
 fi
 
 DEPLOY_ARGS=(

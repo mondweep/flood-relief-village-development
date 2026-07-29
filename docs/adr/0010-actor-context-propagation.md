@@ -1,6 +1,6 @@
 # ADR 0010 — Propagating the actor: request-scoped composition and an actor-stamping publisher
 
-**Status:** Proposed
+**Status:** Accepted — built and tested, not yet deployed
 
 ## Context
 

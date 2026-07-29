@@ -162,7 +162,7 @@ describe("village amendment and history routes", () => {
       });
 
       expect(response.status).toBe(401);
-      expect(response.body).toEqual({ error: "missing bearer token" });
+      expect(response.body).toEqual({ error: "missing bearer token", code: "token_missing" });
     });
   });
 
@@ -273,7 +273,7 @@ describe("village amendment and history routes", () => {
       const response = await server.request(`/villages/${villageId}/history`);
 
       expect(response.status).toBe(401);
-      expect(response.body).toEqual({ error: "missing bearer token" });
+      expect(response.body).toEqual({ error: "missing bearer token", code: "token_missing" });
     });
   });
 });

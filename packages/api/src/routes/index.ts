@@ -4,6 +4,7 @@ import { registerDashboardRoutes } from "./dashboard.js";
 import { registerFundRoutes } from "./funds.js";
 import { registerHealthRoutes } from "./health.js";
 import { registerIssueRoutes } from "./issues.js";
+import { registerMeRoutes } from "./me.js";
 import { registerNgoRoutes } from "./ngos.js";
 import { registerPlanningRoutes } from "./planning.js";
 import { registerPublicRoutes } from "./public.js";
@@ -19,6 +20,7 @@ export function buildRouter(deps: RouteDeps): Router {
   const router = new Router();
   registerDashboardRoutes(router, deps);
   registerHealthRoutes(router, deps);
+  registerMeRoutes(router, deps);
   registerVillageRoutes(router, deps);
   registerNgoRoutes(router, deps);
   registerBeneficiaryRoutes(router, deps);

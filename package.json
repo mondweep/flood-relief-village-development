@@ -16,7 +16,8 @@
     "dev": "npm run build && node dist/server.js"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.47.0"
+    "@supabase/supabase-js": "^2.47.0",
+    "jose": "^6.2.4"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

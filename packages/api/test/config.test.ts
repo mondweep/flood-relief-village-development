@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { API_VERSION, DEFAULT_PORT, DEFAULT_SUPABASE_SCHEMA, loadConfig } from "../src/config.js";
+import {
+  API_VERSION,
+  DEFAULT_AUTH_PROVIDERS,
+  DEFAULT_PORT,
+  DEFAULT_SUPABASE_SCHEMA,
+  loadConfig,
+} from "../src/config.js";
 import { createPersistence, createSupabaseRuntime } from "../src/persistence.js";
 import { testConfig } from "./helpers.js";
 
@@ -15,9 +21,58 @@ describe("loadConfig", () => {
         persistence: "memory",
         supabaseUrl: null,
         supabaseServiceRoleKey: null,
+        supabasePublishableKey: null,
+        supabaseJwtSecret: null,
+        authJwt: false,
+        authProviders: DEFAULT_AUTH_PROVIDERS,
         supabaseSchema: DEFAULT_SUPABASE_SCHEMA,
         version: API_VERSION,
+        // Absent unless the deploy script stamped it.
+        build: null,
       },
+    });
+  });
+
+  describe("the git stamp", () => {
+    const STAMP = {
+      GIT_BRANCH: "main",
+      GIT_COMMIT: "abc1234",
+      GIT_REPOSITORY: "https://github.com/mondweep/flood-relief-village-development",
+    };
+
+    it("reads the branch, commit and repository the deploy script stamped", () => {
+      const result = loadConfig(STAMP);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.build).toEqual({
+          branch: "main",
+          commit: "abc1234",
+          repository: "https://github.com/mondweep/flood-relief-village-development",
+        });
+      }
+    });
+
+    /**
+     * All three or nothing. A partial stamp would render a footer link that
+     * points somewhere plausible and wrong — "serving branch main" on a build
+     * from elsewhere — and a confident false provenance is worse than none,
+     * because nothing about it looks broken.
+     */
+    it.each(["GIT_BRANCH", "GIT_COMMIT", "GIT_REPOSITORY"])(
+      "reports no build at all when %s is missing",
+      (missing) => {
+        const partial: Record<string, string> = { ...STAMP };
+        delete partial[missing];
+        const result = loadConfig(partial);
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.value.build).toBeNull();
+      },
+    );
+
+    it("treats a blank stamp as no stamp", () => {
+      const result = loadConfig({ ...STAMP, GIT_BRANCH: "   " });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value.build).toBeNull();
     });
   });
 
@@ -66,6 +121,84 @@ describe("loadConfig", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.persistence).toBe("supabase");
+  });
+});
+
+describe("Supabase Auth configuration (ADR 0008)", () => {
+  it("turns JWT verification on as soon as SUPABASE_URL is configured", () => {
+    const result = loadConfig({ SUPABASE_URL: "https://x.supabase.co" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.authJwt).toBe(true);
+  });
+
+  it("leaves it off when there is nothing to verify against", () => {
+    const result = loadConfig({});
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.authJwt).toBe(false);
+  });
+
+  it("lets an operator force it off for a legacy-token-only revision", () => {
+    const result = loadConfig({ SUPABASE_URL: "https://x.supabase.co", AUTH_JWT: "off" });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.authJwt).toBe(false);
+  });
+
+  // The failure this prevents is a server that boots happily and then 401s
+  // every single request, with nothing in the logs to say why.
+  it("refuses to boot with auth on and no SUPABASE_URL to verify against", () => {
+    const secretOnly = loadConfig({ SUPABASE_JWT_SECRET: "shared-secret" });
+    expect(secretOnly.ok).toBe(false);
+    if (secretOnly.ok) return;
+    expect(secretOnly.error).toContain("SUPABASE_URL");
+
+    const forcedOn = loadConfig({ AUTH_JWT: "on" });
+    expect(forcedOn.ok).toBe(false);
+  });
+
+  it("rejects an AUTH_JWT value that is neither on nor off", () => {
+    expect(loadConfig({ AUTH_JWT: "maybe" })).toEqual({
+      ok: false,
+      error: 'AUTH_JWT must be a boolean ("on"/"off"), got: maybe',
+    });
+  });
+
+  it("reads the optional HS256 fallback secret", () => {
+    const result = loadConfig({ SUPABASE_URL: "https://x.supabase.co", SUPABASE_JWT_SECRET: " s3 " });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.supabaseJwtSecret).toBe("s3");
+  });
+
+  it("reads the publishable key, and accepts the older SUPABASE_ANON_KEY spelling", () => {
+    const publishable = loadConfig({ SUPABASE_PUBLISHABLE_KEY: "sb_publishable_x" });
+    expect(publishable.ok).toBe(true);
+    if (!publishable.ok) return;
+    expect(publishable.value.supabasePublishableKey).toBe("sb_publishable_x");
+
+    const anon = loadConfig({ SUPABASE_ANON_KEY: "anon-key" });
+    expect(anon.ok).toBe(true);
+    if (!anon.ok) return;
+    expect(anon.value.supabasePublishableKey).toBe("anon-key");
+  });
+
+  // ADR 0008: "the design should not hard-code Google anywhere except that list".
+  it("defaults the provider list to google and takes an override", () => {
+    const defaulted = loadConfig({});
+    expect(defaulted.ok).toBe(true);
+    if (!defaulted.ok) return;
+    expect(defaulted.value.authProviders).toEqual(["google"]);
+
+    const overridden = loadConfig({ AUTH_PROVIDERS: "google, azure " });
+    expect(overridden.ok).toBe(true);
+    if (!overridden.ok) return;
+    expect(overridden.value.authProviders).toEqual(["google", "azure"]);
   });
 });
 

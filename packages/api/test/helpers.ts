@@ -1,7 +1,8 @@
 import type { AddressInfo } from "node:net";
 import { SequentialIdGenerator } from "@afrip/shared-kernel";
 import { API_VERSION, createServer, type ApiConfig } from "../src/server.js";
-import { DEFAULT_SUPABASE_SCHEMA } from "../src/config.js";
+import type { AuthGate } from "../src/auth.js";
+import { DEFAULT_AUTH_PROVIDERS, DEFAULT_SUPABASE_SCHEMA } from "../src/config.js";
 import { createMemoryRuntime, type PlatformRuntime } from "../src/persistence.js";
 
 export interface TestServer {
@@ -11,6 +12,13 @@ export interface TestServer {
   close(): Promise<void>;
 }
 
+/**
+ * `authJwt` defaults OFF rather than following `supabaseUrl` the way `loadConfig`
+ * does. A test that wires the Supabase storage tier is testing storage, and
+ * making it also demand a signed JWT on every request would couple two
+ * unrelated concerns. Tests that mean to exercise the identity gate turn it on
+ * explicitly — see auth-jwt.test.ts.
+ */
 export function testConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
   return {
     port: 0,
@@ -18,8 +26,15 @@ export function testConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
     persistence: "memory",
     supabaseUrl: null,
     supabaseServiceRoleKey: null,
+    supabasePublishableKey: null,
+    supabaseJwtSecret: null,
+    authJwt: false,
+    authProviders: DEFAULT_AUTH_PROVIDERS,
     supabaseSchema: DEFAULT_SUPABASE_SCHEMA,
     version: API_VERSION,
+    // Unstamped, as an un-deployed build is. Tests that care about the footer's
+    // revision line supply their own.
+    build: null,
     ...overrides,
   };
 }
@@ -34,16 +49,22 @@ export function testConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
  * this override exists only here; see the incident note on
  * `createPlatform` in packages/platform/src/composition-root.ts.
  */
-export async function startTestServer(overrides: Partial<ApiConfig> = {}): Promise<TestServer> {
+export async function startTestServer(
+  overrides: Partial<ApiConfig> = {},
+  auth?: AuthGate,
+): Promise<TestServer> {
   return startTestServerWith({
     config: testConfig(overrides),
     runtime: createMemoryRuntime({ idGenerator: (prefix) => new SequentialIdGenerator(prefix) }),
+    auth,
   });
 }
 
 export interface TestServerDeps {
   readonly config: ApiConfig;
   readonly runtime: PlatformRuntime;
+  /** Identity gate seam — supplied by tests that drive JWT verification. */
+  readonly auth?: AuthGate;
 }
 
 /**
@@ -51,8 +72,8 @@ export interface TestServerDeps {
  * tests use to drive a real HTTP server over a stubbed client.
  */
 export async function startTestServerWith(deps: TestServerDeps): Promise<TestServer> {
-  const { config, runtime } = deps;
-  const server = createServer({ config, runtime });
+  const { config, runtime, auth } = deps;
+  const server = createServer({ config, runtime, auth });
 
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const address = server.address() as AddressInfo;

@@ -1,6 +1,6 @@
 # ADR 0009 — Authorization: roles plus record ownership, enforced in the application layer
 
-**Status:** Proposed
+**Status:** Accepted — built, migrations applied, **not yet deployed**
 
 ## Context
 
@@ -132,3 +132,34 @@ disguise — the PRD's whole complaint is that records vanish. Edits are recorde
 - The five roles are a guess at the real organisational shape. Expect them to be wrong in detail
   after contact with actual district administrations, and keep the mapping in one place so it is
   cheap to change.
+
+## What was built, and where it falls short of this ADR
+
+Written after implementation. Each of these is a place the ADR promises more than the code delivers,
+and none of them is visible from the role names alone.
+
+**Village and NGO scoping is NOT enforced.** This ADR says an NGO coordinator writes "within
+assigned villages" and a village committee member "within their own village". Neither is true in the
+implementation: both roles get platform-wide write within their permitted operations. The reason is
+that nothing links a user account to an NGO or to a committee — assignments are NGO→village, and
+committee membership is not tied to an auth identity. `user_profiles` has no `ngo_id` or
+`village_id`, so there is nothing to join on, in the application layer or in RLS. Closing this needs
+a data-model change, not a policy change. **Until then the role names imply a scope that does not
+exist.**
+
+**`district_officer` holds every permission, so it is `admin` in all but name.** Every role set in
+`permissions.ts` includes it. The one thing this ADR reserves to `admin` is user management, which
+has no use case — role grants are a SQL insert into `role_grants`. Pinned by a test
+(`auth-jwt.test.ts`) so that the distinction cannot be assumed to exist, and so that adding a
+genuinely admin-only operation fails that test and forces a deliberate update.
+
+**On the legacy `API_TOKEN` path this layer does nothing.** Every request arrives with a null actor,
+which is allowed by design. Role enforcement bites only on the JWT path. The production service is
+still on the token, so ADR 0009 is currently inert in production despite being built and tested.
+
+**Ownership widening is reachable in fewer places than it looks.** `correctVillageProfile` and the
+plan use cases are marked `ownable`, but only roles that may already invoke them can create the
+records in question, so the clause is unreachable today. It bites on issues (anyone may report one)
+and on volunteers. A policy-table test rejects the stronger version of this mistake — a rule that
+grants every role *and* declares `ownable`, which reads as "your own record" while enforcing
+"anybody's".

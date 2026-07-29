@@ -1,3 +1,5 @@
+import type { Platform } from "@afrip/platform";
+import type { ActorContext, VerifiedClaims } from "./auth.js";
 import type { HttpResponse } from "./http-result.js";
 
 export interface RequestContext {
@@ -8,6 +10,37 @@ export interface RequestContext {
   readonly query: URLSearchParams;
   /** Parsed JSON body, or undefined when the request carried none. */
   readonly body: unknown;
+  /**
+   * Who is acting (ADR 0008), or null when the request carries no identity — a
+   * public path, an open dev server, or the transitional shared token, which
+   * proves possession of a secret and nothing about a person.
+   *
+   * Attached, not enforced: what each role may DO is ADR 0009.
+   */
+  readonly actor?: ActorContext | null;
+  /**
+   * The verified token's claims, when one was presented. Only the enrolment
+   * route reads them, and only because it must act for an identity the profile
+   * store does not know yet. Every other handler wants `actor`: the claims are
+   * what the token said, `actor` is what AFRIP decided, and a role read from the
+   * former would be a role the user chose for themselves.
+   */
+  readonly claims?: VerifiedClaims;
+  /** True when the caller holds a valid token but is not an AFRIP user yet. */
+  readonly unenrolled?: boolean;
+  /**
+   * The platform composed for THIS request (ADR 0010) — the same use cases over
+   * the same repositories as ever, but publishing through a decorator that
+   * stamps `actor` onto every event they raise.
+   *
+   * Route handlers must reach for this and never for `deps.runtime.platform`.
+   * The long-lived platform is not wrong so much as differently attributed: it
+   * stamps `system`, which is the honest label for a scheduled sweep and a lie
+   * about an officer's POST.
+   */
+  readonly platform: Platform;
+  /** Correlates every event this request raises. Stamped alongside the actor. */
+  readonly requestId: string;
 }
 
 export type RouteHandler = (ctx: RequestContext) => Promise<HttpResponse>;

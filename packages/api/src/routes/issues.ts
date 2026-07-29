@@ -4,8 +4,12 @@ import type { RequestContext, Router } from "../router.js";
 import { asObject, optionalStringArray, requiredCoordinates, requiredString } from "../validate.js";
 import type { RouteDeps } from "./deps.js";
 
-export function registerIssueRoutes(router: Router, deps: RouteDeps): void {
-  const issues = deps.runtime.platform.issueTracking;
+export function registerIssueRoutes(router: Router, _deps: RouteDeps): void {
+  // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
+  // from `deps.runtime.platform` at registration. The long-lived platform
+  // stamps `system` onto what it publishes; only the request-scoped one knows
+  // who is acting.
+  const issues = (ctx: RequestContext) => ctx.platform.issueTracking;
 
   router.post("/issues", async (ctx: RequestContext): Promise<HttpResponse> => {
     const body = asObject(ctx.body);
@@ -23,7 +27,7 @@ export function registerIssueRoutes(router: Router, deps: RouteDeps): void {
     if (!gps.ok) return badRequest(gps.error);
 
     return fromResult(
-      await issues.reportIssue.execute({
+      await issues(ctx).reportIssue.execute({
         villageId: villageId.value,
         category: category.value as IssueCategory,
         description: description.value,
@@ -36,11 +40,11 @@ export function registerIssueRoutes(router: Router, deps: RouteDeps): void {
 
   /** Applies the routing policy: lead NGO where one is assigned, else a government department. */
   router.post("/issues/:id/route", async (ctx: RequestContext): Promise<HttpResponse> =>
-    fromResult(await issues.routeIssue.execute({ issueId: ctx.params["id"] ?? "" })),
+    fromResult(await issues(ctx).routeIssue.execute({ issueId: ctx.params["id"] ?? "" })),
   );
 
   router.post("/issues/:id/start", async (ctx: RequestContext): Promise<HttpResponse> =>
-    fromResult(await issues.startProgress.execute({ issueId: ctx.params["id"] ?? "" })),
+    fromResult(await issues(ctx).startProgress.execute({ issueId: ctx.params["id"] ?? "" })),
   );
 
   router.post("/issues/:id/resolve", async (ctx: RequestContext): Promise<HttpResponse> => {
@@ -50,7 +54,7 @@ export function registerIssueRoutes(router: Router, deps: RouteDeps): void {
     if (!resolutionNote.ok) return badRequest(resolutionNote.error);
 
     return fromResult(
-      await issues.resolveIssue.execute({
+      await issues(ctx).resolveIssue.execute({
         issueId: ctx.params["id"] ?? "",
         resolutionNote: resolutionNote.value,
       }),
@@ -58,6 +62,6 @@ export function registerIssueRoutes(router: Router, deps: RouteDeps): void {
   });
 
   router.post("/issues/:id/verify", async (ctx: RequestContext): Promise<HttpResponse> =>
-    fromResult(await issues.verifyResolution.execute({ issueId: ctx.params["id"] ?? "" })),
+    fromResult(await issues(ctx).verifyResolution.execute({ issueId: ctx.params["id"] ?? "" })),
   );
 }

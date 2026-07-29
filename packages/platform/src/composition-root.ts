@@ -3,6 +3,7 @@ import {
   RandomIdGenerator,
   SequentialIdGenerator,
   type Clock,
+  type EventPublisher,
   type IdGenerator,
 } from "@afrip/shared-kernel";
 import {
@@ -142,10 +143,61 @@ export interface PlatformOverrides {
    * inject an LLM-backed adapter (or a stub, in tests) to replace it.
    */
   signalExtractor?: SignalExtractor;
+  /**
+   * The sink every use case publishes through (ADR 0010). Defaults to this
+   * platform's own `bus`.
+   *
+   * A FUNCTION of the bus rather than a plain publisher, and that is the whole
+   * reason it is shaped this way: the interesting implementation —
+   * `ActorStampingPublisher` — *wraps* a publisher, and the most useful thing to
+   * wrap is this platform's own bus, which does not exist until `createPlatform`
+   * is running. Without the indirection a platform could never stamp the events
+   * its own cross-context subscribers raise, which is precisely the case that
+   * needs the `system` actor.
+   *
+   * Two callers matter, both in `packages/api/src/request-platform.ts`:
+   *   - the long-lived platform stamps `system` onto its own bus, so a
+   *     cross-context reaction (a recovery-index recalculation) or a scheduled
+   *     sweep is attributed to the platform rather than to nobody;
+   *   - a request-scoped platform IGNORES the bus it is handed and wraps the
+   *     long-lived one instead, so its use cases publish the caller's actor into
+   *     the bus the subscribers are already wired to.
+   *
+   * That second case redirects publication away from this platform's own `bus`,
+   * leaving its subscriptions inert. Deliberate: re-subscribing on the shared bus
+   * once per request would run every cross-context handler once per composed
+   * platform, turning one damage assessment into N recovery recalculations.
+   */
+  eventPublisher?: (bus: InMemoryEventBus) => EventPublisher;
+}
+
+/**
+ * The resolved shared ports of a platform: everything needed to compose a
+ * SECOND platform over exactly the same state.
+ *
+ * This is what makes ADR 0010's per-request composition affordable. Spreading it
+ * back into `createPlatform` re-wires the use cases — cheap object construction —
+ * while the storage adapters, the clock and the id generators are the very same
+ * instances. Without it, a per-request `createPlatform({})` would silently mint
+ * fresh in-memory repositories (losing all data) and fresh id generators
+ * (restarting every sequence at 1).
+ */
+export interface PlatformComposition {
+  readonly clock: Clock;
+  readonly idGenerator: (prefix: string) => IdGenerator;
+  readonly repositories: Required<PlatformRepositories>;
+  readonly signalExtractor: SignalExtractor;
 }
 
 export interface Platform {
   bus: InMemoryEventBus;
+  /**
+   * What the use cases actually publish through: `bus` unless
+   * `overrides.eventPublisher` redirected it.
+   */
+  eventPublisher: EventPublisher;
+  /** The shared ports this platform was built over — see `PlatformComposition`. */
+  composition: PlatformComposition;
   villageRegistry: {
     registerVillage: RegisterVillage;
     recordDamageAssessment: RecordDamageAssessment;
@@ -239,10 +291,27 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
   // counts in process memory, so it repeated ids after every scale-to-zero and
   // the Supabase upsert silently overwrote existing rows. Tests still inject
   // SequentialIdGenerator through this same override for determinism.
-  const makeIds = overrides.idGenerator ?? ((prefix: string) => new RandomIdGenerator(prefix));
+  const newIds = overrides.idGenerator ?? ((prefix: string) => new RandomIdGenerator(prefix));
+  // Memoised per prefix, and exposed as `composition.idGenerator` so a platform
+  // composed over this one gets the SAME generator instance per prefix rather
+  // than a fresh one. Within a single platform this changes nothing — each
+  // prefix is asked for exactly once below — but across ADR 0010's per-request
+  // compositions it is what stops a sequence restarting at 1 on every request.
+  const generators = new Map<string, IdGenerator>();
+  const makeIds = (prefix: string): IdGenerator => {
+    const existing = generators.get(prefix);
+    if (existing !== undefined) return existing;
+    const created = newIds(prefix);
+    generators.set(prefix, created);
+    return created;
+  };
   const repositories = overrides.repositories ?? {};
 
   const bus = new InMemoryEventBus();
+  // ADR 0010: use cases are given `publisher`, never `bus` directly, so a single
+  // override can stamp every event this platform raises. Defaults to the bus, so
+  // `createPlatform()` behaves exactly as it always has.
+  const publisher: EventPublisher = overrides.eventPublisher?.(bus) ?? bus;
 
   // Village Registry
   const villageRepository = repositories.village ?? new InMemoryVillageRepository();
@@ -251,18 +320,18 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
       repository: villageRepository,
       clock,
       idGenerator: makeIds("village"),
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
     recordDamageAssessment: new RecordDamageAssessment({
       repository: villageRepository,
       clock,
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
-    updateSeverity: new UpdateSeverity({ repository: villageRepository, clock, eventPublisher: bus }),
+    updateSeverity: new UpdateSeverity({ repository: villageRepository, clock, eventPublisher: publisher }),
     correctVillageProfile: new CorrectVillageProfile({
       repository: villageRepository,
       clock,
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
     getVillageProfile: new GetVillageProfile({ repository: villageRepository }),
     listVillagesBySeverity: new ListVillagesBySeverity({ repository: villageRepository }),
@@ -276,16 +345,16 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
       ngoRepository,
       idGenerator: makeIds("ngo"),
       clock,
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
     assignNgoToVillage: new AssignNgoToVillage({
       ngoRepository,
       assignmentRepository,
       idGenerator: makeIds("assignment"),
       clock,
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
-    addCommitteeMember: new AddCommitteeMember({ assignmentRepository, clock, eventPublisher: bus }),
+    addCommitteeMember: new AddCommitteeMember({ assignmentRepository, clock, eventPublisher: publisher }),
     listUnassignedVillages: new ListUnassignedVillages({ assignmentRepository }),
   };
 
@@ -296,7 +365,7 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
     repository: recoveryIndexRepository,
     weightsProvider,
     clock,
-    eventPublisher: bus,
+    eventPublisher: publisher,
   });
   const recoveryIntelligence = {
     upsertDimensionScores,
@@ -325,12 +394,12 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
       repository: issueRepository,
       clock,
       idGenerator: makeIds("issue"),
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
-    routeIssue: new RouteIssue({ repository: issueRepository, assignmentLookup, clock, eventPublisher: bus }),
-    startProgress: new StartProgress({ repository: issueRepository, clock, eventPublisher: bus }),
-    resolveIssue: new ResolveIssue({ repository: issueRepository, clock, eventPublisher: bus }),
-    verifyResolution: new VerifyResolution({ repository: issueRepository, clock, eventPublisher: bus }),
+    routeIssue: new RouteIssue({ repository: issueRepository, assignmentLookup, clock, eventPublisher: publisher }),
+    startProgress: new StartProgress({ repository: issueRepository, clock, eventPublisher: publisher }),
+    resolveIssue: new ResolveIssue({ repository: issueRepository, clock, eventPublisher: publisher }),
+    verifyResolution: new VerifyResolution({ repository: issueRepository, clock, eventPublisher: publisher }),
   };
 
   // Beneficiary Registry
@@ -340,16 +409,16 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
       repository: beneficiaryRepository,
       clock,
       idGenerator: makeIds("beneficiary"),
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
-    recordAid: new RecordAid({ repository: beneficiaryRepository, clock, eventPublisher: bus }),
+    recordAid: new RecordAid({ repository: beneficiaryRepository, clock, eventPublisher: publisher }),
     scheduleFollowUp: new ScheduleFollowUp({
       repository: beneficiaryRepository,
       clock,
       idGenerator: makeIds("follow-up"),
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
-    completeFollowUp: new CompleteFollowUp({ repository: beneficiaryRepository, clock, eventPublisher: bus }),
+    completeFollowUp: new CompleteFollowUp({ repository: beneficiaryRepository, clock, eventPublisher: publisher }),
     listOverdueFollowUps: new ListOverdueFollowUps({ repository: beneficiaryRepository, clock }),
   };
 
@@ -360,13 +429,13 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
       repository: projectRepository,
       clock,
       idGenerator: makeIds("project"),
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
-    releaseFunds: new ReleaseFunds({ repository: projectRepository, clock, eventPublisher: bus }),
-    recordExpenditure: new RecordExpenditure({ repository: projectRepository, clock, eventPublisher: bus }),
-    completeProject: new CompleteProject({ repository: projectRepository, clock, eventPublisher: bus }),
-    verifyProject: new VerifyProject({ repository: projectRepository, clock, eventPublisher: bus }),
-    detectAnomalies: new DetectAnomalies({ repository: projectRepository, clock, eventPublisher: bus }),
+    releaseFunds: new ReleaseFunds({ repository: projectRepository, clock, eventPublisher: publisher }),
+    recordExpenditure: new RecordExpenditure({ repository: projectRepository, clock, eventPublisher: publisher }),
+    completeProject: new CompleteProject({ repository: projectRepository, clock, eventPublisher: publisher }),
+    verifyProject: new VerifyProject({ repository: projectRepository, clock, eventPublisher: publisher }),
+    detectAnomalies: new DetectAnomalies({ repository: projectRepository, clock, eventPublisher: publisher }),
     projectRepository,
   };
 
@@ -377,16 +446,16 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
       repository: volunteerRepository,
       clock,
       idGenerator: makeIds("volunteer"),
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
-    setAvailability: new SetAvailability({ repository: volunteerRepository, clock, eventPublisher: bus }),
+    setAvailability: new SetAvailability({ repository: volunteerRepository, clock, eventPublisher: publisher }),
     assignVolunteer: new AssignVolunteer({
       repository: volunteerRepository,
       clock,
       idGenerator: makeIds("volunteer-assignment"),
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
-    logHours: new LogHours({ repository: volunteerRepository, clock, eventPublisher: bus }),
+    logHours: new LogHours({ repository: volunteerRepository, clock, eventPublisher: publisher }),
     leaderboard: new Leaderboard({ repository: volunteerRepository }),
     volunteerRepository,
   };
@@ -398,21 +467,21 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
       repository: planRepository,
       clock,
       idGenerator: makeIds("plan"),
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
     addGoal: new AddGoal({
       repository: planRepository,
       clock,
       idGenerator: makeIds("goal"),
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
     addMilestone: new AddMilestone({
       repository: planRepository,
       clock,
       idGenerator: makeIds("milestone"),
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
-    completeMilestone: new CompleteMilestone({ repository: planRepository, clock, eventPublisher: bus }),
+    completeMilestone: new CompleteMilestone({ repository: planRepository, clock, eventPublisher: publisher }),
     getProgress: new GetProgress({ repository: planRepository }),
     planRepository,
   };
@@ -428,14 +497,14 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
       extractor: signalExtractor,
       clock,
       idGenerator: makeIds("signal"),
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
     evaluateAlerts: new EvaluateAlerts({
       signalRepository,
       alertRepository,
       clock,
       idGenerator: makeIds("alert"),
-      eventPublisher: bus,
+      eventPublisher: publisher,
     }),
     signalExtractor,
     signalRepository,
@@ -444,6 +513,27 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
 
   return {
     bus,
+    eventPublisher: publisher,
+    // The resolved ports, handed back so a caller can compose an equivalent
+    // platform over the same state without knowing which adapters were chosen.
+    composition: {
+      clock,
+      idGenerator: makeIds,
+      repositories: {
+        village: villageRepository,
+        ngo: ngoRepository,
+        assignment: assignmentRepository,
+        recoveryIndex: recoveryIndexRepository,
+        issue: issueRepository,
+        beneficiary: beneficiaryRepository,
+        project: projectRepository,
+        volunteer: volunteerRepository,
+        plan: planRepository,
+        signal: signalRepository,
+        alert: alertRepository,
+      },
+      signalExtractor,
+    },
     villageRegistry,
     ngoCoordination,
     recoveryIntelligence,

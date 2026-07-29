@@ -35,8 +35,12 @@ function toVolunteerView(volunteer: Volunteer): VolunteerView {
   };
 }
 
-export function registerVolunteerRoutes(router: Router, deps: RouteDeps): void {
-  const volunteers = deps.runtime.platform.volunteerManagement;
+export function registerVolunteerRoutes(router: Router, _deps: RouteDeps): void {
+  // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
+  // from `deps.runtime.platform` at registration. The long-lived platform
+  // stamps `system` onto what it publishes; only the request-scoped one knows
+  // who is acting.
+  const volunteers = (ctx: RequestContext) => ctx.platform.volunteerManagement;
 
   router.post("/volunteers", async (ctx: RequestContext): Promise<HttpResponse> => {
     const body = asObject(ctx.body);
@@ -52,7 +56,7 @@ export function registerVolunteerRoutes(router: Router, deps: RouteDeps): void {
     if (!location.ok) return badRequest(location.error);
 
     return fromResult(
-      await volunteers.registerVolunteer.execute({
+      await volunteers(ctx).registerVolunteer.execute({
         name: name.value,
         skills: skills.value,
         languages: languages.value,
@@ -68,12 +72,12 @@ export function registerVolunteerRoutes(router: Router, deps: RouteDeps): void {
    * parameterised one. It is a distinct segment count from every route below, so
    * the ordering is belt and braces rather than load-bearing.
    */
-  router.get("/volunteers/leaderboard", async (): Promise<HttpResponse> =>
-    fromResult(await volunteers.leaderboard.execute()),
+  router.get("/volunteers/leaderboard", async (ctx: RequestContext): Promise<HttpResponse> =>
+    fromResult(await volunteers(ctx).leaderboard.execute()),
   );
 
-  router.get("/volunteers", async (): Promise<HttpResponse> => {
-    const all = await volunteers.volunteerRepository.listAll();
+  router.get("/volunteers", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const all = await volunteers(ctx).volunteerRepository.listAll();
     return json(200, { volunteers: all.map(toVolunteerView) });
   });
 
@@ -89,7 +93,7 @@ export function registerVolunteerRoutes(router: Router, deps: RouteDeps): void {
     // The aggregate owns the enum; passing the raw string through means an
     // invalid value comes back as the domain's own message, not ours.
     return fromResult(
-      await volunteers.setAvailability.execute({
+      await volunteers(ctx).setAvailability.execute({
         volunteerId: id.value,
         availability: availability.value as Availability,
       }),
@@ -111,7 +115,7 @@ export function registerVolunteerRoutes(router: Router, deps: RouteDeps): void {
     if (!parsedVillage.ok) return badRequest(parsedVillage.error);
 
     return fromResult(
-      await volunteers.assignVolunteer.execute({
+      await volunteers(ctx).assignVolunteer.execute({
         volunteerId: id.value,
         villageId: parsedVillage.value,
         task: task.value,
@@ -133,7 +137,7 @@ export function registerVolunteerRoutes(router: Router, deps: RouteDeps): void {
     if (!id.ok) return badRequest(id.error);
 
     return fromResult(
-      await volunteers.logHours.execute({
+      await volunteers(ctx).logHours.execute({
         volunteerId: id.value,
         assignmentId: assignmentId.value,
         hours: hours.value,

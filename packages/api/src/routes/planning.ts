@@ -5,8 +5,12 @@ import type { RequestContext, Router } from "../router.js";
 import { asObject, requiredString } from "../validate.js";
 import type { RouteDeps } from "./deps.js";
 
-export function registerPlanningRoutes(router: Router, deps: RouteDeps): void {
-  const planning = deps.runtime.platform.developmentPlanning;
+export function registerPlanningRoutes(router: Router, _deps: RouteDeps): void {
+  // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
+  // from `deps.runtime.platform` at registration. The long-lived platform
+  // stamps `system` onto what it publishes; only the request-scoped one knows
+  // who is acting.
+  const planning = (ctx: RequestContext) => ctx.platform.developmentPlanning;
 
   /**
    * One plan per village — the use case rejects a second one, which is the
@@ -17,7 +21,7 @@ export function registerPlanningRoutes(router: Router, deps: RouteDeps): void {
     const village = villageId(ctx.params["id"] ?? "");
     if (!village.ok) return badRequest(village.error);
 
-    return fromResult(await planning.createPlan.execute({ villageId: village.value }), 201);
+    return fromResult(await planning(ctx).createPlan.execute({ villageId: village.value }), 201);
   });
 
   router.post("/plans/:id/goals", async (ctx: RequestContext): Promise<HttpResponse> => {
@@ -35,7 +39,7 @@ export function registerPlanningRoutes(router: Router, deps: RouteDeps): void {
     // `area` is an enum the aggregate validates; the cast only satisfies the
     // signature, it does not assert the value is valid.
     return fromResult(
-      await planning.addGoal.execute({
+      await planning(ctx).addGoal.execute({
         planId: plan.value,
         area: area.value as PlanArea,
         description: description.value,
@@ -59,7 +63,7 @@ export function registerPlanningRoutes(router: Router, deps: RouteDeps): void {
       if (!plan.ok) return badRequest(plan.error);
 
       return fromResult(
-        await planning.addMilestone.execute({
+        await planning(ctx).addMilestone.execute({
           planId: plan.value,
           goalId: (ctx.params["goalId"] ?? "") as GoalId,
           title: title.value,
@@ -77,7 +81,7 @@ export function registerPlanningRoutes(router: Router, deps: RouteDeps): void {
       if (!plan.ok) return badRequest(plan.error);
 
       return fromResult(
-        await planning.completeMilestone.execute({
+        await planning(ctx).completeMilestone.execute({
           planId: plan.value,
           goalId: (ctx.params["goalId"] ?? "") as GoalId,
           milestoneId: (ctx.params["milestoneId"] ?? "") as MilestoneId,
@@ -97,10 +101,10 @@ export function registerPlanningRoutes(router: Router, deps: RouteDeps): void {
     const village = villageId(ctx.params["id"] ?? "");
     if (!village.ok) return badRequest(village.error);
 
-    const plan = await planning.planRepository.findByVillage(village.value);
+    const plan = await planning(ctx).planRepository.findByVillage(village.value);
     if (plan === null) return notFound(`plan not found for village: ${village.value}`);
 
-    const progress = await planning.getProgress.execute({ planId: plan.id });
+    const progress = await planning(ctx).getProgress.execute({ planId: plan.id });
     if (!progress.ok) return badRequest(progress.error);
 
     return json(200, {

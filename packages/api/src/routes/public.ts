@@ -1,7 +1,8 @@
 import type { Severity } from "@afrip/village-registry";
+import { jwtAuthEnabled, legacyTokenEnabled } from "../auth.js";
 import { summariseFunds, toPublicFundProject, type FundTotals } from "../fund-view.js";
 import { json, type HttpResponse } from "../http-result.js";
-import type { Router } from "../router.js";
+import type { RequestContext, Router } from "../router.js";
 import type { RouteDeps } from "./deps.js";
 
 export type { PublicFundProject } from "../fund-view.js";
@@ -31,17 +32,79 @@ export interface PublicStats {
   readonly funds: FundTotals;
 }
 
-export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
-  const { villageRegistry, ngoCoordination, recoveryIntelligence, fundMonitoring } =
-    deps.runtime.platform;
+/**
+ * What the sign-in page needs before it holds any credential (ADR 0008). The
+ * browser talks to GoTrue directly — no SDK — so it must be told where GoTrue
+ * is and which publishable key to present.
+ */
+export interface PublicAuthConfig {
+  /** Project base URL, or null when sign-in is not configured in this revision. */
+  readonly supabaseUrl: string | null;
+  /** Publishable (anon) key. NEVER the service-role key. */
+  readonly supabasePublishableKey: string | null;
+  /** OAuth providers to offer. A list, so adding one is configuration (ADR 0008). */
+  readonly authProviders: readonly string[];
+  readonly googleEnabled: boolean;
+  /**
+   * True when this API verifies Supabase JWTs at all.
+   *
+   * LOAD-BEARING, not informational: the page gates its entire sign-in surface
+   * on it. `supabaseUrl` being present is not sufficient — SUPABASE_URL is also
+   * what PERSISTENCE=supabase needs, so a deployment can have a working project
+   * and still not be verifying its tokens (`AUTH_JWT=off`). Offering sign-in in
+   * that state produces an authentication that succeeds and is then refused on
+   * the next request. Do not remove this field or fold it into `supabaseUrl`.
+   */
+  readonly jwtEnabled: boolean;
+  /** True while the transitional shared token is still accepted. */
+  readonly legacyTokenEnabled: boolean;
+}
 
-  router.get("/public/villages", async (): Promise<HttpResponse> => {
-    const listed = await villageRegistry.listVillagesBySeverity.execute();
+export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
+  // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
+  // from `deps.runtime.platform` at registration. The long-lived platform
+  // stamps `system` onto what it publishes; only the request-scoped one knows
+  // who is acting.
+  const villageRegistry = (ctx: RequestContext) => ctx.platform.villageRegistry;
+  const ngoCoordination = (ctx: RequestContext) => ctx.platform.ngoCoordination;
+  const recoveryIntelligence = (ctx: RequestContext) => ctx.platform.recoveryIntelligence;
+  const fundMonitoring = (ctx: RequestContext) => ctx.platform.fundMonitoring;
+
+  /**
+   * Sign-in bootstrap. Unauthenticated of necessity: it is what a page reads in
+   * order to *become* authenticated, so gating it would be circular.
+   *
+   * Answers 200 with nulls rather than 404 when auth is unconfigured. The two
+   * failures are different and the page renders them differently: "sign-in is
+   * not available in this deployment" is an operator's misconfiguration, while
+   * a missing endpoint would send a frontend developer hunting for a routing bug.
+   *
+   * Only publishable values appear here. The service-role key is never read by
+   * this module and must never be added to it — that key bypasses RLS.
+   */
+  router.get("/public/config", async (): Promise<HttpResponse> => {
+    const providers = deps.config.authProviders;
+    const body: PublicAuthConfig = {
+      supabaseUrl: deps.config.supabaseUrl,
+      supabasePublishableKey: deps.config.supabasePublishableKey,
+      authProviders: providers,
+      googleEnabled: providers.includes("google"),
+      // Off the gate for the same reason /health is: the page gates its sign-in
+      // surface on `jwtEnabled`, so it must describe the gate that will actually
+      // judge the token, not the configuration that was meant to build one.
+      jwtEnabled: deps.auth?.jwtEnabled ?? jwtAuthEnabled(deps.config),
+      legacyTokenEnabled: deps.auth?.legacyTokenEnabled ?? legacyTokenEnabled(deps.config),
+    };
+    return json(200, body);
+  });
+
+  router.get("/public/villages", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const listed = await villageRegistry(ctx).listVillagesBySeverity.execute();
     if (!listed.ok) return json(400, { error: listed.error });
 
     const villages = [];
     for (const village of listed.value) {
-      const index = await recoveryIntelligence.getRecoveryIndex.execute({ villageId: village.id });
+      const index = await recoveryIntelligence(ctx).getRecoveryIndex.execute({ villageId: village.id });
       villages.push({
         id: village.id,
         name: village.name,
@@ -72,8 +135,8 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
    * `toPublicFundProject` drops them and only the authenticated `GET /projects`
    * carries them.
    */
-  router.get("/public/funds", async (): Promise<HttpResponse> => {
-    const projects = await fundMonitoring.projectRepository.listAll();
+  router.get("/public/funds", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const projects = await fundMonitoring(ctx).projectRepository.listAll();
     return json(200, { projects: projects.map(toPublicFundProject) });
   });
 
@@ -82,8 +145,8 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
    * own query use case — the route never reaches past an application boundary
    * into a repository.
    */
-  router.get("/public/stats", async (): Promise<HttpResponse> => {
-    const listed = await villageRegistry.listVillagesBySeverity.execute();
+  router.get("/public/stats", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const listed = await villageRegistry(ctx).listVillagesBySeverity.execute();
     if (!listed.ok) return json(400, { error: listed.error });
     const villages = listed.value;
 
@@ -95,7 +158,7 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
     // NGO Coordination owns assignment state but takes the village list as
     // input (it never calls Village Registry itself), so "assigned" is the
     // complement of what it reports as unassigned.
-    const unassigned = await ngoCoordination.listUnassignedVillages.execute(
+    const unassigned = await ngoCoordination(ctx).listUnassignedVillages.execute(
       villages.map((village) => ({ villageId: village.id, severity: village.severity })),
     );
     const villagesWithActiveNgo = unassigned.ok ? villages.length - unassigned.value.length : 0;
@@ -103,7 +166,7 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
     let scored = 0;
     let compositeTotal = 0;
     for (const village of villages) {
-      const index = await recoveryIntelligence.getRecoveryIndex.execute({ villageId: village.id });
+      const index = await recoveryIntelligence(ctx).getRecoveryIndex.execute({ villageId: village.id });
       if (!index.ok) continue;
       scored += 1;
       compositeTotal += index.value.composite;
@@ -111,7 +174,7 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
 
     // Unlike the recovery average, zero is the honest answer for money: no
     // sanctioned project means no rupee has moved, which is a fact, not a gap.
-    const funds = summariseFunds(await fundMonitoring.projectRepository.listAll());
+    const funds = summariseFunds(await fundMonitoring(ctx).projectRepository.listAll());
 
     const stats: PublicStats = {
       totalVillages: villages.length,

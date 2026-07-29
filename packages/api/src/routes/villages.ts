@@ -20,9 +20,13 @@ interface HistoryItem {
   readonly detail: unknown;
 }
 
-export function registerVillageRoutes(router: Router, deps: RouteDeps): void {
-  const villages = deps.runtime.platform.villageRegistry;
-  const recovery = deps.runtime.platform.recoveryIntelligence;
+export function registerVillageRoutes(router: Router, _deps: RouteDeps): void {
+  // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
+  // from `deps.runtime.platform` at registration. The long-lived platform
+  // stamps `system` onto what it publishes; only the request-scoped one knows
+  // who is acting.
+  const villages = (ctx: RequestContext) => ctx.platform.villageRegistry;
+  const recovery = (ctx: RequestContext) => ctx.platform.recoveryIntelligence;
 
   router.post("/villages", async (ctx: RequestContext): Promise<HttpResponse> => {
     const body = asObject(ctx.body);
@@ -47,7 +51,7 @@ export function registerVillageRoutes(router: Router, deps: RouteDeps): void {
 
     // Severity is an enum the Village aggregate validates; we only assert it is a string.
     return fromResult(
-      await villages.registerVillage.execute({
+      await villages(ctx).registerVillage.execute({
         name: name.value,
         district: district.value,
         state: state.value,
@@ -61,12 +65,12 @@ export function registerVillageRoutes(router: Router, deps: RouteDeps): void {
     );
   });
 
-  router.get("/villages", async (): Promise<HttpResponse> =>
-    fromResultWith(await villages.listVillagesBySeverity.execute(), (list) => ({ villages: list })),
+  router.get("/villages", async (ctx: RequestContext): Promise<HttpResponse> =>
+    fromResultWith(await villages(ctx).listVillagesBySeverity.execute(), (list) => ({ villages: list })),
   );
 
   router.get("/villages/:id", async (ctx: RequestContext): Promise<HttpResponse> =>
-    fromResult(await villages.getVillageProfile.execute({ villageId: ctx.params["id"] ?? "" })),
+    fromResult(await villages(ctx).getVillageProfile.execute({ villageId: ctx.params["id"] ?? "" })),
   );
 
   router.post("/villages/:id/damage-assessments", async (ctx: RequestContext): Promise<HttpResponse> => {
@@ -89,7 +93,7 @@ export function registerVillageRoutes(router: Router, deps: RouteDeps): void {
     if (!notes.ok) return badRequest(notes.error);
 
     return fromResult(
-      await villages.recordDamageAssessment.execute({
+      await villages(ctx).recordDamageAssessment.execute({
         villageId: ctx.params["id"] ?? "",
         assessment: {
           housesDamaged: housesDamaged.value,
@@ -112,7 +116,7 @@ export function registerVillageRoutes(router: Router, deps: RouteDeps): void {
     if (!severity.ok) return badRequest(severity.error);
 
     return fromResult(
-      await villages.updateSeverity.execute({
+      await villages(ctx).updateSeverity.execute({
         villageId: ctx.params["id"] ?? "",
         severity: severity.value as Severity,
       }),
@@ -151,7 +155,7 @@ export function registerVillageRoutes(router: Router, deps: RouteDeps): void {
     if (!affectedFamilies.ok) return badRequest(affectedFamilies.error);
 
     return fromResult(
-      await villages.correctVillageProfile.execute({
+      await villages(ctx).correctVillageProfile.execute({
         villageId: ctx.params["id"] ?? "",
         reason: reason.value,
         ...(name.value === undefined ? {} : { name: name.value }),
@@ -183,14 +187,14 @@ export function registerVillageRoutes(router: Router, deps: RouteDeps): void {
   router.get("/villages/:id/history", async (ctx: RequestContext): Promise<HttpResponse> => {
     const id = ctx.params["id"] ?? "";
 
-    const profile = await villages.getVillageProfile.execute({ villageId: id });
+    const profile = await villages(ctx).getVillageProfile.execute({ villageId: id });
     if (!profile.ok) return fromResult(profile);
 
     const items: HistoryItem[] = profile.value.damageAssessments.map(damageAssessmentItem);
 
     // A village with no recovery index yet is the normal case, not an error:
     // the index only exists once scores have been recorded.
-    const scores = await recovery.getScoreHistory.execute({ villageId: id });
+    const scores = await recovery(ctx).getScoreHistory.execute({ villageId: id });
     if (scores.ok) {
       for (const entry of scores.value.history) {
         items.push({
