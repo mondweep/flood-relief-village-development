@@ -1,5 +1,6 @@
 import {
   InMemoryEventBus,
+  RandomIdGenerator,
   SequentialIdGenerator,
   type Clock,
   type IdGenerator,
@@ -125,7 +126,12 @@ export interface PlatformRepositories {
 export interface PlatformOverrides {
   /** Clock injected into every use case; defaults to the system clock. */
   clock?: Clock;
-  /** Factory producing one IdGenerator per id kind; defaults to SequentialIdGenerator. */
+  /**
+   * Factory producing one IdGenerator per id kind. Defaults to
+   * `RandomIdGenerator` (UUID-based, safe across restarts and instances).
+   * Tests override this with `SequentialIdGenerator` for deterministic ids —
+   * which is the only place a resettable counter is safe.
+   */
   idGenerator?: (prefix: string) => IdGenerator;
   /** Repository implementations per bounded context; each defaults to in-memory. */
   repositories?: PlatformRepositories;
@@ -229,7 +235,11 @@ const systemClock: Clock = { now: () => new Date() };
  */
 export function createPlatform(overrides: PlatformOverrides = {}): Platform {
   const clock = overrides.clock ?? systemClock;
-  const makeIds = overrides.idGenerator ?? ((prefix: string) => new SequentialIdGenerator(prefix));
+  // RandomIdGenerator, not SequentialIdGenerator: the latter is a test fake that
+  // counts in process memory, so it repeated ids after every scale-to-zero and
+  // the Supabase upsert silently overwrote existing rows. Tests still inject
+  // SequentialIdGenerator through this same override for determinism.
+  const makeIds = overrides.idGenerator ?? ((prefix: string) => new RandomIdGenerator(prefix));
   const repositories = overrides.repositories ?? {};
 
   const bus = new InMemoryEventBus();
