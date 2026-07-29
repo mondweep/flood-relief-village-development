@@ -31,6 +31,12 @@ export function registerHealthRoutes(router: Router, deps: RouteDeps): void {
       // Surfaced so an operator can see at a glance which gate this revision is
       // actually running: per-user JWTs, the legacy shared token, or nothing.
       auth: deps.auth?.mode ?? authModeOf(deps.config),
+      // Which source revision is actually serving. Stamped at deploy time from
+      // git, so the page's footer can name the branch and commit rather than
+      // repeating whatever was hard-coded into the markup — a link to "main"
+      // baked into a page built from a feature branch is a lie that survives
+      // every review, because nothing about it looks wrong.
+      ...(deps.config.build === null ? {} : { build: deps.config.build }),
       ...(partial === null ? {} : { partialPersistence: partial }),
       ...(legacy ? { legacyTokenEnabled: true, legacyTokenWarning: LEGACY_TOKEN_WARNING } : {}),
     });

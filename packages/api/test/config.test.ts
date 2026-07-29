@@ -27,7 +27,52 @@ describe("loadConfig", () => {
         authProviders: DEFAULT_AUTH_PROVIDERS,
         supabaseSchema: DEFAULT_SUPABASE_SCHEMA,
         version: API_VERSION,
+        // Absent unless the deploy script stamped it.
+        build: null,
       },
+    });
+  });
+
+  describe("the git stamp", () => {
+    const STAMP = {
+      GIT_BRANCH: "main",
+      GIT_COMMIT: "abc1234",
+      GIT_REPOSITORY: "https://github.com/mondweep/flood-relief-village-development",
+    };
+
+    it("reads the branch, commit and repository the deploy script stamped", () => {
+      const result = loadConfig(STAMP);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.build).toEqual({
+          branch: "main",
+          commit: "abc1234",
+          repository: "https://github.com/mondweep/flood-relief-village-development",
+        });
+      }
+    });
+
+    /**
+     * All three or nothing. A partial stamp would render a footer link that
+     * points somewhere plausible and wrong — "serving branch main" on a build
+     * from elsewhere — and a confident false provenance is worse than none,
+     * because nothing about it looks broken.
+     */
+    it.each(["GIT_BRANCH", "GIT_COMMIT", "GIT_REPOSITORY"])(
+      "reports no build at all when %s is missing",
+      (missing) => {
+        const partial: Record<string, string> = { ...STAMP };
+        delete partial[missing];
+        const result = loadConfig(partial);
+        expect(result.ok).toBe(true);
+        if (result.ok) expect(result.value.build).toBeNull();
+      },
+    );
+
+    it("treats a blank stamp as no stamp", () => {
+      const result = loadConfig({ ...STAMP, GIT_BRANCH: "   " });
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value.build).toBeNull();
     });
   });
 

@@ -27,6 +27,14 @@ export type PersistenceMode = "memory" | "supabase";
  */
 export const DEFAULT_AUTH_PROVIDERS: readonly string[] = ["google"];
 
+/** Which git revision produced this build. Disclosed on `GET /health`. */
+export interface BuildInfo {
+  readonly branch: string;
+  /** Short SHA. */
+  readonly commit: string;
+  readonly repository: string;
+}
+
 export interface ApiConfig {
   readonly port: number;
   /**
@@ -58,6 +66,13 @@ export interface ApiConfig {
   /** Postgres schema the adapters target. Never null — see DEFAULT_SUPABASE_SCHEMA. */
   readonly supabaseSchema: string;
   readonly version: string;
+  /**
+   * The source revision this build came from, stamped by the deploy script from
+   * git. Null when it was not stamped — a local `npm run dev`, or a build that
+   * bypassed the script — and reported as null rather than guessed, because a
+   * fabricated branch name is worse than an absent one.
+   */
+  readonly build: BuildInfo | null;
 }
 
 export type Env = Record<string, string | undefined>;
@@ -111,6 +126,19 @@ function parseProviders(raw: string | null): readonly string[] {
  * server — a Cloud Run revision that starts but cannot reach its datastore is
  * worse than one that never starts.
  */
+/**
+ * Reads the deploy-time git stamp. All three parts or nothing: a branch with no
+ * commit, or a commit with no repository, produces a footer link that points
+ * somewhere plausible and wrong, which is the failure this is meant to prevent.
+ */
+function buildInfoFrom(env: Env): BuildInfo | null {
+  const branch = trimmed(env["GIT_BRANCH"]);
+  const commit = trimmed(env["GIT_COMMIT"]);
+  const repository = trimmed(env["GIT_REPOSITORY"]);
+  if (branch === null || commit === null || repository === null) return null;
+  return { branch, commit, repository };
+}
+
 export function loadConfig(env: Env = process.env): Result<ApiConfig> {
   const portResult = parsePort(trimmed(env["PORT"]));
   if (!portResult.ok) return err(portResult.error);
@@ -166,5 +194,6 @@ export function loadConfig(env: Env = process.env): Result<ApiConfig> {
     authProviders: parseProviders(trimmed(env["AUTH_PROVIDERS"])),
     supabaseSchema: trimmed(env["SUPABASE_SCHEMA"]) ?? DEFAULT_SUPABASE_SCHEMA,
     version: API_VERSION,
+    build: buildInfoFrom(env),
   });
 }

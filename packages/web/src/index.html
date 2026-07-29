@@ -452,6 +452,24 @@ details.legacy[open] > summary::before { content: "−"; }
 
 footer { margin-top: var(--s6); padding-top: var(--s4); border-top: 1px solid var(--line); font-size: 0.8125rem; color: var(--ink-muted); }
 footer p + p { margin-top: var(--s1); }
+footer a { color: var(--accent-ink); }
+
+/* Attribution and data residency. A definition list because that is what it is —
+   a label and its value — which also gives assistive technology the pairing for
+   free. Two columns where there is room, stacked on a phone. */
+.credits { margin-top: var(--s4); display: grid; gap: var(--s1) var(--s3); }
+.credits dt { font-weight: 600; color: var(--ink); }
+.credits dd { margin: 0 0 var(--s2); }
+@media (min-width: 40rem) {
+  .credits { grid-template-columns: max-content 1fr; align-items: baseline; }
+  .credits dd { margin-bottom: var(--s1); }
+}
+
+/* The origin note on the public view. Set apart from the data sections around
+   it: it is context, not a reading of the platform's state. */
+.origin { background: var(--surface-2); border-left: 3px solid var(--accent-ink); }
+.origin p { max-width: 68ch; }
+.origin p + p { margin-top: var(--s2); }
 
 /* ==================================================================== *
  * 5. Motion — honour the OS preference
@@ -475,7 +493,8 @@ footer p + p { margin-top: var(--s1); }
 
 <header class="site-header">
   <div class="wrap header-inner">
-    <h1 class="brand">AFRIP <span>Flood Recovery Intelligence Platform</span></h1>
+    <h1 class="brand">AFRIP
+      <span>AI-Powered Flood Recovery &amp; Village Development Intelligence Platform</span></h1>
     <div class="header-status">
       <p class="pill" id="conn" aria-live="polite">
         <span class="dot pending" id="conn-dot" aria-hidden="true"></span>
@@ -517,6 +536,23 @@ footer p + p { margin-top: var(--s1); }
       <p>Open recovery data for every registered village: severity, recovery index and the public
          money sanctioned, released and spent. No beneficiary is identified here.</p>
     </div>
+
+    <!-- Why this platform exists. On the public view rather than an About page,
+         because the people it is accountable to are the ones who arrive here
+         without a credential and never click further. -->
+    <section class="section origin" aria-labelledby="h-origin">
+      <h3 id="h-origin">Why this platform exists</h3>
+      <p><strong>AFRIP</strong> — the AI-Powered Flood Recovery &amp; Village Development
+         Intelligence Platform — was built in response to the unprecedented, atypical floods that
+         struck <strong>Upper Assam in July 2026</strong>. Those floods did not follow the pattern
+         the region plans around, and the recovery has to be tracked village by village rather than
+         assumed from a seasonal norm.</p>
+      <p>It exists so that recovery can be <em>seen</em>: which villages are worst affected, which
+         have a lead NGO and which have nobody, where public money was sanctioned and where it
+         actually arrived, and which problems reported from the ground are still open. Records here
+         are appended and corrected, never quietly overwritten — the complaint this platform answers
+         is that relief records vanish.</p>
+    </section>
 
     <div id="first-run"></div>
 
@@ -819,9 +855,40 @@ footer p + p { margin-top: var(--s1); }
   </section>
 
   <footer>
-    <p>AFRIP · public data is aggregate and pseudonymised · operations data requires authorisation.</p>
+    <p><strong>AFRIP</strong> — AI-Powered Flood Recovery &amp; Village Development Intelligence
+       Platform. Built for the recovery of villages and towns after the atypical floods in Upper
+       Assam, July 2026.</p>
+    <p>Public data is aggregate and pseudonymised · operations data requires authorisation.</p>
     <p>Four rules made visible: one village one NGO · duplicate aid flagged never dropped ·
        spent ≤ released ≤ sanctioned · corruption never routes to the NGO.</p>
+
+    <dl class="credits">
+      <dt>Concept</dt>
+      <dd><a href="https://www.linkedin.com/in/dilip-bharatee-951232" target="_blank"
+             rel="noopener noreferrer">Dilip Bharatee</a></dd>
+
+      <dt>Built and maintained by</dt>
+      <dd><a href="https://www.linkedin.com/in/mondweepchakravorty/" target="_blank"
+             rel="noopener noreferrer">Mondweep Chakravorty</a></dd>
+
+      <dt>Source</dt>
+      <dd><a href="https://github.com/mondweep/flood-relief-village-development" target="_blank"
+             rel="noopener noreferrer">github.com/mondweep/flood-relief-village-development</a>
+          <!-- Filled at runtime from GET /health so it names the revision actually
+               serving this page, not whatever was true when the markup was written. -->
+          <span id="foot-branch"></span></dd>
+
+      <!-- Where the data physically is. Stated because people entering a
+           beneficiary's name are entitled to know which jurisdiction holds it,
+           and because "the cloud" is not an answer. The region is a fact about
+           the deployment, so it is written here rather than inferred. -->
+      <dt>Where your data is stored</dt>
+      <dd>Records are held in a <a href="https://supabase.com" target="_blank"
+            rel="noopener noreferrer">Supabase</a> PostgreSQL database in
+          <strong>AWS eu-west-1 (Ireland)</strong>. The application itself runs on Google Cloud Run
+          in <strong>europe-west2 (London)</strong>. Personal data therefore rests in the European
+          Union and in the United Kingdom, not in India.</dd>
+    </dl>
   </footer>
 </main>
 
@@ -1486,6 +1553,30 @@ async function checkHealth() {
       ? data.legacyTokenWarning
       : "";
   }
+
+  renderBuildFooter(data.build);
+}
+
+/**
+ * Names the source revision serving this page, in the footer, from what the API
+ * reports rather than from anything baked into this markup.
+ *
+ * The alternative — hard-coding "main" into the footer link — reads correctly in
+ * review and is wrong the moment a revision is deployed from anywhere else,
+ * which is exactly what happened here. An absent stamp renders nothing rather
+ * than a guess.
+ */
+function renderBuildFooter(build) {
+  const out = $("#foot-branch");
+  if (!out) return;
+  const ok = build && typeof build === "object"
+    && typeof build.branch === "string" && typeof build.commit === "string"
+    && typeof build.repository === "string";
+  if (!ok) { out.textContent = ""; return; }
+  const tree = build.repository.replace(/\/+$/, "") + "/tree/" + build.branch;
+  out.innerHTML = " · serving branch <a href=\"" + esc(tree) + "\" target=\"_blank\" "
+    + "rel=\"noopener noreferrer\"><code>" + esc(build.branch) + "</code></a> at "
+    + "<code>" + esc(build.commit) + "</code>";
 }
 
 /** GET /ready → 200 { status:"ready" } or 503 { status, persistence, error } */

@@ -318,6 +318,21 @@ fi
 # rather than implied by the absence of a variable.
 ENV_VARS="${ENV_VARS},AUTH_JWT=${AUTH_JWT:-on}"
 
+# Stamp the source revision, so /health — and the page footer that reads it —
+# name the branch actually serving rather than one written into the markup.
+# `--source` uploads the WORKING TREE, so this reports what was really shipped,
+# including any uncommitted change; `-dirty` is appended when that is the case,
+# because a commit id that silently omits local edits is a false provenance.
+GIT_BRANCH="${GIT_BRANCH:-$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)}"
+GIT_COMMIT="${GIT_COMMIT:-$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)}"
+if [[ -n "$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null)" ]]; then
+  GIT_COMMIT="${GIT_COMMIT}-dirty"
+  warn "Working tree has uncommitted changes; deploying them as ${GIT_COMMIT}."
+fi
+GIT_REPOSITORY="${GIT_REPOSITORY:-https://github.com/mondweep/flood-relief-village-development}"
+ENV_VARS="${ENV_VARS},GIT_BRANCH=${GIT_BRANCH},GIT_COMMIT=${GIT_COMMIT},GIT_REPOSITORY=${GIT_REPOSITORY}"
+info "Source revision: ${GIT_BRANCH} @ ${GIT_COMMIT}"
+
 # The PUBLISHABLE (anon) key is NOT a secret and is deliberately an env var: the
 # browser needs it to talk to GoTrue at all, and `GET /public/config` serves it
 # to every visitor. Putting it in Secret Manager would imply a confidentiality it

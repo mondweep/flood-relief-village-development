@@ -32,6 +32,9 @@ export function testConfig(overrides: Partial<ApiConfig> = {}): ApiConfig {
     authProviders: DEFAULT_AUTH_PROVIDERS,
     supabaseSchema: DEFAULT_SUPABASE_SCHEMA,
     version: API_VERSION,
+    // Unstamped, as an un-deployed build is. Tests that care about the footer's
+    // revision line supply their own.
+    build: null,
     ...overrides,
   };
 }
