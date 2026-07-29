@@ -187,7 +187,11 @@ describe("village amendment and history routes", () => {
       const response = await get(`/villages/${villageId}/history`);
 
       expect(response.status).toBe(200);
-      expect(response.body).toEqual({ villageId, history: [] });
+      // `attributed: false` because this server runs with no identity (ADR
+      // 0011 restricts the audit-derived half to admin and district_officer),
+      // so the reader is told which view they got rather than left to assume
+      // the emptiness is the whole truth.
+      expect(response.body).toEqual({ villageId, history: [], attributed: false });
     });
 
     it("returns damage assessments and recovery recalculations in chronological order", async () => {
