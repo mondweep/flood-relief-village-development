@@ -207,6 +207,48 @@ main:focus { outline: none; }
 }
 .row.is-flagged { border-left: 4px solid var(--warn-line); background: var(--warn-bg); }
 .row.is-critical { border-left: 4px solid var(--sev-critical-ink); }
+/* A village row IS a link: the whole card is one >=44px tap target, and the
+   href is the shareable deep link. Buttons inside sit above the overlay. */
+.row.is-link { position: relative; }
+.row-link { text-decoration: none; color: inherit; font-weight: 600; }
+.row-link::after { content: ""; position: absolute; inset: 0; border-radius: var(--radius); }
+.row-link:focus-visible { outline: none; }
+.row-link:focus-visible::after { outline: 3px solid var(--accent); outline-offset: 2px; }
+.row.is-link:hover { border-color: var(--line-strong); }
+.row .actions, .row .chip-row { position: relative; z-index: 1; }
+.backlink { display: inline-flex; align-items: center; gap: var(--s2); min-height: 44px; padding: 0 2px;
+  text-decoration: none; color: var(--accent-strong); font-weight: 500; font-size: 0.875rem; }
+.note { border: 1px solid var(--line); border-left: 4px solid var(--ink-faint); border-radius: var(--radius-sm);
+  background: var(--surface-2); padding: var(--s2) var(--s3); font-size: 0.8125rem; color: var(--ink-muted); max-width: 68ch; }
+.note strong { color: var(--ink); }
+.note + .note { margin-top: var(--s2); }
+
+/* History timeline — chronological, one node per persisted record. */
+.timeline { list-style: none; margin: var(--s3) 0 0; padding: 0 0 0 24px; position: relative; }
+.timeline::before { content: ""; position: absolute; left: 5px; top: 8px; bottom: 8px; width: 2px; background: var(--line); }
+.tl-item { position: relative; padding-bottom: var(--s4); }
+.tl-item:last-child { padding-bottom: 0; }
+.tl-item::before { content: ""; position: absolute; left: -24px; top: 5px; width: 12px; height: 12px;
+  border-radius: 50%; background: var(--surface); border: 2px solid var(--accent); box-sizing: border-box; }
+.tl-item.k-recovery::before { border-color: var(--ok); }
+.tl-item.k-severity::before { border-color: var(--warn-line); }
+.tl-item.k-correction::before { border-color: var(--danger); }
+.tl-item.k-other::before { border-color: var(--line-strong); }
+.tl-when { font-size: 0.75rem; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.tl-title { font-weight: 600; font-size: 0.9375rem; margin-top: 2px; }
+.tl-body { font-size: 0.8125rem; color: var(--ink-muted); margin-top: 2px; overflow-wrap: anywhere; }
+.tl-body b { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* A transition is drawn as a transition: from → to, both visible. */
+.transition { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.transition .arrow { color: var(--ink-muted); font-weight: 600; }
+
+/* Correction diff — exactly which field moved, from what to what. */
+.diff { list-style: none; margin: var(--s2) 0 0; padding: 0; display: grid; gap: 6px; font-size: 0.875rem; }
+.diff li { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.diff .f { font-weight: 600; }
+.diff .from { text-decoration: line-through; color: var(--ink-muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.diff .to { font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .row-top { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: baseline; justify-content: space-between; }
 .row-name { font-weight: 600; }
 .row-meta { font-size: 0.8125rem; color: var(--ink-muted); }
@@ -377,7 +419,7 @@ footer p + p { margin-top: var(--s1); }
     <a href="#/public"   data-view="public"><svg aria-hidden="true"><use href="#i-public"/></svg>Public</a>
     <a href="#/district" data-view="district"><svg aria-hidden="true"><use href="#i-district"/></svg>District</a>
     <a href="#/ngo"      data-view="ngo"><svg aria-hidden="true"><use href="#i-ngo"/></svg>NGO</a>
-    <a href="#/village"  data-view="village"><svg aria-hidden="true"><use href="#i-village"/></svg>Village</a>
+    <a href="#/villages" data-view="villages"><svg aria-hidden="true"><use href="#i-village"/></svg>Villages</a>
     <a href="#/ops"      data-view="ops"><svg aria-hidden="true"><use href="#i-ops"/></svg>Operations</a>
   </div>
 </nav>
@@ -496,25 +538,20 @@ footer p + p { margin-top: var(--s1); }
   </section>
 
   <!-- ================================================================
-       VIEW · VILLAGE — one village's full recovery profile.
+       VIEW · VILLAGES — the index at #/villages, one village's full
+       profile at #/villages/:id. The detail route is the shareable one:
+       landing on it directly loads that village, and the browser's back
+       button returns to wherever you tapped from (ADR 0013 §1).
        ================================================================ -->
-  <section class="view hidden" id="view-village" aria-labelledby="h-village">
-    <div class="view-head">
-      <h2 id="h-village">Village profile</h2>
-      <p>Demographics, damage, the recovery index across all 11 dimensions, the lead NGO and
-         committee, beneficiaries, issues and the long-term development plan.</p>
+  <section class="view hidden" id="view-villages" aria-labelledby="h-villages">
+    <div class="view-head" id="villages-head">
+      <h2 id="h-villages">Villages</h2>
+      <p>Every registered village. Tap one for its full profile: demographics, the recovery index
+         across all 11 dimensions, its history as a timeline, and the three distinct ways the
+         record can be amended.</p>
     </div>
-    <div id="village-gate"></div>
-    <div id="village-body" class="hidden">
-      <div class="card">
-        <div class="field" style="margin-bottom:0">
-          <label for="village-select">Village</label>
-          <select id="village-select"><option value="">Loading villages…</option></select>
-          <span class="hint">Pick a village to load its full profile.</span>
-        </div>
-      </div>
-      <div id="village-content" aria-live="polite"></div>
-    </div>
+    <div id="villages-index" aria-live="polite"></div>
+    <div id="village-detail" class="hidden"></div>
   </section>
 
   <!-- ================================================================
@@ -744,13 +781,14 @@ const state = {
             plans: [], goals: [], milestones: [], signals: [], assignments: [], followups: [] }
 };
 
-const VIEWS = ["public", "district", "ngo", "village", "ops"];
-const AUTHED_VIEWS = { district: true, ngo: true, village: true };
+const VIEWS = ["public", "district", "ngo", "villages", "ops"];
 
 function parseHash() {
   const raw = String(location.hash || "").replace(/^#\/?/, "");
   const parts = raw.split("/").filter(function (p) { return p.length > 0; });
-  const view = VIEWS.indexOf(parts[0]) !== -1 ? parts[0] : "public";
+  // `#/village/:id` was the earlier spelling; keep the old links working.
+  const head = parts[0] === "village" ? "villages" : parts[0];
+  const view = VIEWS.indexOf(head) !== -1 ? head : "public";
   return { view: view, arg: parts[1] ? decodeURIComponent(parts[1]) : null };
 }
 
@@ -761,7 +799,9 @@ function goto(view, arg) {
 function applyRoute() {
   const route = parseHash();
   state.view = route.view;
-  if (route.view === "village" && route.arg) state.villageId = route.arg;
+  // `#/villages` with no id is the index; with an id it is that village's
+  // profile. Clearing the id on the bare route is what makes Back work.
+  if (route.view === "villages") state.villageId = route.arg;
   if (route.view === "ngo" && route.arg) state.ngoId = route.arg;
 
   VIEWS.forEach(function (name) {
@@ -779,7 +819,7 @@ function loadView(view) {
   if (view === "public") { loadPublicView(); return; }
   if (view === "district") { loadDistrictView(); return; }
   if (view === "ngo") { loadNgoView(); return; }
-  if (view === "village") { loadVillageView(); return; }
+  if (view === "villages") { loadVillagesView(); return; }
   if (view === "ops") { applyTokenState(); return; }
 }
 
@@ -861,11 +901,23 @@ function dimensionBars(scores) {
   }).join("") + "</div>";
 }
 
+/** The one canonical, shareable address for a village. */
+function villageHref(villageId) {
+  return "#/villages/" + esc(encodeURIComponent(String(villageId === undefined ? "" : villageId)));
+}
+
+/**
+ * A village row is a link, everywhere it appears. The whole card is the tap
+ * target — the reported bug was that tapping a village did nothing — and the
+ * href is the deep link, so the row can be shared, opened in a new tab and
+ * returned to with the browser's own Back button.
+ */
 function villageRow(village, extraHtml) {
   const composite = village.recovery && typeof village.recovery.composite === "number"
     ? village.recovery.composite : null;
-  return '<li class="row' + (village.severity === "critical" ? " is-critical" : "") + '">'
-    + '<div class="row-top"><span class="row-name">' + esc(village.name) + "</span>"
+  return '<li class="row is-link' + (village.severity === "critical" ? " is-critical" : "") + '">'
+    + '<div class="row-top"><a class="row-link row-name" href="' + villageHref(village.id) + '">'
+      + esc(village.name) + "</a>"
       + severityChip(village.severity) + "</div>"
     + '<p class="row-meta">' + esc(village.district) + (village.state ? ", " + esc(village.state) : "")
       + " · " + esc(String(village.affectedFamilies)) + " of " + esc(String(village.households))
@@ -1140,11 +1192,9 @@ function renderPublicVillages() {
       "Once a district officer registers a village it appears here with its severity classification and recovery index.");
     return;
   }
-  out.innerHTML = '<ul class="list">'
-    + state.villages.map(function (village) {
-        return villageRow(village, '<div class="actions">'
-          + actionButton("Open profile", "village", { villageId: village.id }) + "</div>");
-      }).join("")
+  out.innerHTML = '<p class="section-note">Tap any village for its full profile and history.</p>'
+    + '<ul class="list">'
+    + state.villages.map(function (village) { return villageRow(village); }).join("")
     + "</ul>";
 }
 
@@ -1340,7 +1390,7 @@ function paintUnassigned(out, ids, source) {
   out.innerHTML = '<ul class="list">' + villages.map(function (village) {
       return villageRow(village, '<div class="actions">'
         + actionButton("Assign a lead NGO", "workflow", { workflow: "w-assign", prefill: { villageId: village.id } })
-        + actionButton("Open profile", "village", { villageId: village.id }) + "</div>");
+        + "</div>");
     }).join("") + "</ul>"
     + '<p class="section-note" style="margin-top:12px">Source: ' + esc(source)
     + ". Ordered by severity — the most acute village without an owner is first.</p>";
@@ -1440,7 +1490,7 @@ function issueRow(issue) {
     + '<p class="mono">' + esc(issue.id) + "</p>"
     + '<div class="actions">'
       + (routed ? "" : actionButton("Route it", "workflow", { workflow: "w-route", prefill: { issueId: issue.id } }))
-      + actionButton("Open village", "village", { villageId: issue.villageId })
+      + '<a class="backlink" href="' + villageHref(issue.villageId) + '">Open village ›</a>'
     + "</div></li>";
 }
 
@@ -1479,7 +1529,7 @@ async function renderRecommendations() {
         + '<span class="chip' + (item.priority === 1 ? " is-warn" : "") + '">'
         + esc(PRIORITY[item.priority] || "priority " + item.priority) + "</span></div>"
       + '<p class="row-meta">' + esc(villageName(item.villageId)) + " — " + esc(item.reason) + "</p>"
-      + '<div class="actions">' + actionButton("Open village", "village", { villageId: item.villageId })
+      + '<div class="actions">' + '<a class="backlink" href="' + villageHref(item.villageId) + '">Open village ›</a>'
       + (item.type === "assign_ngo"
           ? actionButton("Assign a lead NGO", "workflow", { workflow: "w-assign", prefill: { villageId: item.villageId } })
           : "")
@@ -1609,8 +1659,7 @@ async function renderNgoPortfolio() {
   html += '<ul class="list">' + villages.map(function (villageId) {
       const village = byId[villageId] || { id: villageId, name: villageId, district: "unknown", state: "",
         severity: "unknown", households: 0, affectedFamilies: 0, recovery: null };
-      return villageRow(village, '<div class="actions">'
-        + actionButton("Open profile", "village", { villageId: villageId }) + "</div>");
+      return villageRow(village);
     }).join("") + "</ul>"
     + (sourceNote ? '<p class="section-note" style="margin-top:12px">' + esc(sourceNote) + "</p>" : "")
     + "</div>";
@@ -1656,7 +1705,7 @@ async function renderNgoWorkload(out, villageIds) {
     const openIssues = (issuesByVillage[villageId] || []).filter(function (i) { return i.status !== "verified"; });
 
     return '<div class="card"><div class="card-head"><span class="card-title">' + esc(villageName(villageId)) + "</span>"
-      + actionButton("Open profile", "village", { villageId: villageId }) + "</div>"
+      + '<a class="backlink" href="' + villageHref(villageId) + '">Open profile ›</a></div>'
       + '<div class="tiles" style="margin-bottom:8px">'
         + '<div class="tile"><dt>Projects</dt><dd>' + esc(String(projects.length)) + "</dd></div>"
         + '<div class="tile"><dt>Beneficiaries</dt><dd>' + esc(String(beneficiaries.length)) + "</dd></div>"
@@ -1683,42 +1732,14 @@ async function renderNgoWorkload(out, villageIds) {
 }
 
 /* ====================================================================
- * SCRIPT §7 — Village view
+ * SCRIPT §7 — Villages: the index (#/villages) and one village's full
+ *             profile (#/villages/:id), per ADR 0013.
+ *
+ * The detail route is the shareable one. It is reached by tapping any
+ * village row anywhere in the app, it survives a reload, and it is a
+ * real hash route so the browser's own Back button returns you to
+ * whatever list you came from.
  * ==================================================================== */
-
-async function loadVillageView() {
-  if (!requireToken("village-gate", "village-body", "village profile")) return;
-  const content = $("#village-content");
-  skeleton(content, 4);
-
-  const loaded = await loadVillages();
-  const select = $("#village-select");
-  if (!loaded.ok) {
-    select.innerHTML = '<option value="">Could not load villages</option>';
-    select.disabled = true;
-    done(content);
-    showError(content, "Could not load villages", apiError(loaded.res), loadVillageView);
-    return;
-  }
-  if (state.villages.length === 0) {
-    select.innerHTML = '<option value="">No villages registered</option>';
-    select.disabled = true;
-    done(content);
-    showEmpty(content, "No village to show",
-      "Register a village in Operations. Its profile, damage assessments and recovery index appear here.");
-    return;
-  }
-  select.disabled = false;
-  if (!state.villageId || !state.villages.some(function (v) { return v.id === state.villageId; })) {
-    state.villageId = state.villages[0].id;
-  }
-  select.innerHTML = state.villages.map(function (village) {
-    return '<option value="' + esc(village.id) + '"' + (village.id === state.villageId ? " selected" : "") + ">"
-      + esc(village.name) + " — " + esc(village.district) + "</option>";
-  }).join("");
-
-  await renderVillageProfile();
-}
 
 const DAMAGE_FIELDS = [
   ["housesDamaged", "Houses damaged"], ["schoolsDamaged", "Schools damaged"],
@@ -1726,46 +1747,674 @@ const DAMAGE_FIELDS = [
   ["agricultureHectaresLost", "Agriculture hectares lost"], ["livestockLost", "Livestock lost"]
 ];
 
-async function renderVillageProfile() {
-  const out = $("#village-content");
-  const villageId = state.villageId;
-  skeleton(out, 4);
+/** The village currently on screen, as the API returned it. The amendment
+ *  forms read it at submit time so their "current value" never goes stale. */
+let amendVillage = null;
 
-  const res = await api("/villages/" + encodeURIComponent(villageId));
-  done(out);
-  if (res.status === 401) { handleUnauthorized(null); showError(out, "Token rejected", "Re-enter the API token in Operations.", null); return; }
-  if (!res.ok || !res.data) {
-    showError(out, "Could not load the village profile", apiError(res), renderVillageProfile);
+async function loadVillagesView() {
+  const head = $("#villages-head");
+  const index = $("#villages-index");
+  const detail = $("#village-detail");
+
+  if (state.villageId) {
+    head.classList.add("hidden");
+    index.classList.add("hidden");
+    index.innerHTML = "";
+    detail.classList.remove("hidden");
+    await renderVillageDetail(state.villageId);
     return;
   }
-  const village = res.data;
+  amendVillage = null;
+  detail.classList.add("hidden");
+  detail.innerHTML = "";
+  head.classList.remove("hidden");
+  index.classList.remove("hidden");
+  await renderVillagesIndex();
+}
 
-  let html = '<div class="section"><h3>Profile</h3><div class="card">'
-    + '<div class="card-head"><span class="card-title" style="font-size:1.125rem">' + esc(village.name) + "</span>"
-      + severityChip(village.severity) + "</div>"
-    + '<p class="row-meta">' + esc(village.district) + (village.state ? ", " + esc(village.state) : "") + "</p>"
-    + '<div class="tiles" style="margin-top:12px">'
-      + '<div class="tile"><dt>Population</dt><dd>' + esc(String(village.population)) + "</dd></div>"
-      + '<div class="tile"><dt>Households</dt><dd>' + esc(String(village.households)) + "</dd></div>"
-      + '<div class="tile' + (village.affectedFamilies > 0 ? " is-alert" : "") + '"><dt>Affected families</dt><dd>'
-        + esc(String(village.affectedFamilies)) + "</dd></div>"
-      + '<div class="tile"><dt>Location</dt><dd style="font-size:0.9375rem">'
-        + esc(village.geo ? num1(village.geo.lat) + ", " + num1(village.geo.lng) : "—") + "</dd></div>"
-    + "</div>"
-    + '<p class="mono" style="margin-top:12px">' + esc(village.id) + "</p></div></div>";
+/** The index needs no credential: it reads the public projection. */
+async function renderVillagesIndex() {
+  const out = $("#villages-index");
+  skeleton(out, 4);
+  const loaded = await loadVillages();
+  done(out);
+  if (!loaded.ok) {
+    showError(out, "Could not load villages", apiError(loaded.res), renderVillagesIndex);
+    return;
+  }
+  if (state.villages.length === 0) {
+    showEmpty(out, "No village registered yet",
+      "Register a village in Operations. Its profile, history and the three amendment actions appear here.");
+    return;
+  }
+  out.innerHTML = '<p class="section-note">Ordered by severity. Tap a village for its full profile.</p>'
+    + '<ul class="list">' + state.villages.map(function (village) { return villageRow(village); }).join("")
+    + "</ul>";
+}
 
-  out.innerHTML = html;
+/** Finds the public summary for a village — enough to name it without a token. */
+function villageSummary(villageId) {
+  for (let i = 0; i < state.villages.length; i += 1) {
+    if (state.villages[i].id === villageId) return state.villages[i];
+  }
+  return null;
+}
 
-  // Each panel loads independently: one missing route never blanks the profile.
+async function renderVillageDetail(villageId) {
+  const out = $("#village-detail");
+  out.innerHTML = '<p><a class="backlink" href="#/villages">&lsaquo; All villages</a></p>'
+    + '<div id="vd-head" aria-live="polite"></div>'
+    + '<div id="vd-amend"></div>'
+    + '<div id="vd-panels"></div>';
+  await paintVillageDetail(villageId, true);
+}
+
+/** Re-reads the village after an amendment without disturbing the open form. */
+async function refreshVillageDetail() {
+  if (state.view !== "villages" || !state.villageId || !$("#vd-head")) return;
+  await paintVillageDetail(state.villageId, false);
+}
+
+/**
+ * Paints the profile head, the amendment section and every data panel.
+ * `buildAmend` false keeps the existing amendment forms (and whatever message
+ * they are showing) in place and only refreshes their default values.
+ */
+async function paintVillageDetail(villageId, buildAmend) {
+  const headEl = $("#vd-head");
+  const amendEl = $("#vd-amend");
+  const panelsEl = $("#vd-panels");
+  if (!headEl) return;
+  skeleton(headEl, 2);
+  panelsEl.innerHTML = "";
+
+  if (state.villages.length === 0) await loadVillages();
+  const summary = villageSummary(villageId);
+
+  let village = null;
+  let profileError = null;
+  if (state.token) {
+    const res = await api("/villages/" + encodeURIComponent(villageId));
+    if (res.status === 401) { handleUnauthorized(null); profileError = "the API rejected the stored token"; }
+    else if (res.ok && res.data) village = res.data;
+    else profileError = apiError(res);
+  }
+  amendVillage = village;
+  done(headEl);
+
+  if (!village && !summary) {
+    headEl.innerHTML = (profileError
+        ? errorHtml("Could not open this village", profileError)
+        : stateHtml("No village with that identifier",
+            "Nothing on this deployment is registered as " + villageId + ". The link may be stale."))
+      + '<p><a class="backlink" href="#/villages">&lsaquo; Back to all villages</a></p>';
+    if (buildAmend) amendEl.innerHTML = "";
+    return;
+  }
+
+  headEl.innerHTML = village
+    ? villageHeadHtml(village)
+    : villageHeadHtml(summaryAsProfile(summary))
+      + (profileError
+          ? '<div style="margin-top:12px">' + errorHtml("Could not load the full profile", profileError) + "</div>"
+          : "");
+
+  // Everything below the public record reads authorised endpoints.
+  if (!state.token) {
+    if (buildAmend) amendEl.innerHTML = "";
+    panelsEl.innerHTML = '<div class="section"><h3>The rest of this profile</h3>'
+      + '<div class="state"><strong>Connect to see the full profile</strong>'
+      + "<p>The history timeline, recovery index, lead NGO and committee, damage assessments, beneficiaries, "
+      + "issues, projects, development plan and the three amendment actions all read authorised endpoints. "
+      + "Everything above is the public record, which needs no credential.</p>"
+      + '<div class="actions">' + actionButton("Open Operations", "ops", {}) + "</div></div></div>";
+    return;
+  }
+
+  if (buildAmend) renderAmendSection(village, villageId, profileError);
+  else if (village) syncAmendDefaults(village);
+
+  // Each panel loads independently: one missing or failing route never blanks
+  // the page, and never blanks its neighbours either.
   await Promise.all([
-    appendPanel(out, "Recovery index", renderRecoveryPanel(villageId)),
-    appendPanel(out, "Lead NGO and committee", renderAssignmentPanel(villageId)),
-    appendPanel(out, "Damage assessments", Promise.resolve(renderDamagePanel(village))),
-    appendPanel(out, "Funded projects", renderVillageProjects(villageId)),
-    appendPanel(out, "Beneficiaries and aid", renderVillageBeneficiaries(villageId)),
-    appendPanel(out, "Issues", renderVillageIssues(villageId)),
-    appendPanel(out, "Development plan", renderVillagePlan(villageId))
+    appendPanel(panelsEl, "History timeline", renderHistoryPanel(villageId, village)),
+    appendPanel(panelsEl, "Recovery index", renderRecoveryPanel(villageId)),
+    appendPanel(panelsEl, "Lead NGO and committee", renderAssignmentPanel(villageId)),
+    appendPanel(panelsEl, "Damage assessments",
+      Promise.resolve(renderDamagePanel(village || { id: villageId, damageAssessments: [] }))),
+    appendPanel(panelsEl, "Funded projects", renderVillageProjects(villageId)),
+    appendPanel(panelsEl, "Beneficiaries and aid", renderVillageBeneficiaries(villageId)),
+    appendPanel(panelsEl, "Issues", renderVillageIssues(villageId)),
+    appendPanel(panelsEl, "Development plan", renderVillagePlan(villageId))
   ]);
+}
+
+/** The public projection carries a subset of the profile. Say which parts. */
+function summaryAsProfile(summary) {
+  return {
+    id: summary.id, name: summary.name, district: summary.district, state: summary.state,
+    severity: summary.severity, households: summary.households, affectedFamilies: summary.affectedFamilies,
+    population: null, geo: null
+  };
+}
+
+function numTile(label, value, alertWhenPositive) {
+  const known = typeof value === "number" && isFinite(value);
+  return '<div class="tile' + (alertWhenPositive && known && value > 0 ? " is-alert" : "") + '">'
+    + "<dt>" + esc(label) + "</dt><dd>"
+    + (known ? esc(String(value)) : "<small>not published</small>") + "</dd></div>";
+}
+
+function villageHeadHtml(village) {
+  const geo = village.geo && typeof village.geo.lat === "number" && typeof village.geo.lng === "number"
+    ? num1(village.geo.lat) + ", " + num1(village.geo.lng) : null;
+  return '<div class="view-head"><h2>' + esc(village.name) + "</h2>"
+      + "<p>" + esc(village.district) + (village.state ? ", " + esc(village.state) : "") + "</p></div>"
+    + '<div class="card">'
+      + '<div class="card-head"><span class="card-title">Profile</span>' + severityChip(village.severity) + "</div>"
+      + '<div class="tiles" style="margin-top:8px">'
+        + numTile("Population", village.population)
+        + numTile("Households", village.households)
+        + numTile("Affected families", village.affectedFamilies, true)
+        + '<div class="tile"><dt>Coordinates</dt><dd style="font-size:0.9375rem">'
+          + (geo === null ? "<small>not published</small>" : esc(geo)) + "</dd></div>"
+      + "</div>"
+      + '<p class="mono" style="margin-top:12px">' + esc(village.id) + "</p>"
+    + "</div>";
+}
+
+/* --- Task 2: the history timeline ---------------------------------- */
+
+/** Accepts whichever envelope the history route uses, and normalises entries. */
+function historyEntries(data) {
+  const raw = Array.isArray(data) ? data
+    : (data && Array.isArray(data.history) ? data.history
+    : (data && Array.isArray(data.entries) ? data.entries
+    : (data && Array.isArray(data.events) ? data.events
+    : (data && Array.isArray(data.timeline) ? data.timeline : []))));
+  return raw.map(function (entry) {
+    return { raw: entry || {}, kind: historyKind(entry || {}), at: historyAt(entry || {}) };
+  }).sort(function (a, b) {
+    const ta = a.at ? Date.parse(a.at) : 0;
+    const tb = b.at ? Date.parse(b.at) : 0;
+    return (isNaN(tb) ? 0 : tb) - (isNaN(ta) ? 0 : ta);   // newest first
+  });
+}
+
+/**
+ * `kind` is deliberately open-ended: today the route emits only
+ * "damage-assessment" and "recovery-index", and more arrive with the audit
+ * trail. An unrecognised kind is rendered from its own `summary` rather than
+ * dropped, so a newer server never silently loses entries on an older page.
+ */
+function historyKind(entry) {
+  const raw = String(entry.kind || entry.type || entry.event || entry.name || "").toLowerCase();
+  if (raw.indexOf("damage") !== -1 || raw.indexOf("assess") !== -1) return "damage";
+  if (raw.indexOf("sever") !== -1) return "severity";
+  if (raw.indexOf("correct") !== -1 || raw.indexOf("profile") !== -1) return "correction";
+  if (raw.indexOf("recovery") !== -1 || raw.indexOf("score") !== -1 || raw.indexOf("composite") !== -1) return "recovery";
+  if (raw.indexOf("assign") !== -1) return "assignment";
+  if (raw.indexOf("regist") !== -1) return "registration";
+  return "other";
+}
+
+function historyAt(entry) {
+  return entry.at || entry.occurredAt || entry.assessedAt || entry.calculatedAt
+    || entry.recordedAt || entry.timestamp || entry.createdAt || null;
+}
+
+/** Kind-specific payload. The route nests it under `detail`; a locally
+ *  reassembled entry (history route absent) is the payload itself. */
+function historyDetail(entry) {
+  if (entry.detail && typeof entry.detail === "object") return entry.detail;
+  if (entry.assessment && typeof entry.assessment === "object") return entry.assessment;
+  return entry;
+}
+
+function transitionHtml(from, to) {
+  return '<span class="transition">' + severityChip(from)
+    + '<span class="arrow" aria-hidden="true">&rarr;</span><span class="sr-only">changed to</span>'
+    + severityChip(to) + "</span>";
+}
+
+const FIELD_LABELS = {
+  name: "Name", district: "District", state: "State", population: "Population",
+  households: "Households", affectedFamilies: "Affected families", geo: "Coordinates",
+  severity: "Severity"
+};
+
+function displayValue(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "object") {
+    if (typeof value.lat === "number" && typeof value.lng === "number") {
+      return num1(value.lat) + ", " + num1(value.lng);
+    }
+    try { return JSON.stringify(value); } catch (_) { return String(value); }
+  }
+  return String(value);
+}
+
+/** `{ field: { from, to } }` drawn so both sides of the change stay visible. */
+function changedDiffHtml(changed) {
+  if (!changed || typeof changed !== "object") return "";
+  const keys = Object.keys(changed);
+  if (keys.length === 0) return "";
+  return '<ul class="diff">' + keys.map(function (key) {
+    const entry = changed[key] && typeof changed[key] === "object" ? changed[key] : { to: changed[key] };
+    return '<li><span class="f">' + esc(FIELD_LABELS[key] || words(key)) + "</span>"
+      + '<span class="from">' + esc(displayValue(entry.from)) + "</span>"
+      + '<span class="arrow" aria-hidden="true">&rarr;</span><span class="sr-only">changed to</span>'
+      + '<span class="to">' + esc(displayValue(entry.to)) + "</span></li>";
+  }).join("") + "</ul>";
+}
+
+function timelineItemHtml(item, older) {
+  const entry = item.raw;
+  const detail = historyDetail(entry);
+  const summary = typeof entry.summary === "string" ? entry.summary : "";
+  let title = "";
+  let body = "";
+
+  if (item.kind === "damage") {
+    title = "Damage assessment recorded";
+    body = DAMAGE_FIELDS.map(function (field) {
+      const value = detail[field[0]];
+      return typeof value === "number" ? esc(field[1]) + " <b>" + esc(String(value)) + "</b>" : "";
+    }).filter(function (part) { return part !== ""; }).join(" · ");
+    if (detail.notes) body += (body ? "<br>" : "") + esc(detail.notes);
+    if (body === "" && summary) body = esc(summary);
+  } else if (item.kind === "recovery") {
+    const composite = typeof detail.composite === "number" ? detail.composite : null;
+    title = "Recovery index recalculated";
+    body = composite === null ? esc(summary) : "Composite <b>" + esc(String(num1(composite))) + " / 100</b>";
+    if (composite !== null && older && older.kind === "recovery") {
+      const previous = typeof historyDetail(older.raw).composite === "number"
+        ? historyDetail(older.raw).composite : null;
+      if (previous !== null) {
+        const delta = composite - previous;
+        body += " · " + (delta === 0 ? "unchanged from the previous calculation"
+          : (delta > 0 ? "up " : "down ") + esc(String(num1(Math.abs(delta)))) + " points");
+      }
+    }
+  } else if (item.kind === "severity") {
+    title = "Severity changed";
+    body = transitionHtml(detail.previous !== undefined ? detail.previous : detail.from,
+                          detail.severity !== undefined ? detail.severity : detail.to);
+  } else if (item.kind === "correction") {
+    title = "Record corrected";
+    body = (detail.reason ? "Reason given: " + esc(detail.reason) : "No reason recorded")
+      + changedDiffHtml(detail.changed);
+  } else if (item.kind === "assignment") {
+    title = "Lead NGO assigned";
+    body = esc(summary || detail.ngoName || detail.ngoId || "");
+  } else if (item.kind === "registration") {
+    title = "Village registered";
+    body = esc(summary);
+  } else {
+    // An unrecognised kind from a newer server: its own one-liner is the
+    // honest rendering, and it is never dropped.
+    title = words(entry.kind || entry.type || "Record");
+    body = esc(summary || entry.details || "");
+  }
+
+  return '<li class="tl-item k-' + esc(item.kind) + '">'
+    + '<p class="tl-when">' + esc(item.at ? when(item.at) : "time not recorded") + "</p>"
+    + '<p class="tl-title">' + esc(title) + "</p>"
+    + (body ? '<div class="tl-body">' + body + "</div>" : "")
+    + "</li>";
+}
+
+/**
+ * The honest footnote. A fully attributed timeline needs the audit trail
+ * (ADR 0011), which is not built. Saying so beats presenting a thin timeline
+ * that reads as broken.
+ */
+function timelineNote(entries) {
+  const kinds = {};
+  entries.forEach(function (entry) { kinds[entry.kind] = true; });
+  const missing = [];
+  if (!kinds.severity) missing.push("severity transitions");
+  if (!kinds.correction) missing.push("profile corrections");
+  if (!kinds.assignment) missing.push("NGO assignments");
+  return '<div class="note" style="margin-top:16px"><strong>What this timeline is, exactly.</strong> '
+    + "Newest first. Every entry above is a record the platform genuinely persists: recorded assessments and "
+    + "recovery-index updates. "
+    + (missing.length > 0
+        ? esc(missing.join(", ").replace(/^./, function (c) { return c.toUpperCase(); }))
+          + " are not here — they emit events, but only the current value is stored, so there is no entry to "
+          + "show without inventing one. "
+        : "")
+    + "Per-change attribution — who amended the record, and the reason they gave — arrives with audit logging "
+    + "(ADR 0011). This timeline reads it and grows the moment it ships.</div>";
+}
+
+async function renderHistoryPanel(villageId, village) {
+  const res = await api("/villages/" + encodeURIComponent(villageId) + "/history");
+  if (isMissingRoute(res)) return localTimelineHtml(village);
+  if (res.status === 401) return errorHtml("Not authorised", "The API rejected the stored token.");
+  if (!res.ok || !res.data) {
+    if (res.status === 404) {
+      return stateHtml("No history yet",
+        "Nothing has been recorded against this village. The first damage assessment starts the timeline.");
+    }
+    return errorHtml("Could not load the history", apiError(res));
+  }
+  const entries = historyEntries(res.data);
+  if (entries.length === 0) {
+    return stateHtml("No history yet",
+      "Nothing has been recorded against this village. The first damage assessment starts the timeline.")
+      + timelineNote(entries);
+  }
+  return '<ul class="timeline">' + entries.map(function (entry, index) {
+    return timelineItemHtml(entry, entries[index + 1] || null);
+  }).join("") + "</ul>" + timelineNote(entries);
+}
+
+/** Degrade when the history route is not deployed: rebuild what we can from
+ *  the profile itself rather than showing nothing at all. */
+function localTimelineHtml(village) {
+  const assessments = village && Array.isArray(village.damageAssessments) ? village.damageAssessments : [];
+  const entries = assessments.map(function (assessment) {
+    return { raw: assessment, kind: "damage", at: assessment.assessedAt };
+  }).reverse();
+  if (entries.length === 0) {
+    return stateHtml("The history endpoint is not deployed on this revision",
+      "Nothing can be reassembled from the profile either — this village has no damage assessment yet.");
+  }
+  return '<div class="note" style="margin-bottom:12px"><strong>Assembled from the profile.</strong> '
+    + "This deployment does not serve <code>GET /villages/:id/history</code>, so the timeline below is built "
+    + "from the damage assessments carried on the village record. Recovery-score history is not included.</div>"
+    + '<ul class="timeline">' + entries.map(function (entry, index) {
+        return timelineItemHtml(entry, entries[index + 1] || null);
+      }).join("") + "</ul>" + timelineNote(entries);
+}
+
+/* --- Task 3: three kinds of amendment, kept distinct ---------------- */
+
+/** Built on demand: the field shorthands (`t`, `n`, `sel`, `area`) and the
+ *  option lists live in §8, which has not been evaluated at this point. */
+function amendSpecs(villageId) {
+  const reasonField = area("reason", "Why is this being corrected?", {
+    required: true,
+    placeholder: "Population was mistyped at registration; the 2024 panchayat roll says 1240.",
+    hint: "Free text, not a menu — the interesting reasons are the ones nobody anticipated."
+  });
+  return [
+    {
+      id: "amend-damage",
+      title: "Record a new assessment",
+      submit: "Record assessment",
+      lead: "The world changed — record it.",
+      note: "This <strong>appends</strong> a new observation. It never edits a previous assessment: a wrong "
+        + "assessment is superseded by a newer one, the way you do not un-observe a flood. Every assessment "
+        + "stays in the history, and recording one recalculates the recovery index.",
+      fields: [
+        n("housesDamaged", "Houses damaged", { min: 0, required: true, half: true }),
+        n("schoolsDamaged", "Schools damaged", { min: 0, required: true, half: true }),
+        n("healthCentresDamaged", "Health centres damaged", { min: 0, required: true, half: true }),
+        n("waterSourcesDamaged", "Water sources damaged", { min: 0, required: true, half: true }),
+        n("agricultureHectaresLost", "Agriculture hectares lost", { min: 0, step: "any", required: true, half: true }),
+        n("livestockLost", "Livestock lost", { min: 0, required: true, half: true }),
+        t("notes", "Notes", { optional: true })
+      ],
+      build: function (v) {
+        const body = {
+          housesDamaged: Number(v.housesDamaged), schoolsDamaged: Number(v.schoolsDamaged),
+          healthCentresDamaged: Number(v.healthCentresDamaged), waterSourcesDamaged: Number(v.waterSourcesDamaged),
+          agricultureHectaresLost: Number(v.agricultureHectaresLost), livestockLost: Number(v.livestockLost)
+        };
+        if (v.notes) body.notes = v.notes;
+        return { path: "/villages/" + encodeURIComponent(villageId) + "/damage-assessments", body: body };
+      },
+      done: function (data, msgEl) {
+        const at = data.assessment && data.assessment.assessedAt ? when(data.assessment.assessedAt) : "now";
+        setMsg(msgEl, "ok", "Assessment recorded",
+          "Appended at <strong>" + esc(at) + "</strong>. Every earlier assessment is untouched and still in the "
+          + "timeline above. The recovery index has been recalculated from this one.");
+      }
+    },
+    {
+      id: "amend-severity",
+      title: "Update severity",
+      submit: "Update severity",
+      lead: "A classified state changed.",
+      note: "Severity is recorded as a <strong>transition</strong>: the previous value is kept alongside the new "
+        + "one, so the record can say this village recovered rather than merely that the field now holds a "
+        + "different word. Currently <strong id=\"amend-severity-current\">—</strong>. If the severity was simply "
+        + "typed in wrong, that is not a transition — but this is still the only route that records it, and it "
+        + "will preserve what it replaced.",
+      fields: [sel("severity", "New severity", SEVERITY_OPTIONS)],
+      build: function (v) {
+        return { method: "PATCH", path: "/villages/" + encodeURIComponent(villageId) + "/severity",
+                 body: { severity: v.severity } };
+      },
+      done: function (data, msgEl, v) {
+        const previous = data.previous !== undefined ? data.previous
+          : (amendVillage ? amendVillage.severity : null);
+        const next = data.severity !== undefined ? data.severity : v.severity;
+        if (previous === next) {
+          setMsg(msgEl, "info", "Severity unchanged",
+            "The village was already classified " + severityChip(next)
+            + ". Nothing moved, and the record says so.");
+          return;
+        }
+        setMsg(msgEl, "ok", "Severity updated",
+          "Recorded as a transition, not an overwrite: " + transitionHtml(previous, next));
+      }
+    },
+    {
+      id: "amend-profile",
+      title: "Correct details",
+      submit: "Record correction",
+      lead: "Our record was wrong.",
+      note: "Use this only when the world did not change and what we wrote down did — a mistyped population, a "
+        + "misspelt name. The current values are filled in below; change only what is wrong and leave the rest "
+        + "alone. <strong>A reason is required.</strong> That is deliberate: the correction is stored with which "
+        + "field moved, from what to what, and attributed to whoever made it. An unexplained change to a "
+        + "population figure is indistinguishable from a mistake or a manipulation six months later. Severity is "
+        + "not corrected here — see &ldquo;Update severity&rdquo; above.",
+      fields: [
+        t("name", "Village name", { required: true }),
+        t("district", "District", { required: true, half: true }),
+        t("state", "State", { required: true, half: true }),
+        n("population", "Population", { min: 0, required: true, half: true }),
+        n("households", "Households", { min: 0, required: true, half: true }),
+        n("affectedFamilies", "Affected families", { min: 0, required: true, half: true }),
+        n("lat", "Latitude", { step: "any", required: true, half: true }),
+        n("lng", "Longitude", { step: "any", required: true, half: true }),
+        reasonField
+      ],
+      build: function (v) {
+        const current = amendVillage;
+        if (!current) return { error: "The current profile could not be read, so nothing can be compared against it.", field: "name" };
+        const body = {};
+        const changed = {};
+        const text = [["name", "name"], ["district", "district"], ["state", "state"]];
+        text.forEach(function (pair) {
+          if (v[pair[0]] !== String(current[pair[1]] === undefined ? "" : current[pair[1]])) {
+            body[pair[1]] = v[pair[0]];
+            changed[pair[1]] = { from: current[pair[1]], to: v[pair[0]] };
+          }
+        });
+        [["population", "population"], ["households", "households"], ["affectedFamilies", "affectedFamilies"]]
+          .forEach(function (pair) {
+            const next = Number(v[pair[0]]);
+            if (next !== Number(current[pair[1]])) {
+              body[pair[1]] = next;
+              changed[pair[1]] = { from: current[pair[1]], to: next };
+            }
+          });
+        const currentGeo = current.geo || {};
+        const lat = Number(v.lat);
+        const lng = Number(v.lng);
+        if (lat !== Number(currentGeo.lat) || lng !== Number(currentGeo.lng)) {
+          body.geo = { lat: lat, lng: lng };
+          changed.geo = { from: currentGeo, to: { lat: lat, lng: lng } };
+        }
+        this.localChanged = changed;
+        body.reason = v.reason;
+        return { method: "PATCH", path: "/villages/" + encodeURIComponent(villageId) + "/profile", body: body };
+      },
+      done: function (data, msgEl) {
+        const changed = data && data.changed && Object.keys(data.changed).length > 0
+          ? data.changed : this.localChanged;
+        setMsg(msgEl, "ok", "Correction recorded",
+          "The reason you gave is stored with it and is attributable to whoever made it. "
+          + "Exactly what changed:" + changedDiffHtml(changed));
+      },
+      /** A refused no-op is not a failure of the operator. Say so plainly. */
+      reject: function (res, msgEl, form) {
+        const why = apiError(res);
+        const lower = String(why).toLowerCase();
+        if (/no change|nothing to correct|no-op|no field|unchanged|identical|at least one/.test(lower)) {
+          setMsg(msgEl, "info", "Nothing to correct",
+            "Every value you submitted already matches the record, so there was nothing to correct and nothing "
+            + "was written. Change a field before recording a correction. The service's own words: <code>"
+            + esc(why) + "</code>");
+          return true;
+        }
+        if (/reason/.test(lower)) {
+          markField(form, "reason", why);
+          setMsg(msgEl, "error", "A reason is required", esc(why));
+          return true;
+        }
+        return false;
+      }
+    }
+  ];
+}
+
+function amendPanelHtml(spec) {
+  return '<details class="work" id="' + esc(spec.id) + '">'
+    + "<summary>" + esc(spec.title) + '<span class="caret" aria-hidden="true">&rsaquo;</span></summary>'
+    + '<div class="work-body">'
+      + '<p class="work-note"><strong>' + esc(spec.lead) + "</strong> " + spec.note + "</p>"
+      + '<form novalidate id="' + esc(spec.id) + '-form">'
+        + fieldsHtml(spec.id, spec.fields)
+        + '<div class="actions"><button type="submit">' + esc(spec.submit) + "</button></div>"
+        + '<div class="msg" role="status" aria-live="polite"></div>'
+      + "</form>"
+    + "</div></details>";
+}
+
+function renderAmendSection(village, villageId, profileError) {
+  const el = $("#vd-amend");
+  if (!village) {
+    el.innerHTML = '<div class="section"><h3>Amend the record</h3>'
+      + errorHtml("Amendment is unavailable",
+          "The current profile could not be read (" + (profileError || "unknown error")
+          + "), and a correction has to know what it is correcting.")
+      + "</div>";
+    return;
+  }
+  const specs = amendSpecs(villageId);
+  el.innerHTML = '<div class="section"><h3>Amend the record</h3>'
+    + '<p class="section-note">Three different things can happen to a village record, and the platform keeps '
+    + "them apart on purpose. One generic edit form would serve all three and destroy the difference: after it, "
+    + "nothing could say whether a village recovered or was simply never critical.</p>"
+    + specs.map(amendPanelHtml).join("")
+    + "</div>";
+  specs.forEach(wireAmendForm);
+  syncAmendDefaults(village);
+}
+
+/** Keeps every "current value" in the forms in step with the live record. */
+function syncAmendDefaults(village) {
+  amendVillage = village;
+  const set = function (id, value) {
+    const el = $("#" + id);
+    if (el) el.value = value === null || value === undefined ? "" : String(value);
+  };
+  set("amend-severity-severity", village.severity);
+  const current = $("#amend-severity-current");
+  if (current) current.textContent = String(village.severity);
+  set("amend-profile-name", village.name);
+  set("amend-profile-district", village.district);
+  set("amend-profile-state", village.state);
+  set("amend-profile-population", village.population);
+  set("amend-profile-households", village.households);
+  set("amend-profile-affectedFamilies", village.affectedFamilies);
+  set("amend-profile-lat", village.geo ? village.geo.lat : "");
+  set("amend-profile-lng", village.geo ? village.geo.lng : "");
+}
+
+/**
+ * Wires one amendment form. Same discipline as the Operations engine: client
+ * validation first, the domain's own rejection wording verbatim and inline,
+ * 401 drops the token, a router 404 is "not deployed" rather than an error.
+ */
+function wireAmendForm(spec) {
+  const form = $("#" + spec.id + "-form");
+  if (!form) return;
+  const msgEl = $(".msg", form);
+  const button = $("button[type=submit]", form);
+
+  form.addEventListener("submit", async function (event) {
+    event.preventDefault();
+    setMsg(msgEl, null);
+    clearFieldErrors(form);
+
+    const values = {};
+    new FormData(form).forEach(function (value, key) { values[key] = String(value).trim(); });
+
+    for (let i = 0; i < spec.fields.length; i += 1) {
+      const field = spec.fields[i];
+      if (field.required && !values[field.name]) {
+        markField(form, field.name, field.label + " is required.");
+        setMsg(msgEl, "error", "Check this form", esc(field.label + " is required."));
+        return;
+      }
+      if (field.type === "number" && values[field.name] !== "" && values[field.name] !== undefined
+          && !isFinite(Number(values[field.name]))) {
+        markField(form, field.name, field.label + " must be a number.");
+        setMsg(msgEl, "error", "Check this form", esc(field.label + " must be a number."));
+        return;
+      }
+    }
+
+    const request = spec.build(values);
+    if (request.error) {
+      markField(form, request.field, request.error);
+      setMsg(msgEl, "error", "Check this form", esc(request.error));
+      return;
+    }
+
+    const label = button.textContent;
+    button.disabled = true;
+    button.textContent = "Working…";
+    try {
+      const res = await api(request.path, { method: request.method || "POST", body: request.body });
+      if (res.network) {
+        setMsg(msgEl, "error", "Network error",
+          "The request did not reach the service. Nothing was changed — submit again when you are back online.");
+        return;
+      }
+      if (res.status === 401) { handleUnauthorized(msgEl); return; }
+      if (isMissingRoute(res)) {
+        setMsg(msgEl, "info", "Not available on this deployment yet",
+          "This revision does not serve <code>" + esc(request.method || "POST") + " " + esc(request.path)
+          + "</code>. Nothing was changed. The action appears here because ADR 0013 specifies it —"
+          + " it becomes usable as soon as the route ships.");
+        return;
+      }
+      if (!res.ok) {
+        if (spec.reject && spec.reject(res, msgEl, form)) return;
+        const why = apiError(res);
+        const field = fieldForError(spec, why);
+        if (field) markField(form, field, why);
+        setMsg(msgEl, "error", res.status === 404 ? "Not found" : "Rejected", esc(why));
+        return;
+      }
+      spec.done(res.data || {}, msgEl, values);
+      if (spec.id === "amend-damage") form.reset();
+      state.projects = null;
+      await loadVillages();          // severity and recovery move on the public list too
+      await refreshVillageDetail();
+    } finally {
+      button.disabled = false;
+      button.textContent = label;
+    }
+  });
 }
 
 /** Appends a titled section whose body is produced by a promise. */
@@ -1847,7 +2496,7 @@ function renderDamagePanel(village) {
     return '<div class="state"><strong>No damage assessment recorded</strong>'
       + "<p>Damage assessments are append-only and drive the recovery index. Record the first one to start scoring this village.</p>"
       + '<div class="actions">'
-      + actionButton("Record a damage assessment", "workflow", { workflow: "w-damage", prefill: { villageId: village.id } })
+      + actionButton("Record a new assessment", "amend", { panel: "amend-damage" })
       + "</div></div>";
   }
   const ordered = assessments.slice().reverse();
@@ -2943,16 +3592,22 @@ document.addEventListener("click", function (event) {
   try { payload = JSON.parse(button.getAttribute("data-payload") || "{}"); } catch (_) { payload = {}; }
   const action = button.getAttribute("data-action");
   if (action === "workflow") { openWorkflow(payload.workflow, payload.prefill); return; }
-  if (action === "village") { state.villageId = payload.villageId || state.villageId; goto("village", state.villageId); return; }
+  if (action === "village") { goto("villages", payload.villageId || state.villageId); return; }
+  if (action === "amend") { openAmendment(payload.panel); return; }
   if (action === "ngo") { state.ngoId = payload.ngoId || state.ngoId; goto("ngo", state.ngoId); return; }
   if (VIEWS.indexOf(action) !== -1) goto(action);
 });
 
-$("#village-select").addEventListener("change", function (event) {
-  state.villageId = event.target.value;
-  goto("village", state.villageId);
-  renderVillageProfile();
-});
+/** Opens one of the three amendment panels on the village detail view. */
+function openAmendment(panelId) {
+  const details = $("#" + panelId);
+  if (!details) return;
+  $$("#vd-amend details.work").forEach(function (other) { if (other !== details) other.open = false; });
+  details.open = true;
+  details.scrollIntoView({ block: "start" });
+  const first = $("input, select, textarea", details);
+  if (first) first.focus({ preventScroll: true });
+}
 
 $("#ngo-select").addEventListener("change", function (event) {
   state.ngoId = event.target.value;
