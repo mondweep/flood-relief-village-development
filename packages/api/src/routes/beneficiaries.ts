@@ -5,7 +5,11 @@ import { asObject, optionalString, requiredString } from "../validate.js";
 import type { RouteDeps } from "./deps.js";
 
 export function registerBeneficiaryRoutes(router: Router, deps: RouteDeps): void {
-  const beneficiaries = deps.runtime.platform.beneficiaryRegistry;
+  // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
+  // from `deps.runtime.platform` at registration. The long-lived platform
+  // stamps `system` onto what it publishes; only the request-scoped one knows
+  // who is acting.
+  const beneficiaries = (ctx: RequestContext) => ctx.platform.beneficiaryRegistry;
 
   router.post("/beneficiaries", async (ctx: RequestContext): Promise<HttpResponse> => {
     const body = asObject(ctx.body);
@@ -19,7 +23,7 @@ export function registerBeneficiaryRoutes(router: Router, deps: RouteDeps): void
     if (!category.ok) return badRequest(category.error);
 
     return fromResult(
-      await beneficiaries.registerBeneficiary.execute({
+      await beneficiaries(ctx).registerBeneficiary.execute({
         villageId: villageId.value,
         name: name.value,
         category: category.value as BeneficiaryCategory,
@@ -55,7 +59,7 @@ export function registerBeneficiaryRoutes(router: Router, deps: RouteDeps): void
     if (!notes.ok) return badRequest(notes.error);
 
     return fromResult(
-      await beneficiaries.recordAid.execute({
+      await beneficiaries(ctx).recordAid.execute({
         beneficiaryId: ctx.params["id"] ?? "",
         aidType: aidType.value as AidType,
         providerId: providerId.value,
@@ -73,7 +77,7 @@ export function registerBeneficiaryRoutes(router: Router, deps: RouteDeps): void
     if (!dueAt.ok) return badRequest(dueAt.error);
 
     return fromResult(
-      await beneficiaries.scheduleFollowUp.execute({
+      await beneficiaries(ctx).scheduleFollowUp.execute({
         beneficiaryId: ctx.params["id"] ?? "",
         dueAt: dueAt.value,
       }),
@@ -85,7 +89,7 @@ export function registerBeneficiaryRoutes(router: Router, deps: RouteDeps): void
     "/beneficiaries/:id/follow-ups/:followUpId/complete",
     async (ctx: RequestContext): Promise<HttpResponse> =>
       fromResult(
-        await beneficiaries.completeFollowUp.execute({
+        await beneficiaries(ctx).completeFollowUp.execute({
           beneficiaryId: ctx.params["id"] ?? "",
           followUpId: ctx.params["followUpId"] ?? "",
         }),
@@ -93,7 +97,7 @@ export function registerBeneficiaryRoutes(router: Router, deps: RouteDeps): void
   );
 
   /** Operational worklist. Authenticated: unlike the roster, this one carries names. */
-  router.get("/follow-ups/overdue", async (): Promise<HttpResponse> =>
-    fromResultWith(await beneficiaries.listOverdueFollowUps.execute(), (list) => ({ followUps: list })),
+  router.get("/follow-ups/overdue", async (ctx: RequestContext): Promise<HttpResponse> =>
+    fromResultWith(await beneficiaries(ctx).listOverdueFollowUps.execute(), (list) => ({ followUps: list })),
   );
 }

@@ -18,7 +18,11 @@ import type { RouteDeps } from "./deps.js";
 const ACTIVE_STATUSES: ReadonlySet<string> = new Set(["sanctioned", "in_progress"]);
 
 export function registerFundRoutes(router: Router, deps: RouteDeps): void {
-  const funds = deps.runtime.platform.fundMonitoring;
+  // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
+  // from `deps.runtime.platform` at registration. The long-lived platform
+  // stamps `system` onto what it publishes; only the request-scoped one knows
+  // who is acting.
+  const funds = (ctx: RequestContext) => ctx.platform.fundMonitoring;
 
   /**
    * Sanctions a project. The amount is minor units (paise) as an integer —
@@ -42,7 +46,7 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
 
     // category and fundSource are enums the aggregate validates; we only assert shape.
     return fromResult(
-      await funds.sanctionProject.execute({
+      await funds(ctx).sanctionProject.execute({
         villageId: village.value,
         name: name.value,
         category: category.value,
@@ -60,7 +64,7 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
     if (!amountMinor.ok) return badRequest(amountMinor.error);
 
     return fromResult(
-      await funds.releaseFunds.execute({
+      await funds(ctx).releaseFunds.execute({
         projectId: ctx.params["id"] ?? "",
         amountMinor: amountMinor.value,
       }),
@@ -80,7 +84,7 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
     if (!evidenceRef.ok) return badRequest(evidenceRef.error);
 
     return fromResult(
-      await funds.recordExpenditure.execute({
+      await funds(ctx).recordExpenditure.execute({
         projectId: ctx.params["id"] ?? "",
         amountMinor: amountMinor.value,
         description: description.value,
@@ -91,11 +95,11 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
   });
 
   router.post("/projects/:id/complete", async (ctx: RequestContext): Promise<HttpResponse> =>
-    fromResult(await funds.completeProject.execute({ projectId: ctx.params["id"] ?? "" })),
+    fromResult(await funds(ctx).completeProject.execute({ projectId: ctx.params["id"] ?? "" })),
   );
 
   router.post("/projects/:id/verify", async (ctx: RequestContext): Promise<HttpResponse> =>
-    fromResult(await funds.verifyProject.execute({ projectId: ctx.params["id"] ?? "" })),
+    fromResult(await funds(ctx).verifyProject.execute({ projectId: ctx.params["id"] ?? "" })),
   );
 
   /**
@@ -134,11 +138,11 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
     const id = ctx.params["id"] ?? "";
     const derived =
       comparableSpentMinor.value === undefined || otherActiveProjects.value === undefined
-        ? await deriveAnomalyEvidence(id)
+        ? await deriveAnomalyEvidence(ctx, id)
         : null;
 
     return fromResult(
-      await funds.detectAnomalies.execute({
+      await funds(ctx).detectAnomalies.execute({
         projectId: id,
         comparableSpentMinor: comparableSpentMinor.value ?? derived?.comparableSpentMinor ?? [],
         ...(stalledAfterDays.value === undefined ? {} : { stalledAfterDays: stalledAfterDays.value }),
@@ -150,8 +154,8 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
     );
   });
 
-  router.get("/projects", async (): Promise<HttpResponse> => {
-    const projects = await funds.projectRepository.listAll();
+  router.get("/projects", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const projects = await funds(ctx).projectRepository.listAll();
     return json(200, { projects: projects.map(toFundProjectView) });
   });
 
@@ -159,19 +163,19 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
     const village = villageId(ctx.params["id"] ?? "");
     if (!village.ok) return badRequest(village.error);
 
-    const projects = await funds.projectRepository.listByVillage(village.value);
+    const projects = await funds(ctx).projectRepository.listByVillage(village.value);
     return json(200, { villageId: village.value, projects: projects.map(toFundProjectView) });
   });
 
   /** Peer evidence for the anomaly rules, read off the project register. */
-  async function deriveAnomalyEvidence(rawId: string): Promise<{
+  async function deriveAnomalyEvidence(ctx: RequestContext, rawId: string): Promise<{
     comparableSpentMinor: number[];
     otherActiveProjects: { villageId: string; category: string }[];
   } | null> {
     const parsed = projectId(rawId);
     if (!parsed.ok) return null;
 
-    const all = await funds.projectRepository.listAll();
+    const all = await funds(ctx).projectRepository.listAll();
     const subject = all.find((project) => project.id === parsed.value);
     if (subject === undefined) return null;
 

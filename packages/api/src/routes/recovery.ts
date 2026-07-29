@@ -7,11 +7,16 @@ import type { RouteDeps } from "./deps.js";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function registerRecoveryRoutes(router: Router, deps: RouteDeps): void {
-  const recovery = deps.runtime.platform.recoveryIntelligence;
-  const { villageRegistry, ngoCoordination } = deps.runtime.platform;
+  // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
+  // from `deps.runtime.platform` at registration. The long-lived platform
+  // stamps `system` onto what it publishes; only the request-scoped one knows
+  // who is acting.
+  const recovery = (ctx: RequestContext) => ctx.platform.recoveryIntelligence;
+  const villageRegistry = (ctx: RequestContext) => ctx.platform.villageRegistry;
+  const ngoCoordination = (ctx: RequestContext) => ctx.platform.ngoCoordination;
 
   router.get("/villages/:id/recovery-index", async (ctx: RequestContext): Promise<HttpResponse> =>
-    fromResult(await recovery.getRecoveryIndex.execute({ villageId: ctx.params["id"] ?? "" })),
+    fromResult(await recovery(ctx).getRecoveryIndex.execute({ villageId: ctx.params["id"] ?? "" })),
   );
 
   /**
@@ -29,7 +34,7 @@ export function registerRecoveryRoutes(router: Router, deps: RouteDeps): void {
     if (!weights.ok) return badRequest(weights.error);
 
     return fromResult(
-      await recovery.upsertDimensionScores.execute({
+      await recovery(ctx).upsertDimensionScores.execute({
         villageId: ctx.params["id"] ?? "",
         scores: scores.value as Partial<Record<Dimension, number>>,
         ...(weights.value === undefined
@@ -53,14 +58,14 @@ export function registerRecoveryRoutes(router: Router, deps: RouteDeps): void {
    * placeholder would not merely skew the ranking, it would put a number the
    * platform never measured into the sentence a district officer acts on.
    */
-  router.get("/recommendations", async (): Promise<HttpResponse> => {
-    const listed = await villageRegistry.listVillagesBySeverity.execute();
+  router.get("/recommendations", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const listed = await villageRegistry(ctx).listVillagesBySeverity.execute();
     if (!listed.ok) return badRequest(listed.error);
     const villages = listed.value;
 
     // One call for the whole list: the port takes the villages and answers with
     // the unassigned subset, so assignment cover is the complement of that set.
-    const unassigned = await ngoCoordination.listUnassignedVillages.execute(
+    const unassigned = await ngoCoordination(ctx).listUnassignedVillages.execute(
       villages.map((village) => ({ villageId: village.id, severity: village.severity })),
     );
     const withoutNgo = new Set(unassigned.ok ? unassigned.value.map((entry) => entry.villageId) : []);
@@ -70,7 +75,7 @@ export function registerRecoveryRoutes(router: Router, deps: RouteDeps): void {
     const villagesWithoutRecoveryIndex: string[] = [];
 
     for (const village of villages) {
-      const index = await recovery.getRecoveryIndex.execute({ villageId: village.id });
+      const index = await recovery(ctx).getRecoveryIndex.execute({ villageId: village.id });
       if (!index.ok) {
         villagesWithoutRecoveryIndex.push(village.id);
         continue;
@@ -85,7 +90,7 @@ export function registerRecoveryRoutes(router: Router, deps: RouteDeps): void {
     }
 
     return fromResultWith(
-      await recovery.recommendActions.execute({ situations }),
+      await recovery(ctx).recommendActions.execute({ situations }),
       (recommendations) => ({
         recommendations,
         // The dashboard needs to distinguish "nothing to do here" from "we know

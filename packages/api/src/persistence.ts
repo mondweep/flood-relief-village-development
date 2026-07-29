@@ -1,5 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { createPlatform, type Platform, type PlatformOverrides } from "@afrip/platform";
+import type { Platform, PlatformOverrides } from "@afrip/platform";
 import { AFRIP_SCHEMA, err, ok, type Result } from "@afrip/shared-kernel";
 import { SupabaseVillageRepository, VILLAGES_TABLE } from "@afrip/village-registry";
 import { SupabaseAssignmentRepository, SupabaseNgoRepository } from "@afrip/ngo-coordination";
@@ -10,6 +10,7 @@ import type { ProfileDirectory } from "./auth.js";
 import type { ApiConfig, PersistenceMode } from "./config.js";
 import { SupabaseProfileDirectory } from "./profiles.js";
 import { BeneficiaryDirectory } from "./projections.js";
+import { createBasePlatform } from "./request-platform.js";
 
 /**
  * The bounded contexts the composition root wires for which NO Supabase adapter
@@ -53,6 +54,16 @@ export const PARTIAL_PERSISTENCE_DETAIL =
  */
 export interface PlatformRuntime {
   readonly mode: PersistenceMode;
+  /**
+   * The LONG-LIVED platform: it owns the event bus, the cross-context
+   * subscriptions and the repository adapters, and everything expensive is
+   * built into it exactly once (ADR 0010).
+   *
+   * Route handlers must NOT use it. Anything published through it is attributed
+   * to `system`, which is right for a scheduled sweep and wrong for an officer's
+   * POST; per request, `app.ts` re-composes it around the caller's actor and
+   * hands the result to the handler as `ctx.platform`.
+   */
   readonly platform: Platform;
   readonly beneficiaryDirectory: BeneficiaryDirectory;
   /**
@@ -83,7 +94,7 @@ export function partialPersistenceOf(runtime: PlatformRuntime): PartialPersisten
 }
 
 export function createMemoryRuntime(overrides: PlatformOverrides = {}): PlatformRuntime {
-  const platform = createPlatform(overrides);
+  const platform = createBasePlatform(overrides);
   return {
     mode: "memory",
     platform,
@@ -119,7 +130,7 @@ export function createSupabaseRuntimeFromClient(
   overrides: PlatformOverrides = {},
   schema: string = AFRIP_SCHEMA,
 ): PlatformRuntime {
-  const platform = createPlatform({
+  const platform = createBasePlatform({
     ...overrides,
     repositories: {
       village: new SupabaseVillageRepository(client, schema),

@@ -9,6 +9,7 @@ import {
   writeResponse,
   type HttpResponse,
 } from "./http-result.js";
+import { composeForActor, eventActorOf, newRequestId } from "./request-platform.js";
 import { buildRouter, type RouteDeps } from "./routes/index.js";
 
 const BODY_METHODS: ReadonlySet<string> = new Set(["POST", "PUT", "PATCH"]);
@@ -87,6 +88,18 @@ export function createHandler(deps: RouteDeps): RequestListener {
       body = parsed.value;
     }
 
+    // ADR 0010: the actor established above is carried the rest of the way by
+    // composition, not by a parameter on forty-odd use cases. Wiring only — the
+    // repositories, the Supabase client and the JWKS key set were all built once
+    // at startup and are injected in; see the invariant note in
+    // request-platform.ts before adding anything expensive to `createPlatform`.
+    const requestId = newRequestId();
+    const platform = composeForActor(
+      deps.runtime.platform,
+      eventActorOf(auth.actor, gate.mode),
+      requestId,
+    );
+
     return match.handler({
       method,
       path,
@@ -94,6 +107,8 @@ export function createHandler(deps: RouteDeps): RequestListener {
       query: url.searchParams,
       body,
       actor: auth.actor,
+      platform,
+      requestId,
     });
   }
 }

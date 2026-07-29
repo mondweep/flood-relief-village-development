@@ -2,7 +2,7 @@ import type { Severity } from "@afrip/village-registry";
 import { jwtAuthEnabled, legacyTokenEnabled } from "../auth.js";
 import { summariseFunds, toPublicFundProject, type FundTotals } from "../fund-view.js";
 import { json, type HttpResponse } from "../http-result.js";
-import type { Router } from "../router.js";
+import type { RequestContext, Router } from "../router.js";
 import type { RouteDeps } from "./deps.js";
 
 export type { PublicFundProject } from "../fund-view.js";
@@ -61,8 +61,14 @@ export interface PublicAuthConfig {
 }
 
 export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
-  const { villageRegistry, ngoCoordination, recoveryIntelligence, fundMonitoring } =
-    deps.runtime.platform;
+  // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
+  // from `deps.runtime.platform` at registration. The long-lived platform
+  // stamps `system` onto what it publishes; only the request-scoped one knows
+  // who is acting.
+  const villageRegistry = (ctx: RequestContext) => ctx.platform.villageRegistry;
+  const ngoCoordination = (ctx: RequestContext) => ctx.platform.ngoCoordination;
+  const recoveryIntelligence = (ctx: RequestContext) => ctx.platform.recoveryIntelligence;
+  const fundMonitoring = (ctx: RequestContext) => ctx.platform.fundMonitoring;
 
   /**
    * Sign-in bootstrap. Unauthenticated of necessity: it is what a page reads in
@@ -92,13 +98,13 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
     return json(200, body);
   });
 
-  router.get("/public/villages", async (): Promise<HttpResponse> => {
-    const listed = await villageRegistry.listVillagesBySeverity.execute();
+  router.get("/public/villages", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const listed = await villageRegistry(ctx).listVillagesBySeverity.execute();
     if (!listed.ok) return json(400, { error: listed.error });
 
     const villages = [];
     for (const village of listed.value) {
-      const index = await recoveryIntelligence.getRecoveryIndex.execute({ villageId: village.id });
+      const index = await recoveryIntelligence(ctx).getRecoveryIndex.execute({ villageId: village.id });
       villages.push({
         id: village.id,
         name: village.name,
@@ -129,8 +135,8 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
    * `toPublicFundProject` drops them and only the authenticated `GET /projects`
    * carries them.
    */
-  router.get("/public/funds", async (): Promise<HttpResponse> => {
-    const projects = await fundMonitoring.projectRepository.listAll();
+  router.get("/public/funds", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const projects = await fundMonitoring(ctx).projectRepository.listAll();
     return json(200, { projects: projects.map(toPublicFundProject) });
   });
 
@@ -139,8 +145,8 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
    * own query use case — the route never reaches past an application boundary
    * into a repository.
    */
-  router.get("/public/stats", async (): Promise<HttpResponse> => {
-    const listed = await villageRegistry.listVillagesBySeverity.execute();
+  router.get("/public/stats", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const listed = await villageRegistry(ctx).listVillagesBySeverity.execute();
     if (!listed.ok) return json(400, { error: listed.error });
     const villages = listed.value;
 
@@ -152,7 +158,7 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
     // NGO Coordination owns assignment state but takes the village list as
     // input (it never calls Village Registry itself), so "assigned" is the
     // complement of what it reports as unassigned.
-    const unassigned = await ngoCoordination.listUnassignedVillages.execute(
+    const unassigned = await ngoCoordination(ctx).listUnassignedVillages.execute(
       villages.map((village) => ({ villageId: village.id, severity: village.severity })),
     );
     const villagesWithActiveNgo = unassigned.ok ? villages.length - unassigned.value.length : 0;
@@ -160,7 +166,7 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
     let scored = 0;
     let compositeTotal = 0;
     for (const village of villages) {
-      const index = await recoveryIntelligence.getRecoveryIndex.execute({ villageId: village.id });
+      const index = await recoveryIntelligence(ctx).getRecoveryIndex.execute({ villageId: village.id });
       if (!index.ok) continue;
       scored += 1;
       compositeTotal += index.value.composite;
@@ -168,7 +174,7 @@ export function registerPublicRoutes(router: Router, deps: RouteDeps): void {
 
     // Unlike the recovery average, zero is the honest answer for money: no
     // sanctioned project means no rupee has moved, which is a fact, not a gap.
-    const funds = summariseFunds(await fundMonitoring.projectRepository.listAll());
+    const funds = summariseFunds(await fundMonitoring(ctx).projectRepository.listAll());
 
     const stats: PublicStats = {
       totalVillages: villages.length,

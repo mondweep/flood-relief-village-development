@@ -21,8 +21,12 @@ const COMMITTEE_ROLES: readonly string[] = [
   "womens_rep",
 ];
 
-export function registerNgoRoutes(router: Router, deps: RouteDeps): void {
-  const ngos = deps.runtime.platform.ngoCoordination;
+export function registerNgoRoutes(router: Router, _deps: RouteDeps): void {
+  // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
+  // from `deps.runtime.platform` at registration. The long-lived platform
+  // stamps `system` onto what it publishes; only the request-scoped one knows
+  // who is acting.
+  const ngos = (ctx: RequestContext) => ctx.platform.ngoCoordination;
 
   router.post("/ngos", async (ctx: RequestContext): Promise<HttpResponse> => {
     const body = asObject(ctx.body);
@@ -36,7 +40,7 @@ export function registerNgoRoutes(router: Router, deps: RouteDeps): void {
     if (!capacity.ok) return badRequest(capacity.error);
 
     return fromResult(
-      await ngos.registerNgo.execute({
+      await ngos(ctx).registerNgo.execute({
         name: name.value,
         focusAreas: focusAreas.value,
         capacity: capacity.value,
@@ -53,7 +57,7 @@ export function registerNgoRoutes(router: Router, deps: RouteDeps): void {
     if (!ngoId.ok) return badRequest(ngoId.error);
 
     return fromResult(
-      await ngos.assignNgoToVillage.execute({
+      await ngos(ctx).assignNgoToVillage.execute({
         villageId: ctx.params["id"] ?? "",
         ngoId: ngoId.value,
       }),
@@ -76,7 +80,7 @@ export function registerNgoRoutes(router: Router, deps: RouteDeps): void {
     if (!contact.ok) return badRequest(contact.error);
 
     return fromResult(
-      await ngos.addCommitteeMember.execute({
+      await ngos(ctx).addCommitteeMember.execute({
         villageId: ctx.params["id"] ?? "",
         role: role.value as CommitteeRole,
         name: name.value,

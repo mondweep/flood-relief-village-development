@@ -58,9 +58,14 @@ function toAlertView(alert: SmartAlert): AlertView {
   };
 }
 
-export function registerSignalRoutes(router: Router, deps: RouteDeps): void {
-  const signals = deps.runtime.platform.socialMediaIntelligence;
-  const { villageRegistry, ngoCoordination } = deps.runtime.platform;
+export function registerSignalRoutes(router: Router, _deps: RouteDeps): void {
+  // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
+  // from `deps.runtime.platform` at registration. The long-lived platform
+  // stamps `system` onto what it publishes; only the request-scoped one knows
+  // who is acting.
+  const signals = (ctx: RequestContext) => ctx.platform.socialMediaIntelligence;
+  const villageRegistry = (ctx: RequestContext) => ctx.platform.villageRegistry;
+  const ngoCoordination = (ctx: RequestContext) => ctx.platform.ngoCoordination;
 
   /**
    * Ingests a raw field report or social post. The `SignalExtractor` behind the
@@ -78,7 +83,7 @@ export function registerSignalRoutes(router: Router, deps: RouteDeps): void {
 
     // `source` is an enum the use case validates; the cast only satisfies the signature.
     return fromResult(
-      await signals.ingestRawReport.execute({
+      await signals(ctx).ingestRawReport.execute({
         rawText: rawText.value,
         source: source.value as Source,
       }),
@@ -107,7 +112,7 @@ export function registerSignalRoutes(router: Router, deps: RouteDeps): void {
 
     let facts: RegistryFacts;
     if (body.value["registryFacts"] === undefined || body.value["registryFacts"] === null) {
-      facts = await deriveRegistryFacts(id.value);
+      facts = await deriveRegistryFacts(ctx, id.value);
     } else {
       const supplied = requiredObject(body.value, "registryFacts");
       if (!supplied.ok) return badRequest(supplied.error);
@@ -125,29 +130,29 @@ export function registerSignalRoutes(router: Router, deps: RouteDeps): void {
     }
 
     return fromResult(
-      await signals.evaluateAlerts.execute({ signalId: id.value, registryFacts: facts }),
+      await signals(ctx).evaluateAlerts.execute({ signalId: id.value, registryFacts: facts }),
     );
   });
 
-  router.get("/signals", async (): Promise<HttpResponse> => {
-    const all = await signals.signalRepository.listAll();
+  router.get("/signals", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const all = await signals(ctx).signalRepository.listAll();
     return json(200, { signals: all.map(toSignalView) });
   });
 
-  router.get("/alerts", async (): Promise<HttpResponse> => {
-    const all = await signals.alertRepository.listAll();
+  router.get("/alerts", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const all = await signals(ctx).alertRepository.listAll();
     return json(200, { alerts: all.map(toAlertView) });
   });
 
   /** Facts about the signal's village, read from the two contexts that own them. */
-  async function deriveRegistryFacts(id: SignalId): Promise<RegistryFacts> {
+  async function deriveRegistryFacts(ctx: RequestContext, id: SignalId): Promise<RegistryFacts> {
     const empty: RegistryFacts = { villageKnown: false, hasActiveNgo: false, recentAidTypes: [] };
 
-    const signal = await signals.signalRepository.findById(id);
+    const signal = await signals(ctx).signalRepository.findById(id);
     const villageName = signal?.extracted.villageName;
     if (villageName === undefined) return empty;
 
-    const listed = await villageRegistry.listVillagesBySeverity.execute();
+    const listed = await villageRegistry(ctx).listVillagesBySeverity.execute();
     if (!listed.ok) return empty;
 
     const match = listed.value.find(
@@ -157,7 +162,7 @@ export function registerSignalRoutes(router: Router, deps: RouteDeps): void {
 
     // NGO Coordination reports the UNassigned subset of the villages it is given,
     // so "has an active NGO" is this village being absent from that answer.
-    const unassigned = await ngoCoordination.listUnassignedVillages.execute([
+    const unassigned = await ngoCoordination(ctx).listUnassignedVillages.execute([
       { villageId: match.id, severity: match.severity },
     ]);
     const hasActiveNgo = unassigned.ok && unassigned.value.length === 0;
@@ -170,7 +175,7 @@ export function registerSignalRoutes(router: Router, deps: RouteDeps): void {
     const id = signalId(ctx.params["id"] ?? "");
     if (!id.ok) return badRequest(id.error);
 
-    const signal = await signals.signalRepository.findById(id.value);
+    const signal = await signals(ctx).signalRepository.findById(id.value);
     if (signal === null) return notFound(`signal not found: ${id.value}`);
     return json(200, toSignalView(signal));
   });

@@ -34,6 +34,13 @@ export {
   type PlatformRuntime,
 } from "./persistence.js";
 export { createHandler } from "./app.js";
+export {
+  composeForActor,
+  createBasePlatform,
+  eventActorOf,
+  newRequestId,
+  PLATFORM_SYSTEM_ACTOR,
+} from "./request-platform.js";
 
 /** Cloud Run routes traffic to the container's external interface, so 127.0.0.1 is not enough. */
 export const HOST = "0.0.0.0";

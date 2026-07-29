@@ -1,3 +1,4 @@
+import type { Platform } from "@afrip/platform";
 import type { ActorContext } from "./auth.js";
 import type { HttpResponse } from "./http-result.js";
 
@@ -17,6 +18,19 @@ export interface RequestContext {
    * Attached, not enforced: what each role may DO is ADR 0009.
    */
   readonly actor?: ActorContext | null;
+  /**
+   * The platform composed for THIS request (ADR 0010) — the same use cases over
+   * the same repositories as ever, but publishing through a decorator that
+   * stamps `actor` onto every event they raise.
+   *
+   * Route handlers must reach for this and never for `deps.runtime.platform`.
+   * The long-lived platform is not wrong so much as differently attributed: it
+   * stamps `system`, which is the honest label for a scheduled sweep and a lie
+   * about an officer's POST.
+   */
+  readonly platform: Platform;
+  /** Correlates every event this request raises. Stamped alongside the actor. */
+  readonly requestId: string;
 }
 
 export type RouteHandler = (ctx: RequestContext) => Promise<HttpResponse>;
