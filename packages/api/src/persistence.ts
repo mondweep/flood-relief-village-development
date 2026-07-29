@@ -8,7 +8,13 @@ import {
   type OwnershipRegistry,
   type Result,
 } from "@afrip/shared-kernel";
-import { SupabaseVillageRepository, VILLAGES_TABLE } from "@afrip/village-registry";
+import {
+  FakeGeocoding,
+  NominatimGeocoding,
+  SupabaseVillageRepository,
+  VILLAGES_TABLE,
+  type GeocodingService,
+} from "@afrip/village-registry";
 import { SupabaseAssignmentRepository, SupabaseNgoRepository } from "@afrip/ngo-coordination";
 import { SupabaseRecoveryIndexRepository } from "@afrip/recovery-intelligence";
 import { SupabaseIssueRepository } from "@afrip/issue-tracking";
@@ -19,6 +25,7 @@ import { attachAuditLog, InMemoryAuditLog, SupabaseAuditLog, type AuditLog, type
 import { SupabaseEnrolmentService, type EnrolmentService } from "./enrolment.js";
 import { SupabaseOwnershipRegistry } from "./ownership.js";
 import { SupabaseProfileDirectory } from "./profiles.js";
+import { OSM_USER_AGENT } from "./routes/map.js";
 import { BeneficiaryDirectory } from "./projections.js";
 import { createBasePlatform } from "./request-platform.js";
 
@@ -116,6 +123,13 @@ export interface PlatformRuntime {
    * to prevent, and a counter nobody reads is not a counter.
    */
   readonly auditWriter: AuditLogSubscriber;
+  /**
+   * Where village-name lookups go (ADR 0012 §3). Absent when nothing is
+   * configured, and `GET /geocode/villages` then answers 501 rather than an
+   * empty candidate list — "the geocoder found nothing" and "there is no
+   * geocoder" are different answers and only one of them means keep looking.
+   */
+  readonly geocoder?: GeocodingService;
   /** Resolves ok when the datastore is reachable; err with a reason otherwise. */
   checkReady(): Promise<Result<{ mode: PersistenceMode }>>;
 }
@@ -139,6 +153,10 @@ export function createMemoryRuntime(overrides: PlatformOverrides = {}): Platform
   const auditWriter = attachAuditLog(platform.bus, auditLog);
   return {
     mode: "memory",
+    // The deterministic fake, not Nominatim. A dev runtime should not send village
+    // names to a public geocoder on every keystroke, and a test that reaches the
+    // internet fails on a plane.
+    geocoder: new FakeGeocoding(),
     platform,
     ownership,
     auditLog,
@@ -207,6 +225,12 @@ export function createSupabaseRuntimeFromClient(
     ownership,
     auditLog,
     auditWriter: attachAuditLog(platform.bus, auditLog),
+    // The adapter requires an explicit User-Agent and offers no default, which is
+    // the right call: Nominatim's usage policy identifies callers by it, and an
+    // anonymous or generic one gets the IP banned — with every village lookup
+    // then failing for a reason nothing in our logs would explain. Shares the
+    // tile proxy's identity string so one contact address covers both.
+    geocoder: new NominatimGeocoding({ userAgent: OSM_USER_AGENT }),
     beneficiaryDirectory: new BeneficiaryDirectory(platform.bus),
     // Same client, same schema as every other adapter: identities are stored
     // beside the data they govern, not in a second place that can drift.

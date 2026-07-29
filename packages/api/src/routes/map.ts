@@ -32,7 +32,12 @@ import type { RouteDeps } from "./deps.js";
  */
 const UPSTREAM = "https://tile.openstreetmap.org";
 
-const USER_AGENT =
+/**
+ * Shared with the Nominatim geocoding adapter (see persistence.ts). Both are
+ * OpenStreetMap Foundation services, both identify callers by User-Agent, and
+ * both ban by IP — so one identity string and one contact point for the pair.
+ */
+export const OSM_USER_AGENT =
   "AFRIP/0.1 (flood recovery platform; https://github.com/mondweep/flood-relief-village-development)";
 
 /**
@@ -196,7 +201,7 @@ export function registerMapRoutes(router: Router, _deps: RouteDeps, options: Map
     let upstream: Response;
     try {
       upstream = await fetchTile(`${UPSTREAM}/${key}.png`, {
-        headers: { "user-agent": USER_AGENT, accept: "image/png,image/*" },
+        headers: { "user-agent": OSM_USER_AGENT, accept: "image/png,image/*" },
       });
     } catch (error) {
       // The map degrades rather than the page breaking: Leaflet shows a blank
