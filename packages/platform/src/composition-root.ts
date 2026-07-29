@@ -5,6 +5,7 @@ import {
   type IdGenerator,
 } from "@afrip/shared-kernel";
 import {
+  CorrectVillageProfile,
   GetVillageProfile,
   InMemoryVillageRepository,
   ListVillagesBySeverity,
@@ -143,6 +144,7 @@ export interface Platform {
     registerVillage: RegisterVillage;
     recordDamageAssessment: RecordDamageAssessment;
     updateSeverity: UpdateSeverity;
+    correctVillageProfile: CorrectVillageProfile;
     getVillageProfile: GetVillageProfile;
     listVillagesBySeverity: ListVillagesBySeverity;
   };
@@ -247,6 +249,11 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
       eventPublisher: bus,
     }),
     updateSeverity: new UpdateSeverity({ repository: villageRepository, clock, eventPublisher: bus }),
+    correctVillageProfile: new CorrectVillageProfile({
+      repository: villageRepository,
+      clock,
+      eventPublisher: bus,
+    }),
     getVillageProfile: new GetVillageProfile({ repository: villageRepository }),
     listVillagesBySeverity: new ListVillagesBySeverity({ repository: villageRepository }),
   };
