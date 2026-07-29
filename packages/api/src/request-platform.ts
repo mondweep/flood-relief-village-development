@@ -1,11 +1,14 @@
 import { randomUUID } from "node:crypto";
-import { createPlatform, type Platform, type PlatformOverrides } from "@afrip/platform";
+import { authorizePlatform, createPlatform, type Platform, type PlatformOverrides } from "@afrip/platform";
 import {
   ActorStampingPublisher,
+  NO_OWNERSHIP,
+  OwnershipRecordingPublisher,
   anonymousActor,
   systemActor,
   userActor,
   type EventActor,
+  type OwnershipRegistry,
 } from "@afrip/shared-kernel";
 import type { ActorContext, AuthMode } from "./auth.js";
 
@@ -67,10 +70,20 @@ export const PLATFORM_SYSTEM_ACTOR: EventActor = systemActor("platform");
  * every stamping path — and the guard test in request-platform.test.ts exists to
  * keep those two apart.
  */
-export function createBasePlatform(overrides: PlatformOverrides = {}): Platform {
+export function createBasePlatform(
+  overrides: PlatformOverrides = {},
+  /**
+   * Where ownership is recorded (ADR 0009). Defaults to `NO_OWNERSHIP` so a
+   * caller that has no store — the tests that build a bare platform — gets a
+   * registry that records nothing and grants nothing, rather than a crash or a
+   * silent `true`.
+   */
+  ownership: OwnershipRegistry = NO_OWNERSHIP,
+): Platform {
   return createPlatform({
     ...overrides,
-    eventPublisher: (bus) => new ActorStampingPublisher(bus, PLATFORM_SYSTEM_ACTOR),
+    eventPublisher: (bus) =>
+      new ActorStampingPublisher(new OwnershipRecordingPublisher(bus, ownership), PLATFORM_SYSTEM_ACTOR),
   });
 }
 
@@ -111,11 +124,55 @@ export function newRequestId(): string {
  * The composed platform's own bus is inert by construction; see the note on
  * `PlatformOverrides.eventPublisher`.
  */
-export function composeForActor(base: Platform, actor: EventActor, requestId?: string): Platform {
+export function composeForActor(
+  base: Platform,
+  actor: EventActor,
+  requestId?: string,
+  ownership: OwnershipRegistry = NO_OWNERSHIP,
+): Platform {
   return createPlatform({
     ...base.composition,
     // The bus this factory is handed belongs to the platform being composed and
     // is deliberately ignored: we wrap `base.bus`, the long-lived one.
-    eventPublisher: () => new ActorStampingPublisher(base.bus, actor, requestId),
+    //
+    // ORDER MATTERS. Recording goes INSIDE the stamp, because it reads
+    // `event.actor` and the stamp is what puts it there. Swapped, it sees
+    // unstamped events, records nothing, and every ownership-based edit is
+    // refused forever — with no error anywhere. Pinned by two tests in
+    // shared-kernel/test/ownership-recording-publisher.test.ts.
+    eventPublisher: () =>
+      new ActorStampingPublisher(
+        new OwnershipRecordingPublisher(base.bus, ownership),
+        actor,
+        requestId,
+      ),
   });
+}
+
+/**
+ * The whole request-scoped chain: compose for the actor (ADR 0010), then gate
+ * every use case on what that actor may do (ADR 0009).
+ *
+ * Authorization wraps the COMPOSED platform, not the base one, and in that order
+ * for two reasons. A denied call must never publish, so the gate has to sit
+ * outside the publisher — it does, since the gate intercepts `execute` and the
+ * publisher is only reached from inside it. And the authorized platform refuses
+ * to expose `composition`, which `composeForActor` needs; wrapping first would
+ * break the next request's composition.
+ *
+ * `actor` here is the APPLICATION actor (`ActorContext | null`), not the event
+ * actor. Null means the request carried no identity and every check passes —
+ * see the note in `authorize-platform.ts`, which spells out that this layer
+ * therefore adds nothing on a deployment still running on the shared
+ * `API_TOKEN`.
+ */
+export function platformForRequest(
+  base: Platform,
+  actor: ActorContext | null,
+  mode: AuthMode,
+  requestId: string,
+  ownership: OwnershipRegistry = NO_OWNERSHIP,
+): Platform {
+  const composed = composeForActor(base, eventActorOf(actor, mode), requestId, ownership);
+  return authorizePlatform(composed, actor, { ownership });
 }

@@ -1,3 +1,5 @@
+import { PLATFORM_PERMISSIONS } from "@afrip/platform";
+import type { UserRole } from "@afrip/shared-kernel";
 import { json, type HttpResponse } from "../http-result.js";
 import type { Router } from "../router.js";
 import type { RouteDeps } from "./deps.js";
@@ -7,6 +9,37 @@ export interface MeResponse {
   readonly id: string;
   readonly email: string;
   readonly role: string;
+  /**
+   * Which `"<context>.<useCase>"` keys this role may invoke (ADR 0009), so the
+   * page can hide controls the API would refuse.
+   *
+   * DERIVED from `PLATFORM_PERMISSIONS`, never hand-written. The alternative — a
+   * copy of the matrix in the frontend — is a second source of truth for
+   * authorization, and the way it fails is that a rule tightened here keeps
+   * showing an enabled button there. One table, two readers.
+   *
+   * Advisory only. It says what the server would allow, and the server checks
+   * again on every call; a client that ignores this list gets 403s, not access.
+   *
+   * Ownership is deliberately NOT reflected. A rule the actor can reach only for
+   * records they created is listed as permitted, because whether they own any
+   * given record is a per-record question this response has no record in hand
+   * for. The consequence is a control that is shown and sometimes refused, which
+   * is the right way round: hiding it would deny people the edit ADR 0009 exists
+   * to grant them.
+   */
+  readonly permissions: readonly string[];
+}
+
+/**
+ * The keys `role` may invoke. `admin` is allowed everywhere without appearing in
+ * any rule (see `authorize-platform.ts`), so it gets the whole table.
+ */
+export function permissionsFor(role: UserRole): string[] {
+  return Object.entries(PLATFORM_PERMISSIONS)
+    .filter(([, rule]) => role === "admin" || rule.roles.includes(role))
+    .map(([key]) => key)
+    .sort();
 }
 
 export const NO_IDENTITY_CODE = "identity_unavailable";
@@ -39,7 +72,12 @@ export function registerMeRoutes(router: Router, _deps: RouteDeps): void {
       };
     }
 
-    const body: MeResponse = { id: actor.id, email: actor.email, role: actor.role };
+    const body: MeResponse = {
+      id: actor.id,
+      email: actor.email,
+      role: actor.role,
+      permissions: permissionsFor(actor.role),
+    };
     return json(200, body);
   });
 }

@@ -1,6 +1,13 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import type { Platform, PlatformOverrides } from "@afrip/platform";
-import { AFRIP_SCHEMA, err, ok, type Result } from "@afrip/shared-kernel";
+import {
+  AFRIP_SCHEMA,
+  InMemoryOwnershipRegistry,
+  err,
+  ok,
+  type OwnershipRegistry,
+  type Result,
+} from "@afrip/shared-kernel";
 import { SupabaseVillageRepository, VILLAGES_TABLE } from "@afrip/village-registry";
 import { SupabaseAssignmentRepository, SupabaseNgoRepository } from "@afrip/ngo-coordination";
 import { SupabaseRecoveryIndexRepository } from "@afrip/recovery-intelligence";
@@ -8,6 +15,7 @@ import { SupabaseIssueRepository } from "@afrip/issue-tracking";
 import { SupabaseBeneficiaryRepository } from "@afrip/beneficiary-registry";
 import type { ProfileDirectory } from "./auth.js";
 import type { ApiConfig, PersistenceMode } from "./config.js";
+import { SupabaseOwnershipRegistry } from "./ownership.js";
 import { SupabaseProfileDirectory } from "./profiles.js";
 import { BeneficiaryDirectory } from "./projections.js";
 import { createBasePlatform } from "./request-platform.js";
@@ -79,6 +87,14 @@ export interface PlatformRuntime {
    * pinned to the least-privileged role.
    */
   readonly profiles?: ProfileDirectory;
+  /**
+   * Who created which record (ADR 0009) — the store that answers "may I edit
+   * this? I made it." Always present: in memory mode it is an
+   * `InMemoryOwnershipRegistry`, which is honest rather than merely convenient,
+   * since a runtime whose records do not survive a restart has no durable
+   * ownership to remember either.
+   */
+  readonly ownership: OwnershipRegistry;
   /** Resolves ok when the datastore is reachable; err with a reason otherwise. */
   checkReady(): Promise<Result<{ mode: PersistenceMode }>>;
 }
@@ -94,10 +110,12 @@ export function partialPersistenceOf(runtime: PlatformRuntime): PartialPersisten
 }
 
 export function createMemoryRuntime(overrides: PlatformOverrides = {}): PlatformRuntime {
-  const platform = createBasePlatform(overrides);
+  const ownership = new InMemoryOwnershipRegistry();
+  const platform = createBasePlatform(overrides, ownership);
   return {
     mode: "memory",
     platform,
+    ownership,
     beneficiaryDirectory: new BeneficiaryDirectory(platform.bus),
     // `mode: "memory"` already says every context is volatile; repeating four of
     // them under a "partial" heading would imply the other six are durable.
@@ -130,6 +148,9 @@ export function createSupabaseRuntimeFromClient(
   overrides: PlatformOverrides = {},
   schema: string = AFRIP_SCHEMA,
 ): PlatformRuntime {
+  // Same client, same schema as every other adapter — ownership is stored beside
+  // the data it describes rather than in a second place that can drift.
+  const ownership = new SupabaseOwnershipRegistry(client, schema);
   const platform = createBasePlatform({
     ...overrides,
     repositories: {
@@ -155,6 +176,7 @@ export function createSupabaseRuntimeFromClient(
   return {
     mode: "supabase",
     platform,
+    ownership,
     beneficiaryDirectory: new BeneficiaryDirectory(platform.bus),
     // Same client, same schema as every other adapter: identities are stored
     // beside the data they govern, not in a second place that can drift.

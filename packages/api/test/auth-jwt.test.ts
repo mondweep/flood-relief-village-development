@@ -11,6 +11,7 @@ import {
 } from "../src/auth.js";
 import type { ApiConfig } from "../src/config.js";
 import { createMemoryRuntime } from "../src/persistence.js";
+import { permissionsFor } from "../src/routes/me.js";
 import { startTestServerWith, testConfig, type TestServer } from "./helpers.js";
 
 /**
@@ -140,11 +141,51 @@ describe("Supabase JWT gate", () => {
     const response = await server.request("/me", { token: await signToken() });
 
     expect(response.status).toBe(200);
-    expect(response.body).toEqual({
+    expect(response.body).toMatchObject({
       id: USER_ID,
       email: "officer@darbhanga.gov.in",
       role: "district_officer",
     });
+  });
+
+  /**
+   * The frontend gates its controls on this list (ADR 0009), so it has to be
+   * derived from the server's own policy table rather than restated in the page.
+   * Asserted by membership, not by a full dump: pinning all 48 keys would make
+   * every future permission change a test edit, and the property that matters is
+   * that the list reflects the ROLE.
+   */
+  it("tells GET /me's caller what their role may invoke", async () => {
+    server = await boot();
+
+    const response = await server.request("/me", { token: await signToken() });
+    const permissions = (response.body as { permissions: string[] }).permissions;
+
+    expect(permissions).toContain("fundMonitoring.sanctionProject");
+    expect(permissions).toContain("beneficiaryRegistry.registerBeneficiary");
+    expect(permissions).toContain("villageRegistry.registerVillage");
+  });
+
+  /**
+   * A FINDING, pinned so it cannot be assumed away: `district_officer` currently
+   * holds every key in the table, so it is indistinguishable from `admin` in
+   * capability. Every role set in `permissions.ts` includes it — the officer is
+   * the role that operates the district's whole platform, and the one thing ADR
+   * 0009 reserves to `admin` alone is user management, which has no use case yet
+   * (role grants are a SQL insert into `role_grants`).
+   *
+   * This is not asserted because it is desirable. It is asserted because the
+   * separation reads as though it exists and does not, and the day a genuine
+   * admin-only operation is added, this test should fail and be updated
+   * deliberately rather than the distinction quietly never arriving.
+   */
+  it("gives a district officer every permission there is — admin differs only in name today", async () => {
+    server = await boot();
+
+    const response = await server.request("/me", { token: await signToken() });
+    const permissions = (response.body as { permissions: string[] }).permissions;
+
+    expect(permissions).toEqual(permissionsFor("admin"));
   });
 
   /**

@@ -78,10 +78,25 @@ export function statusForError(message: string): number {
   return NOT_FOUND_PATTERNS.some((pattern) => pattern.test(message)) ? 404 : 400;
 }
 
-/** Maps a use-case Result onto an HTTP response: ok -> successStatus, err -> 400/404. */
+/**
+ * The error body for a failed use case.
+ *
+ * A 403 carries `code` and the others do not, so the frontend can branch on a
+ * discriminant rather than on prose — and so it cannot mistake a refusal for the
+ * 401 that means "refresh your token". Built here rather than at each call site
+ * because both `fromResult` and `fromResultWith` return refusals, and a `code`
+ * present on one path and absent on the other is exactly the inconsistency a
+ * client discovers in production.
+ */
+function errorBody(message: string, status: number): unknown {
+  return status === 403 ? { error: message, code: FORBIDDEN_CODE } : { error: message };
+}
+
+/** Maps a use-case Result onto an HTTP response: ok -> successStatus, err -> 400/403/404. */
 export function fromResult<T>(result: Result<T>, successStatus = 200): HttpResponse {
   if (result.ok) return json(successStatus, result.value);
-  return json(statusForError(result.error), { error: result.error });
+  const status = statusForError(result.error);
+  return json(status, errorBody(result.error, status));
 }
 
 /** Maps a use-case Result, reshaping the ok value (e.g. wrapping a list). */
@@ -91,7 +106,8 @@ export function fromResultWith<T>(
   successStatus = 200,
 ): HttpResponse {
   if (result.ok) return json(successStatus, project(result.value));
-  return json(statusForError(result.error), { error: result.error });
+  const status = statusForError(result.error);
+  return json(status, errorBody(result.error, status));
 }
 
 export function writeResponse(res: ServerResponse, response: HttpResponse): void {
