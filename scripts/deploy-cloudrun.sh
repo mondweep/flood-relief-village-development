@@ -28,7 +28,21 @@ set -euo pipefail
 # `gcloud auth login`, so every call fails ACCESS_TOKEN_TYPE_UNSUPPORTED while
 # `gcloud auth list` still shows the account as active — a confusing pairing.
 # Drop it so the logged-in user's credentials are used.
-unset CLOUDSDK_AUTH_ACCESS_TOKEN
+#
+# AFRIP_USE_ACCESS_TOKEN=1 keeps it instead. That is for the opposite situation
+# and it is a real one: a headless container where `gcloud auth login` cannot
+# prompt, holding a genuine OAuth token obtained out of band. Google enforces
+# periodic reauthentication on cloud-platform scope, so stored gcloud
+# credentials go stale and the only way back in without a browser is to exchange
+# a fresh code and hand the resulting token in here.
+#
+# The distinction is the token's KIND, which this script cannot inspect — so it
+# is the caller's to assert. Set it only when you know the token is a real user
+# OAuth token; a wrong one fails with ACCESS_TOKEN_TYPE_UNSUPPORTED at the first
+# call, which is loud and costs nothing.
+if [[ "${AFRIP_USE_ACCESS_TOKEN:-0}" != "1" ]]; then
+  unset CLOUDSDK_AUTH_ACCESS_TOKEN
+fi
 
 # ---------------------------------------------------------------------------
 # Configuration
