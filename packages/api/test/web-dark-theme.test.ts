@@ -106,16 +106,44 @@ describe("the page does not reference styles it never defines", () => {
    * the markup is generated in places and a full sweep produces false positives
    * that would get the test deleted.
    */
-  it.each(["btn", "linkish", "button-primary", "link-button"])(
-    "does not use the undefined class %s",
-    (name) => {
-      const used = new RegExp(`class="[^"]*\\b${name}\\b[^"]*"`).test(PAGE);
-      const defined = new RegExp(`\\.${name}[\\s,{:]`).test(SHEET);
-      expect(used && !defined, `class="${name}" is used but never defined in the stylesheet`).toBe(
-        false,
-      );
-    },
-  );
+  it.each([
+    "btn",
+    "linkish",
+    "button-primary",
+    "link-button",
+    // The Read me view's own classes. Added because the same mistake was made
+    // twice within an hour — an undefined class renders as unstyled markup and
+    // nothing anywhere reports it.
+    "callout",
+    "rm-views",
+    "rm-steps",
+    "rm-rules",
+  ])("does not use the undefined class %s", (name) => {
+    const used = new RegExp(`class="[^"]*\\b${name}\\b[^"]*"`).test(PAGE);
+    const defined = new RegExp(`\\.${name}[\\s,{:.]`).test(SHEET);
+    expect(used && !defined, `class="${name}" is used but never defined in the stylesheet`).toBe(false);
+  });
+
+  /**
+   * Tag and callout modifiers. `class="tag demo"` with no `.tag.demo` rule falls
+   * back to the plain `.tag` look — legible, so it passes a glance, and wrong,
+   * because "Demo" would then look identical to every other label on the page.
+   * That is the failure mode worth catching: not invisible, just meaningless.
+   */
+  it.each([
+    ["tag", "ok"],
+    ["tag", "demo"],
+    ["tag", "unknown"],
+    ["callout", "warn"],
+  ])('defines the modifier .%s.%s it uses', (base, modifier) => {
+    const used = new RegExp(`class="[^"]*\\b${base}\\s+${modifier}\\b`).test(PAGE);
+    if (!used) return;
+    expect(
+      new RegExp(`\\.${base}\\.${modifier}[\\s,{]`).test(SHEET),
+      `class="${base} ${modifier}" is used but .${base}.${modifier} is never defined, so it renders ` +
+        `identically to a plain .${base} and the distinction it is meant to draw is lost`,
+    ).toBe(true);
+  });
 });
 
 describe("the credits and provenance the footer promises are present", () => {
