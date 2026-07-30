@@ -1,6 +1,6 @@
 # ADR 0012 — Location capture: GPS, map pin or geocode, with provenance recorded
 
-**Status:** Proposed
+**Status:** Accepted — implemented
 
 ## Context
 

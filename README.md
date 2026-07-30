@@ -19,7 +19,7 @@ Built and maintained by [Mondweep Chakravorty](https://www.linkedin.com/in/mondw
 | **[docs/DESIGN.md](docs/DESIGN.md)** | **System design**: context / container / component views, domain flows, eventing, persistence, security model, failure modes, known limitations |
 | **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** | **How to deploy**: Supabase provisioning, Cloud Run, verification, rollback, troubleshooting |
 | [docs/PRD.md](docs/PRD.md) | Product requirements, domain-driven: ubiquitous language, bounded contexts, aggregates and invariants, phased requirements |
-| [docs/adr/](docs/adr/) | **ADRs 0001–0016** — every architectural decision, including the ones that turned out to be wrong and were amended |
+| [docs/adr/](docs/adr/) | **ADRs 0001–0017** — every architectural decision, including the ones that turned out to be wrong and were amended |
 | [docs/incidents/](docs/incidents/) | Post-mortems. Currently one: an id collision that destroyed a village record and misattributed its children |
 | [supabase/](supabase/) | Schema migrations 00001–00009, RLS policies, public transparency views |
 
@@ -51,10 +51,12 @@ Only `packages/api` is a running process; everything else is a library.
 
 ```bash
 npm install
-npm test          # the regression pack — 1,388 tests across 115 files at time of writing
+npm test          # the regression pack — 1,510 tests across 118 files at time of writing
 npm run typecheck # tsc --noEmit, strict
 npm run build     # esbuild bundle; NOT exercised by npm test — see below
 npm run dev       # build + serve on http://localhost:8080, in-memory persistence
+
+scripts/check-migrations.sh   # rehearse the schema (needs PostgreSQL; see below)
 ```
 
 > **`dev` does not watch.** It bundles once, then serves. A build step is mandatory — Node's type
@@ -84,7 +86,8 @@ run.
 | Adapters | Supabase repositories driven through a fake client; no network |
 | API | The real HTTP server on an ephemeral port, real routing, real auth gate |
 | Cross-cutting | Authorization over HTTP per role, audit attribution, ownership, tile-proxy bounds |
-| Frontend | The page parsed as text: permission keys, theme contrast, undefined CSS classes |
+| Frontend | The page parsed as text: permission keys, theme contrast, undefined CSS classes, feedback wiring |
+| Migrations | A separate script, not part of `npm test`, because it needs a database — see below |
 
 Two properties worth knowing, because they are unusual and deliberate:
 
@@ -97,8 +100,10 @@ messages.
 **The frontend is checked statically, because it cannot be checked any other way.** The page is an
 opaque string to the bundler, so the two sides only meet over HTTP. A live 400 on village
 registration once passed 1,300 green tests. The frontend tests assert the things that fail silently:
-permission keys that exist server-side, CSS classes that are actually defined, and colour variables
-used for what they mean rather than what they are named.
+permission keys that exist server-side, CSS classes that are actually defined, colour variables used
+for what they mean rather than what they are named, and — cheapest of all — that the page's 6,700
+lines of inline JavaScript *parse*. A stray brace makes a browser discard the entire script, and the
+document still serves a perfect 200 while every button on it is dead.
 
 ## Deploy pipeline and gates
 
@@ -111,7 +116,7 @@ gcloud auth login mondweep@dxsure.uk
 built or shipped, in this order:
 
 ```
-typecheck  →  npm test  →  npm run build  →  gcloud preflight  →  Cloud Build  →  Cloud Run
+typecheck  →  npm test  →  npm run build  →  migrations  →  gcloud preflight  →  Cloud Build  →  Cloud Run
 ```
 
 Cheapest first, so the fastest signal fails soonest. The gate runs **before** the gcloud preflight —
@@ -125,11 +130,45 @@ or unresolved import is invisible to vitest and fatal at deploy; that break has 
 `SKIP_TESTS=1` bypasses the gate, for re-deploying a revision whose suite already passed when only
 deploy configuration changed. It warns loudly — a silent skip is how a gate stops being one.
 
+### The migration rehearsal
+
+Last in the gate, because it is the most expensive stage and the only one guarding a change with no
+undo. `scripts/check-migrations.sh` (ADR 0017) does three things:
+
+| Check | What fails it |
+|---|---|
+| **Numbering** | A gap or a duplicate — the schema's build order would then be decided by glob order rather than intent |
+| **Append-only** | A migration that has already been applied has been *edited*. Its sha256 is recorded in [`supabase/migrations.sha256`](supabase/migrations.sha256) |
+| **Rehearsal** | The set does not build on an empty database — **or does not survive being applied a second time over the result** |
+
+Pass 2 is not a formality. Migrations get re-run when a deploy is retried or somebody applies the
+folder rather than the one new file, and every migration here is written to survive that. That
+property is invisible on the first pass, when everything is being created anyway; a bare
+`create table` slipping in is caught only by the second.
+
+Editing an applied migration is the one failure with no `--record` escape. It changes only what a
+*fresh* database would build, so production and any new environment diverge silently, and every later
+migration is then written against a schema that exists in exactly one of the two places. Write a new
+migration instead.
+
+**What it does not prove**, because a check believed to cover more than it does is worse than none:
+it runs against a bare PostgreSQL with `auth.uid()`, `auth.jwt()` and the Supabase roles **stubbed**,
+so nothing here says an RLS policy admits the right rows; and it runs against an **empty** database,
+so a `not null` added to a column holding nulls still fails in production and nowhere else.
+
+`MIGRATION_REHEARSAL_URL` points it at a database; with none set it `initdb`s a throwaway cluster
+with no TCP listener. `SKIP_REHEARSAL=1` drops this check alone and warns.
+
 ### CI
 
-[`.github/workflows/regression.yml`](.github/workflows/regression.yml) runs the same pack on every
-push and pull request, on a clean machine from a lockfile install, then boots the bundle and asks it
-for `/health`.
+[`.github/workflows/regression.yml`](.github/workflows/regression.yml) runs on every push and pull
+request, as two jobs:
+
+- **`regression`** — the same pack on a clean machine from a lockfile install, then boots the bundle
+  and asks it for `/health`.
+- **`migrations`** — the rehearsal against a `postgres:17` service container, matching the major
+  version the Supabase project reports. This is the one place `SKIP_REHEARSAL=1` is not honoured: a
+  developer with no PostgreSQL installed gets a partial check locally and a complete one here.
 
 CI does **not** replace the local gate. A green tick on a commit says nothing about the working tree
 `--source` is about to upload — the deploy uploads what is on disk, not what is committed. Both
@@ -153,13 +192,21 @@ made from a feature branch while `main` sat behind, and nothing said so.
 |---|---|
 | **Local** | In-memory, no credentials. `npm run dev` |
 | **Production** | Cloud Run `europe-west2`, Supabase `eu-west-1`. The live URL above |
-| **Staging** | **Does not exist.** See below |
+| **Staging** | **Does not exist**, deliberately. See below |
 
 **There is no staging environment.** Changes go from a developer's machine to production, gated by
-the regression pack and nothing else. That is stated plainly because the alternative — a README
-implying a validation step that is not there — is worse than the gap itself.
+the regression pack and by the migration rehearsal. That is stated plainly because the alternative —
+a README implying a validation step that is not there — is worse than the gap itself.
 
-Building one is cheap and has been assessed rather than guessed:
+ADR 0017 explains why one has not been built, and it comes down to asking which change here has no
+undo. A bad revision is one `gcloud run services update-traffic` away from the previous one; nothing
+about the application layer is irreversible. The schema is: `drop column` takes the data with it, and
+this project has already lost a village record it could not recover. **A staging environment built to
+protect the reversible half, while migrations continued to go straight to production unrehearsed,
+would be effort in the wrong place — and would read as protection.** So the migrations are rehearsed
+and staging is deferred.
+
+The assessment stands for when it is built:
 
 - **The application half is nearly free.** `SUPABASE_SCHEMA` is already parameterised, so a staging
   service is a second Cloud Run deployment pointed at `assam_floods_staging` with the migrations
@@ -167,10 +214,9 @@ Building one is cheap and has been assessed rather than guessed:
 - **Authentication would be shared.** Supabase Auth (GoTrue) is per *project*, so staging and
   production would share one user pool. Only `user_profiles` is schema-scoped, so a person could
   hold different roles in each. Workable, and worth knowing before it surprises somebody.
-- **The highest-value slice is migrations, not the whole environment.** Migrations are the one thing
-  with no undo — the [id-collision incident](docs/incidents/) was unrecoverable. Applying each
-  migration to a staging schema first, before production, gets most of the protection for a fraction
-  of the work.
+- **What staging would add that the rehearsal does not.** The rehearsal runs against a bare
+  PostgreSQL with the Supabase auth functions stubbed and an empty database — so RLS behaviour, real
+  data volumes, and lock duration are all still unverified anywhere but production.
 
 ## Security and identity
 
@@ -211,12 +257,24 @@ because float money drifts and this platform enforces `spent ≤ released ≤ sa
 
 ## Reporting a bug or asking for a feature
 
-Signed-in users can report from inside the app (ADR 0016). Reports carry the exact revision and view
-automatically, so "it worked yesterday" is checkable rather than a discussion.
+Signed-in users report from inside the app: **Report a problem**, in the header, on every view
+(ADR 0016). It is in the header rather than on a tab of its own because the moment somebody notices a
+fault is the moment they are looking at it, and the form records which view that was. Reports carry
+the exact revision, branch and route automatically, so "it worked yesterday" is checkable rather than
+a discussion.
 
 **Do not put names or personal details in a report** — reference a village or record by its
-identifier. Feedback is free text and is readable by administrators only, precisely because it will
-sometimes contain what the beneficiary registry contains.
+identifier, such as `village-3`. The form says so above the fields and again in the box where the
+free text is typed. That instruction will be imperfectly obeyed, which is exactly why the queue is
+readable by `admin` **alone** — narrower than the audit log, which admits district officers too. A
+feedback row is unbounded text written by somebody nobody has briefed, and it will sometimes contain
+what the beneficiary registry contains: the names of widows and orphaned children.
+
+Administrators work the queue from the Operations view — filter by status, move a report to
+`acknowledged`, `resolved` or `declined`. Nothing notifies anybody, so that list *is* how a report
+gets seen. Nothing can delete one either: `delete` and `truncate` are revoked from `service_role`
+itself, because a queue the software being complained about can empty is worth nothing to the person
+who filed into it.
 
 ## How this was built
 

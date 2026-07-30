@@ -1,6 +1,6 @@
 # ADR 0011 — The audit trail is the domain event stream, made durable and attributed
 
-**Status:** Proposed
+**Status:** Accepted — implemented
 
 ## Context
 

@@ -581,6 +581,62 @@ footer a { color: var(--accent-strong); }
 .origin p + p { margin-top: var(--s2); }
 
 /* ==================================================================== *
+ * Reporting a bug or asking for a feature (ADR 0016)
+ * ==================================================================== */
+/* A native <dialog>, not a hand-rolled overlay. `showModal()` already gives the
+   focus trap, the Escape key, the inert background and the top-layer stacking —
+   all of which a bespoke div gets subtly wrong, and none of which is worth
+   re-implementing for a form that is opened for thirty seconds at a time.
+
+   It opens from the header, so it is reachable from every view. That is the
+   point: the moment somebody notices a fault is the moment they are looking at
+   it, and a report form that lives on one tab is a form that gets reached after
+   the user has navigated away from the thing they wanted to describe. */
+.report-dialog {
+  width: min(680px, calc(100vw - 2 * var(--s3)));
+  padding: 0; border: 1px solid var(--line-strong); border-radius: var(--radius);
+  background: var(--surface); color: var(--ink); box-shadow: var(--shadow);
+}
+.report-dialog::backdrop { background: rgb(0 0 0 / 0.55); }
+.report-body { padding: var(--s4); max-height: min(80vh, 720px); overflow-y: auto; }
+.report-head { display: flex; gap: var(--s2); align-items: flex-start; justify-content: space-between; }
+.report-head h3 { margin: 0; }
+/* The context strip: what is attached to the report without anyone typing it.
+   Shown rather than merely collected, because a form that silently ships the
+   page you were on and your browser string is a form that surprises somebody
+   later. There is nothing here that is not already in every request log. */
+.report-context {
+  margin-top: var(--s3); padding: var(--s2) var(--s3);
+  background: var(--surface-2); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  font-size: 0.75rem; color: var(--ink-muted);
+}
+.report-context dl { display: grid; grid-template-columns: auto 1fr; gap: 2px var(--s3); margin: 6px 0 0; }
+.report-context dt { font-weight: 600; color: var(--ink); }
+.report-context dd { margin: 0; overflow-wrap: anywhere; }
+/* A group of buttons is labelled by a span, not a <label> — a <label> with no
+   form control to point at is a lie to a screen reader. Styled to match one. */
+.field-label { font-size: 0.875rem; font-weight: 500; }
+.report-kinds { display: flex; flex-wrap: wrap; gap: var(--s2); }
+.report-kinds button { width: auto !important; font-size: 0.8125rem; padding: 7px 12px; }
+.report-kinds button[aria-pressed="true"] {
+  background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+}
+
+/* The administrator's queue. One row per report, newest first. */
+.feedback-list { list-style: none; margin: var(--s3) 0 0; padding: 0; display: grid; gap: var(--s2); }
+.feedback-list li { margin: 0; }
+.feedback-row {
+  padding: var(--s3); border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: var(--surface-2);
+}
+.feedback-row-head { display: flex; flex-wrap: wrap; gap: var(--s2); align-items: baseline; }
+.feedback-summary { font-weight: 600; flex: 1 1 20ch; }
+.feedback-detail { margin-top: var(--s2); font-size: 0.875rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.feedback-meta { margin-top: var(--s2); font-size: 0.75rem; color: var(--ink-muted); overflow-wrap: anywhere; }
+.feedback-actions { display: flex; flex-wrap: wrap; gap: var(--s2); margin-top: var(--s2); }
+.feedback-actions button { width: auto !important; font-size: 0.8125rem; padding: 6px 10px; }
+
+/* ==================================================================== *
  * 5. Motion — honour the OS preference
  * ==================================================================== */
 @media (prefers-reduced-motion: reduce) {
@@ -612,6 +668,15 @@ footer a { color: var(--accent-strong); }
       <button type="button" class="pill theme-toggle" id="theme-toggle" aria-pressed="false">
         <span class="theme-icon" id="theme-icon" aria-hidden="true">◐</span>
         <span id="theme-label">Theme</span>
+      </button>
+      <!-- ADR 0016. In the header rather than on a tab of its own, because the
+           moment somebody notices a fault is the moment they are looking at it,
+           and the form records which view that was. Hidden entirely when there
+           is no session: submission is signed-in only, so offering the control
+           to a signed-out reader would be an invitation to a 403. -->
+      <button type="button" class="pill hidden" id="report-open">
+        <span aria-hidden="true">✎</span>
+        <span>Report a problem</span>
       </button>
       <p class="pill" id="conn" aria-live="polite">
         <span class="dot pending" id="conn-dot" aria-hidden="true"></span>
@@ -1084,6 +1149,39 @@ footer a { color: var(--accent-strong); }
     <!-- Workflow forms are generated from the WORKFLOW_GROUPS spec in script §8. -->
     <div class="section hidden" id="workflows" aria-label="Operational workflows"></div>
 
+    <!-- ADR 0016: the reports queue. `admin` ALONE, deliberately narrower than
+         the audit log's admin + district officer, because a feedback row is
+         unbounded free text written by somebody nobody has briefed and it will
+         therefore sometimes name a beneficiary.
+
+         Hidden here is cosmetic — GET /feedback refuses every other role — but
+         it also means a district officer is never shown a queue they cannot
+         open. Nothing notifies anybody, so this panel IS how a report is seen. -->
+    <div class="section hidden" id="feedback-admin" aria-labelledby="h-feedback-admin">
+      <h3 id="h-feedback-admin">Reported problems and requests</h3>
+      <p class="section-note">Everything users have sent from the <em>Report a problem</em> button.
+         Nothing notifies anyone, so this list is the only place reports are seen. Reporters are
+         asked not to type names; when one does anyway, this is the smallest set of people who can
+         read it.</p>
+      <div class="card">
+        <div class="card-head">
+          <span class="card-title">Queue</span>
+          <span class="chip-row" id="feedback-filters" role="group" aria-label="Filter by status">
+            <!-- `FEEDBACK_STATUSES`, verbatim. GET /feedback?status= REFUSES a
+                 value outside the closed set rather than ignoring it, so a
+                 mistyped one here is a 400, not a silently empty queue. -->
+            <button type="button" class="tiny secondary" data-fstatus="" aria-pressed="true">All</button>
+            <button type="button" class="tiny secondary" data-fstatus="open" aria-pressed="false">Open</button>
+            <button type="button" class="tiny secondary" data-fstatus="acknowledged" aria-pressed="false">Acknowledged</button>
+            <button type="button" class="tiny secondary" data-fstatus="resolved" aria-pressed="false">Resolved</button>
+            <button type="button" class="tiny secondary" data-fstatus="declined" aria-pressed="false">Declined</button>
+          </span>
+        </div>
+        <div id="feedback-queue" aria-live="polite"></div>
+        <div class="msg" id="feedback-admin-msg" role="status" aria-live="polite"></div>
+      </div>
+    </div>
+
     <!-- Identifier suggestions. Village/NGO lists come from the API; the rest are ids
          minted in this tab, held in memory only and never persisted. -->
     <datalist id="dl-villages"></datalist>
@@ -1137,6 +1235,89 @@ footer a { color: var(--accent-strong); }
     </dl>
   </footer>
 </main>
+
+<!-- ================================================================
+     REPORT A PROBLEM (ADR 0016)
+
+     Outside <main> because it is chrome, not content: it belongs to no view
+     and is reachable from all of them.
+
+     THE PII WARNING IS THE PART THAT MATTERS. Feedback is unbounded free text
+     written by somebody nobody has briefed, on a platform whose registry holds
+     the names of widows and orphaned children. The instruction to name records
+     by identifier rather than by person is therefore placed above the fields
+     and repeated in the detail box's own placeholder — not tucked into a hint
+     below, where it is read after the typing is done.
+
+     It will be imperfectly obeyed. That is why the read side is `admin` alone
+     (see routes/feedback.ts): the wording reduces how often a name is typed,
+     and the role check bounds who sees it when the wording fails.
+     ================================================================ -->
+<dialog class="report-dialog" id="report-dialog" aria-labelledby="h-report">
+  <!-- A real submit form, NOT `method="dialog"`. With `method="dialog"` the
+       Enter key inside the summary field closes the dialog and throws the typed
+       report away, silently, which is the worst possible failure for a form
+       whose entire purpose is that somebody bothered to tell us something. -->
+  <form class="report-body" id="report-form" novalidate>
+    <div class="report-head">
+      <h3 id="h-report">Report a problem or ask for a feature</h3>
+      <button type="button" class="link" id="report-close">Close</button>
+    </div>
+
+    <div class="callout warn" id="report-pii">
+      <p><strong>Please do not type anyone's name, phone number or address.</strong> Refer to a
+         village, a beneficiary or an issue by its <strong>identifier</strong> — the code shown on
+         the record, such as <code>village-1</code> — and we can look the rest up.</p>
+      <p>Reports are free text and are read by administrators. Identifiers are enough to find the
+         record; names in a bug report are personal data sitting somewhere it does not belong.</p>
+    </div>
+
+    <div class="field">
+      <span class="field-label" id="report-kind-label">What is this?</span>
+      <div class="report-kinds" role="group" aria-labelledby="report-kind-label" id="report-kinds">
+        <!-- These three ARE `FEEDBACK_KINDS` in packages/api/src/feedback.ts, and
+             the set is closed there: a fourth button added here without adding it
+             to that list, to the 00009 CHECK constraint and to the ADR would send
+             a value the API refuses with a 400 naming a field the user never
+             filled in. `web-feedback.test.ts` pins the two lists together. -->
+        <button type="button" class="secondary" data-kind="bug" aria-pressed="true">Something is broken</button>
+        <button type="button" class="secondary" data-kind="feature" aria-pressed="false">I would like a feature</button>
+        <button type="button" class="secondary" data-kind="other" aria-pressed="false">Something else</button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="report-summary">One line saying what happened</label>
+      <input id="report-summary" name="summary" type="text" maxlength="200" required
+             placeholder="The recovery score on village-3 shows as 0"
+             aria-describedby="report-summary-error">
+      <p class="field-error" id="report-summary-error"></p>
+    </div>
+
+    <div class="field">
+      <label for="report-detail">What were you doing, and what did you expect? (optional)</label>
+      <textarea id="report-detail" name="detail" rows="5" maxlength="4000"
+                placeholder="Use record identifiers, not names. For example: opened village-3, pressed Recalculate, the bar stayed at 0 but the funds panel updated."
+                aria-describedby="report-detail-error"></textarea>
+      <p class="field-error" id="report-detail-error"></p>
+    </div>
+
+    <div class="report-context">
+      <span>Attached automatically, so you do not have to know it:</span>
+      <dl>
+        <dt>Revision</dt><dd id="report-ctx-build">not reported</dd>
+        <dt>View</dt><dd id="report-ctx-view">—</dd>
+        <dt>Reported by</dt><dd id="report-ctx-who">—</dd>
+      </dl>
+    </div>
+
+    <div class="actions">
+      <button type="submit" id="report-submit">Send report</button>
+      <button type="button" class="secondary" id="report-cancel">Cancel</button>
+    </div>
+    <div class="msg" id="report-msg"></div>
+  </form>
+</dialog>
 
 <script>
 "use strict";
@@ -1345,14 +1526,20 @@ function unlocked() {
   // the names, household composition and aid history of widows and orphaned
   // children are no longer reachable by everyone who holds a valid token.
   //
-  // What ADR 0009 does NOT make true, and must not be read into the above: the
-  // 00004 trigger still fires on any insert into `auth.users`, which on a shared
-  // Supabase project is everyone's table. A neighbouring application's signup is
-  // STILL auto-enrolled as an AFRIP `citizen` with nobody here deciding so.
-  // Role enforcement shrank the blast radius of that enrolment; it did not close
-  // it. Closing it is a change to the trigger or to the project boundary, not to
-  // the policy table, and it remains open and escalated. Nothing a browser does
-  // could close it, and nothing here should be written as though it had.
+  // This comment used to say the gap was still open: that 00004's trigger fired
+  // on every insert into `auth.users` — everyone's table, on a shared project —
+  // so a neighbouring application's signup became an AFRIP `citizen` with nobody
+  // here deciding so. ADR 0014 CLOSED IT. The trigger was removed and enrolment
+  // became an explicit `POST /me/enrolment`; the live project now carries no
+  // trigger on `auth.users` and 22 auth accounts against 0 unasked-for profiles.
+  //
+  // What has NOT changed is the reason this function is careful. A verified
+  // token from a neighbouring application still arrives looking perfect, and the
+  // thing that refuses it is the profile check — not the token, not the issuer,
+  // not anything a browser can see. `noAccess` is that refusal, and presenting
+  // the operational surface without consulting it would offer a register of
+  // beneficiaries to somebody who has never had anything to do with this
+  // platform.
   if (state.auth.noAccess) return false;
   return Boolean(state.token) || state.authOpen === true;
 }
@@ -1612,6 +1799,16 @@ const state = {
     noAccess: false
   },
   view: "public",
+  /**
+   * `{ branch, commit, repository }` as GET /health reported it, or null before
+   * the first health check answers.
+   *
+   * Kept in state rather than read back out of the footer's DOM because a bug
+   * report has to name the revision it was seen on (ADR 0016), and scraping it
+   * from rendered markup would break the moment that markup is restyled — with
+   * no test able to notice, because both would still "work".
+   */
+  build: null,
   villageId: null,          // selection for the Village view
   ngoId: null,              // selection for the NGO view
   villages: [],             // public village summaries
@@ -1664,7 +1861,10 @@ function loadView(view) {
   if (view === "district") { loadDistrictView(); return; }
   if (view === "ngo") { loadNgoView(); return; }
   if (view === "villages") { loadVillagesView(); return; }
-  if (view === "ops") { applyAuthState(); return; }
+  // applyAuthState shows or hides the queue; loading it is separate so that
+  // returning to this tab re-reads it rather than showing what was there when
+  // the session started.
+  if (view === "ops") { applyAuthState(); loadFeedbackQueue(); return; }
 }
 
 /** Re-reads the current view plus the always-on service indicators. */
@@ -1883,6 +2083,9 @@ async function checkHealth() {
       : "";
   }
 
+  // Held for the footer AND for the feedback form, which must state the exact
+  // revision a fault was seen on rather than asking the reporter to know it.
+  state.build = data.build && typeof data.build === "object" ? data.build : null;
   renderBuildFooter(data.build);
 }
 
@@ -4356,6 +4559,12 @@ function applyAuthState() {
   // just signed in is watched from that moment rather than from the first time
   // the user happens to move the pointer.
   if (connected) { if (!idleTimer) noteActivity(); } else { stopIdleWatch(); }
+
+  // ADR 0016. Follows the session for the same reason the pill does: the report
+  // button is signed-in only and the queue is admin only, and both have to
+  // appear the moment a sign-in makes them reachable rather than on the next
+  // navigation.
+  applyFeedbackAvailability();
 }
 
 /**
@@ -6391,7 +6600,279 @@ function openWorkflow(id, prefill) {
 }
 
 /* ====================================================================
- * SCRIPT §9 — boot and delegated events
+ * SCRIPT §9 — reporting a problem, and the administrator's queue (ADR 0016)
+ * ====================================================================
+ *
+ * Two halves with deliberately different reach.
+ *
+ * The FORM is open to every signed-in account, because the people who will find
+ * version 1's faults are field workers and district officers, not the person who
+ * built it. The QUEUE is `admin` alone — narrower than the audit log — because a
+ * report is unbounded free text written by somebody nobody has briefed, and it
+ * will therefore sometimes name a beneficiary.
+ *
+ * Both gates here are COSMETIC, like `can()`. `POST /feedback` refuses an
+ * unidentified caller and `GET /feedback` refuses every non-admin role; hiding
+ * the controls only spares people a 403 they could do nothing about.
+ * ==================================================================== */
+
+/** The closed set in `packages/api/src/feedback.ts`. Not a display list. */
+const FEEDBACK_KINDS = ["bug", "feature", "other"];
+
+/** Which kind the open dialog is filing. Reset every time it opens. */
+let reportKind = "bug";
+
+/** The status filter on the administrator's queue; "" means every status. */
+let feedbackFilter = "";
+
+/**
+ * The route the reporter was looking at when they pressed the button.
+ *
+ * CAPTURED AT OPEN, not at submit, and that ordering is the whole value of the
+ * field. The dialog does not navigate, so today the two are the same — but the
+ * first time somebody adds "jump to the village" inside this form, a
+ * submit-time read would quietly start recording where the reporter ended up
+ * instead of where the fault was.
+ */
+let reportViewPath = null;
+
+/** True when this account may file a report at all — cosmetic; see the header. */
+function canReport() {
+  return Boolean(state.token) && !state.auth.noAccess;
+}
+
+/** True when this account may read the queue. `admin` alone (ADR 0016). */
+function canReadFeedback() {
+  return canReport() && actorRole() === "admin";
+}
+
+/** Shows or hides both halves. Called from applyAuthState, so it follows sign-in. */
+function applyFeedbackAvailability() {
+  const open = $("#report-open");
+  if (open) open.classList.toggle("hidden", !canReport());
+
+  const panel = $("#feedback-admin");
+  if (panel) panel.classList.toggle("hidden", !canReadFeedback());
+
+  // Signing out with the dialog open would leave a form on screen whose submit
+  // can only 403. Close it rather than let it sit there looking usable.
+  const dialog = $("#report-dialog");
+  if (dialog && dialog.open && !canReport()) dialog.close();
+}
+
+function setReportKind(kind) {
+  reportKind = FEEDBACK_KINDS.indexOf(kind) !== -1 ? kind : "bug";
+  $$("#report-kinds button").forEach(function (button) {
+    button.setAttribute("aria-pressed", String(button.getAttribute("data-kind") === reportKind));
+  });
+}
+
+/**
+ * Fills the "attached automatically" strip.
+ *
+ * SHOWN, not merely collected. A form that silently ships the page you were on,
+ * your account and your browser string is a form that surprises somebody later;
+ * there is nothing here that is not already in every request log, and saying so
+ * costs three lines.
+ */
+function renderReportContext() {
+  const build = state.build;
+  const stamped = build && typeof build.branch === "string" && typeof build.commit === "string";
+  $("#report-ctx-build").textContent = stamped
+    ? build.commit + " on " + build.branch
+    : "not reported by this revision";
+  $("#report-ctx-view").textContent = reportViewPath || "—";
+  const user = state.auth.user || {};
+  $("#report-ctx-who").textContent = user.email
+    ? user.email + (user.role ? " · " + words(user.role) : "")
+    : "your signed-in account";
+}
+
+function openReport() {
+  const dialog = $("#report-dialog");
+  if (!dialog || !canReport()) return;
+
+  reportViewPath = String(location.hash || "#/public");
+  setReportKind("bug");
+  $("#report-summary").value = "";
+  $("#report-detail").value = "";
+  $("#report-summary-error").textContent = "";
+  $("#report-detail-error").textContent = "";
+  setMsg($("#report-msg"), null);
+  renderReportContext();
+
+  // `showModal`, not `show`: the focus trap, the Escape key, the inert
+  // background and the top-layer stacking all come with it.
+  dialog.showModal();
+  $("#report-summary").focus({ preventScroll: true });
+}
+
+async function submitReport() {
+  const summaryEl = $("#report-summary");
+  const summary = String(summaryEl.value || "").trim();
+  const error = $("#report-summary-error");
+  if (summary === "") {
+    error.textContent = "Say in one line what happened — this is what an administrator reads first.";
+    summaryEl.focus();
+    return;
+  }
+  error.textContent = "";
+
+  const detail = String($("#report-detail").value || "").trim();
+  const build = state.build || {};
+  const button = $("#report-submit");
+  button.disabled = true;
+  setMsg($("#report-msg"), "info", "Sending…", "");
+
+  /*
+   * THE REPORTER IS NOT IN THIS BODY, and must never be added to it.
+   *
+   * `routes/feedback.ts` builds the reporter from `ctx.actor` and reads nothing
+   * from the body — a `reporterId` here would be ignored, not merged. Sending
+   * one anyway would be a page asserting an identity it does not establish, and
+   * the next person to read this would reasonably assume the server trusts it.
+   *
+   * The context fields ARE from here, because the page knows the revision and
+   * the route and the server does not. A client can lie about them; the
+   * consequence is a misleading bug report, which is accepted.
+   */
+  const res = await api("/feedback", {
+    method: "POST",
+    body: {
+      kind: reportKind,
+      summary: summary,
+      detail: detail === "" ? null : detail,
+      buildCommit: typeof build.commit === "string" ? build.commit : null,
+      buildBranch: typeof build.branch === "string" ? build.branch : null,
+      viewPath: reportViewPath,
+      // From the body because RequestContext carries no headers; see
+      // routes/feedback.ts for why that is no weaker than reading the header.
+      userAgent: String(navigator.userAgent || "").slice(0, 500)
+    }
+  });
+  button.disabled = false;
+
+  if (res.network) {
+    setMsg($("#report-msg"), "error", "Could not reach the service.",
+      "Your report has not been sent. The text is still here — try again in a moment.");
+    return;
+  }
+  if (isForbidden(res)) {
+    setMsg($("#report-msg"), "error", "Reports need a signed-in account.",
+      "Sign in on the Operations tab and try again. Nothing you typed has been lost.");
+    return;
+  }
+  if (!res.ok) {
+    const why = res.data && res.data.error ? esc(String(res.data.error)) : "the service refused it";
+    setMsg($("#report-msg"), "error", "That was not accepted.", why);
+    return;
+  }
+
+  // The id is shown because it is the only handle either side has: nothing
+  // notifies anybody, so "report feedback-… " is how a person asks what became
+  // of it.
+  const id = res.data && res.data.id ? String(res.data.id) : "";
+  setMsg($("#report-msg"), "ok", "Thank you — that has been recorded.",
+    "An administrator will see it in the reports queue."
+    + (id ? " Your reference is <code>" + esc(id) + "</code>." : ""));
+  $("#report-summary").value = "";
+  $("#report-detail").value = "";
+  if (canReadFeedback()) loadFeedbackQueue();
+}
+
+/* --- The administrator's queue --------------------------------------- */
+
+/** The statuses an administrator can move a report to. `FEEDBACK_STATUSES`. */
+const FEEDBACK_STATUS_ACTIONS = ["open", "acknowledged", "resolved", "declined"];
+
+function feedbackKindLabel(kind) {
+  if (kind === "bug") return "Bug";
+  if (kind === "feature") return "Feature request";
+  return "Other";
+}
+
+/**
+ * Renders one report.
+ *
+ * The reporter is shown by EMAIL, because the point of the queue is that
+ * somebody can go back to the person who noticed — and an opaque uuid cannot be
+ * gone back to. That is the reporter's own address, which they knowingly hold an
+ * account under; it is not the beneficiary data the PII warning is about.
+ */
+function feedbackRow(report) {
+  const branch = report.buildBranch ? " (" + esc(report.buildBranch) + ")" : "";
+  const where = [
+    report.viewPath ? "at " + esc(report.viewPath) : null,
+    report.buildCommit ? "on " + esc(report.buildCommit) + branch : null
+  ].filter(Boolean).join(" · ");
+
+  const actions = FEEDBACK_STATUS_ACTIONS.filter(function (s) { return s !== report.status; })
+    .map(function (status) {
+      return '<button type="button" class="tiny secondary" data-action="feedback-status" '
+        + "data-payload='" + JSON.stringify({ id: report.id, status: status }) + "'>"
+        + esc(words(status)) + "</button>";
+    }).join("");
+
+  return '<li><div class="feedback-row">'
+    + '<div class="feedback-row-head">'
+    + '<span class="feedback-summary">' + esc(report.summary) + "</span>"
+    + '<span class="tag">' + esc(feedbackKindLabel(report.kind)) + "</span>"
+    + '<span class="tag' + (report.status === "resolved" ? " ok" : "") + '">'
+    + esc(words(report.status)) + "</span>"
+    + "</div>"
+    + (report.detail ? '<div class="feedback-detail">' + esc(report.detail) + "</div>" : "")
+    + '<div class="feedback-meta">'
+    + esc(report.reporterEmail || report.reporterId || "unattributed")
+    + (report.reporterRole ? " · " + esc(words(report.reporterRole)) : "")
+    + " · " + esc(when(report.createdAt))
+    + (where ? " · " + where : "")
+    + "</div>"
+    + '<div class="feedback-actions">' + actions + "</div>"
+    + "</div></li>";
+}
+
+async function loadFeedbackQueue() {
+  if (!canReadFeedback()) return;
+  const out = $("#feedback-queue");
+  const msg = $("#feedback-admin-msg");
+  out.innerHTML = '<p class="hint">Loading…</p>';
+
+  const res = await api("/feedback" + (feedbackFilter ? "?status=" + encodeURIComponent(feedbackFilter) : ""));
+  if (res.network || !res.ok) {
+    out.innerHTML = "";
+    // Never an empty list on failure. "No reports" and "we could not ask" look
+    // identical to the reader, and only one of them means nobody has complained.
+    const why = res.data && res.data.error ? esc(String(res.data.error)) : "the service did not answer";
+    setMsg(msg, "error", "The queue could not be read.", why);
+    return;
+  }
+  setMsg(msg, null);
+
+  const reports = res.data && Array.isArray(res.data.reports) ? res.data.reports : [];
+  if (reports.length === 0) {
+    out.innerHTML = '<p class="hint">'
+      + (feedbackFilter ? "No reports with that status." : "Nobody has reported anything yet.")
+      + "</p>";
+    return;
+  }
+  out.innerHTML = '<ul class="feedback-list">' + reports.map(feedbackRow).join("") + "</ul>"
+    + (res.data.nextCursor
+      ? '<p class="hint">Older reports exist beyond this page.</p>'
+      : "");
+}
+
+async function setFeedbackStatus(id, status) {
+  const res = await api("/feedback/" + encodeURIComponent(id), { method: "PATCH", body: { status: status } });
+  if (res.network || !res.ok) {
+    const why = res.data && res.data.error ? esc(String(res.data.error)) : "the service did not answer";
+    setMsg($("#feedback-admin-msg"), "error", "That status was not saved.", why);
+    return;
+  }
+  loadFeedbackQueue();
+}
+
+/* ====================================================================
+ * SCRIPT §10 — boot and delegated events
  * ==================================================================== */
 
 /** One listener for every action button rendered into a list. */
@@ -6405,7 +6886,31 @@ document.addEventListener("click", function (event) {
   if (action === "village") { goto("villages", payload.villageId || state.villageId); return; }
   if (action === "amend") { openAmendment(payload.panel); return; }
   if (action === "ngo") { state.ngoId = payload.ngoId || state.ngoId; goto("ngo", state.ngoId); return; }
+  if (action === "feedback-status") { setFeedbackStatus(payload.id, payload.status); return; }
   if (VIEWS.indexOf(action) !== -1) goto(action);
+});
+
+/* --- ADR 0016 wiring ------------------------------------------------- */
+
+$("#report-open").addEventListener("click", openReport);
+$("#report-close").addEventListener("click", function () { $("#report-dialog").close(); });
+$("#report-cancel").addEventListener("click", function () { $("#report-dialog").close(); });
+$("#report-form").addEventListener("submit", function (event) {
+  event.preventDefault();
+  submitReport();
+});
+$("#report-kinds").addEventListener("click", function (event) {
+  const button = event.target.closest ? event.target.closest("button[data-kind]") : null;
+  if (button) setReportKind(button.getAttribute("data-kind"));
+});
+$("#feedback-filters").addEventListener("click", function (event) {
+  const button = event.target.closest ? event.target.closest("button[data-fstatus]") : null;
+  if (!button) return;
+  feedbackFilter = button.getAttribute("data-fstatus") || "";
+  $$("#feedback-filters button").forEach(function (other) {
+    other.setAttribute("aria-pressed", String(other === button));
+  });
+  loadFeedbackQueue();
 });
 
 /** Opens one of the three amendment panels on the village detail view. */

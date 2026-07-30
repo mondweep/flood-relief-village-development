@@ -116,7 +116,7 @@ die()  { printf '\n%s[fatal]%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
 if [[ "${SKIP_TESTS:-0}" == "1" ]]; then
   warn "SKIP_TESTS=1 — regression pack NOT run. Nothing has verified this tree."
 else
-  step "Regression pack (typecheck, ${TEST_LABEL:-full suite}, bundle)"
+  step "Regression pack (typecheck, ${TEST_LABEL:-full suite}, bundle, migrations)"
   info "Running from ${REPO_ROOT}"
   npm --prefix "$REPO_ROOT" run typecheck >/dev/null 2>&1 \
     || die "typecheck failed. Run 'npm run typecheck' to see it. Nothing was deployed."
@@ -127,6 +127,24 @@ else
   npm --prefix "$REPO_ROOT" run build >/dev/null 2>&1 \
     || die "the bundle failed to build. Run 'npm run build' to see it. Nothing was deployed."
   info "bundle built"
+
+  # MIGRATION SAFETY, and it is last in the gate for a reason: it is the most
+  # expensive check (it starts a PostgreSQL cluster) and it is also the one
+  # guarding the only thing here with no undo. A bad revision rolls back with
+  # `update-traffic`; a `drop column` takes the data with it, and this project
+  # has already lost a village record it could not get back.
+  #
+  # It checks that migration numbering is contiguous, that no already-applied
+  # migration has been edited since, and that the whole set applies to an empty
+  # database twice over. See scripts/check-migrations.sh for what it deliberately
+  # does NOT prove — in particular that it rehearses against an EMPTY database,
+  # so a constraint that only fails against real rows still fails in production.
+  #
+  # SKIP_REHEARSAL=1 is honoured by that script and drops the third check when
+  # no PostgreSQL is available; it warns, and the first two still run.
+  "$REPO_ROOT/scripts/check-migrations.sh" >/dev/null 2>&1 \
+    || die "the migration check failed. Run 'scripts/check-migrations.sh' to see it. Nothing was deployed."
+  info "migrations rehearsed"
 fi
 
 step "Preflight checks"

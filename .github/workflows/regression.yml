@@ -95,3 +95,54 @@ jobs:
           echo "the bundle did not answer /health within 20s"
           kill $SERVER 2>/dev/null || true
           exit 1
+
+  # ---------------------------------------------------------------------
+  # The migration rehearsal, as its own job.
+  #
+  # SEPARATE FROM THE SUITE ON PURPOSE. It needs a database and the suite
+  # does not — every test above runs against in-memory fakes or a fake
+  # Supabase client, by design, so folding this in would make the whole
+  # regression pack wait on a service container it has no use for.
+  #
+  # This is the piece that replaces a staging environment rather than
+  # deferring one. Migrations are the only change here with no undo: a bad
+  # revision rolls back with `update-traffic`, a `drop column` does not give
+  # the data back. So the schema is built from nothing on a real PostgreSQL,
+  # and then the same set is applied AGAIN over the result — the pass that
+  # catches a migration which is not safe to re-run.
+  # ---------------------------------------------------------------------
+  migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      # 17, matching the Supabase project this deploys against (checked, not
+      # assumed: that project reports 17.6). A rehearsal on a different major
+      # version rehearses a different database — and this is the check whose
+      # whole value is that it runs somewhere production-shaped first.
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: afrip
+          POSTGRES_PASSWORD: rehearsal
+          POSTGRES_DB: rehearsal
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U afrip"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install the psql client
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends postgresql-client
+
+      # No SKIP_REHEARSAL here, ever. On a developer's machine the third check
+      # can be skipped when no PostgreSQL is installed; this job exists so that
+      # there is one place where it cannot be.
+      - name: Rehearse the migrations
+        env:
+          MIGRATION_REHEARSAL_URL: postgres://afrip:rehearsal@localhost:5432/rehearsal
+        run: ./scripts/check-migrations.sh
