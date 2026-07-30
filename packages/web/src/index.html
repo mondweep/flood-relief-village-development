@@ -768,6 +768,9 @@ footer a { color: var(--accent-strong); }
         <div class="tile"><dt>Avg. recovery</dt><dd id="t-recovery">—</dd></div>
       </dl>
       <div class="chip-row" id="sev-row" style="margin-top:12px"></div>
+      <!-- Filled by renderStats when demonstration records exist, so the tiles
+           and the list below cannot appear to disagree. -->
+      <p class="callout warn hidden" id="pub-demo-note"></p>
     </section>
 
     <section class="section" aria-labelledby="h-pub-funds">
@@ -2001,7 +2004,24 @@ function deriveStats(villages) {
 function renderStats(stats, hasNgoFigure) {
   const bySeverity = stats.bySeverity || {};
   const total = typeof stats.totalVillages === "number" ? stats.totalVillages : state.villages.length;
-  $("#t-villages").textContent = String(total);
+
+  /**
+   * `totalVillages` now counts REAL villages only — demonstration records are
+   * excluded from every figure on this row. That makes the tile honest and the
+   * page briefly dishonest by omission: without the line below, a visitor sees
+   * "1 village" above a list showing four, and concludes the count is broken.
+   *
+   * So the demonstration count is stated beside it rather than folded in or left
+   * out. A tile reading "4" that silently meant one real village and three
+   * fabrications is precisely what the 2026-07-28 incident warns against; a tile
+   * reading "1" with three unexplained rows underneath is the same failure with
+   * better arithmetic.
+   */
+  const demos = typeof stats.demonstrationVillages === "number" ? stats.demonstrationVillages : 0;
+  $("#t-villages").innerHTML = esc(String(total))
+    + (demos > 0
+        ? ' <small>+ ' + esc(String(demos)) + " demo</small>"
+        : "");
   $("#t-acute").textContent = String((bySeverity.critical || 0) + (bySeverity.severe || 0));
 
   const ngoEl = $("#t-ngo");
@@ -2020,6 +2040,21 @@ function renderStats(stats, hasNgoFigure) {
     return '<span class="chip" data-severity="' + severity + '"><span class="swatch" aria-hidden="true"></span>'
       + severity + ' <span class="count">' + (bySeverity[severity] || 0) + "</span></span>";
   }).join("");
+
+  // Says once, in prose, what the "+ N demo" on the tile means. Without it the
+  // suffix is a puzzle; a reader should not have to work out why the numbers on
+  // this page do not add up to the list below it.
+  const note = $("#pub-demo-note");
+  if (note) {
+    note.innerHTML = demos > 0
+      ? "These figures count <strong>" + esc(String(total)) + "</strong> real "
+        + (total === 1 ? "village" : "villages") + ". A further <strong>" + esc(String(demos))
+        + "</strong> demonstration " + (demos === 1 ? "record is" : "records are")
+        + ' listed below and marked <span class="tag demo">Demo</span>; '
+        + "they are excluded from every total on this page."
+      : "";
+    note.classList.toggle("hidden", demos === 0);
+  }
 }
 
 function renderPublicVillages() {
