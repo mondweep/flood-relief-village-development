@@ -31,18 +31,45 @@ describe("the village form captures provenance", () => {
   });
 
   /**
-   * The ISSUE form still takes a raw lat/lng, and that is correct rather than an
-   * oversight. ADR 0012 §Consequences says `Issue` "should adopt the same value
-   * object — a citizen's phone GPS on a broken bridge is exactly the high-trust
-   * case worth distinguishing — but that is follow-on work, not part of this
-   * decision", and `POST /issues` accordingly still validates a bare coordinate.
+   * THE ISSUE FORM NOW USES THE CAPTURE CONTROL TOO — half of what ADR 0012
+   * deferred, and the half that was hurting somebody.
    *
-   * Asserted so the inconsistency is deliberate and visible. When Issue does
-   * adopt provenance, this test is the one that should fail and be deleted.
+   * The previous version of this test asserted the opposite and said "when Issue
+   * does adopt provenance, this test is the one that should fail and be
+   * deleted". It failed, as designed. It is replaced rather than deleted,
+   * because the deferral did not go away — it moved.
+   *
+   * What changed: the INPUT. Two decimal fields typed by hand became "use my
+   * location", a map pin and a place-name search. That gap fell on the person
+   * least able to absorb it — a village is registered once at a desk by somebody
+   * holding the coordinates, an issue is reported in the field on a phone by
+   * whoever is standing next to the contaminated handpump.
+   *
+   * What did NOT change: the STORAGE. `POST /issues` still takes a bare pair,
+   * there are no `geo_source` / `geo_accuracy_metres` / `geo_captured_at`
+   * columns on `issue_tracking_issues`, and the form therefore captures the
+   * provenance and discards it. Carrying it through needs a migration and a
+   * change to the Issue aggregate.
+   *
+   * So this is now the pin on the SMALLER remaining deferral. When Issue does
+   * adopt provenance, this is again the test that should fail.
    */
-  it("still takes a raw GPS pair on the issue form, which ADR 0012 defers", () => {
-    expect(PAGE).toMatch(/n\("lat",\s*"GPS latitude"/);
-    expect(PAGE).toMatch(/gps:\s*\{\s*lat:\s*Number\(v\.lat\)/);
+  it("uses the capture control on the issue form, not hand-typed coordinates", () => {
+    expect(PAGE).not.toMatch(/n\("lat",\s*"GPS latitude"/);
+    expect(PAGE).not.toMatch(/n\("lng",\s*"GPS longitude"/);
+    expect(PAGE).toContain('geo("geo", "Where is it?")');
+  });
+
+  it("still narrows to a bare pair for the API, which has nowhere to put provenance", () => {
+    // Read out of the issue workflow specifically, so a match inside the village
+    // form cannot make this pass.
+    const issueForm = /id: "w-issue",[\s\S]*?\n      \},/.exec(PAGE);
+    expect(issueForm, "the issue workflow is gone from the page").not.toBeNull();
+    expect(issueForm?.[0] ?? "").toContain('geoValueOf(formId + "-geo")');
+    expect(issueForm?.[0] ?? "").toMatch(/gps:\s*\{\s*lat:\s*captured\.lat,\s*lng:\s*captured\.lng\s*\}/);
+    // The discard is explicit. A spread would send `source` to an endpoint that
+    // rejects unknown fields, which is a 400 on the report of a broken bridge.
+    expect(issueForm?.[0] ?? "").not.toContain("...captured");
   });
 
   it("builds a location on BOTH village forms from the capture control", () => {

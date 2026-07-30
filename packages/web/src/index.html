@@ -5854,13 +5854,41 @@ const WORKFLOW_GROUPS = [
     workflows: [
       {
         id: "w-issue", title: "Report an issue", submit: "Report issue",
+        /*
+         * THE SAME LOCATION CONTROL THE VILLAGE FORM USES (ADR 0012).
+         *
+         * This form asked for `lat` and `lng` as two decimal numbers, typed by
+         * hand, while village registration two groups above offered "Use my
+         * location", a map pin and a name search. ADR 0012 was implemented for
+         * villages and never carried across.
+         *
+         * That gap fell on the person least able to absorb it. A village is
+         * registered once, at a desk, by somebody with the coordinates in front
+         * of them; an issue is reported in the field, on a phone, by whoever is
+         * standing next to the contaminated handpump — and asking them for six
+         * decimal places is asking for the wrong number or no report at all.
+         *
+         * WHAT IS STILL NOT CARRIED ACROSS, stated so it is a known gap rather
+         * than an assumed feature: the API stores `gps` for an issue as a bare
+         * pair, with no `geo_source` / `geo_accuracy_metres` / `geo_captured_at`
+         * columns. So the control records HOW the point was obtained and this
+         * form then discards it. Keeping the provenance would mean a migration
+         * and a change to the Issue aggregate; it is worth doing and it is not
+         * this change. What is fixed here is the input.
+         */
         fields: [fVillage, sel("category", "Category", ISSUE_OPTIONS),
                  area("description", "Description", { required: true }),
-                 n("lat", "GPS latitude", { step: "any", required: true, half: true }),
-                 n("lng", "GPS longitude", { step: "any", required: true, half: true })],
-        build: function (v) {
+                 geo("geo", "Where is it?")],
+        build: function (v, formId) {
+          const captured = geoValueOf(formId + "-geo");
+          if (!captured) {
+            return { error: "Set the location first — use GPS, the map, or search for a place name." };
+          }
+          // Narrowed to the pair the endpoint accepts. `captured.source` and the
+          // accuracy are dropped here, deliberately and visibly, per the note
+          // above — not silently lost inside a spread.
           return { path: "/issues", body: { villageId: v.villageId, category: v.category,
-            description: v.description, gps: { lat: Number(v.lat), lng: Number(v.lng) } } };
+            description: v.description, gps: { lat: captured.lat, lng: captured.lng } } };
         },
         done: function (data, msg, v) {
           rememberId("issues", data.issueId, v.category);
@@ -6600,10 +6628,23 @@ function buildWorkflows() {
   const hidden = [];
   workflowsBuiltFor = permissionSignature();
 
+  let shown = 0;
+  let total = 0;
+
   const groups = WORKFLOW_GROUPS.map(function (group) {
     const workflows = group.workflows.filter(permitted);
+    total += group.workflows.length;
+    shown += workflows.length;
     if (workflows.length === 0) { hidden.push(group.title); return ""; }
-    return '<div class="work-group"><h4>' + esc(group.title) + "</h4>"
+    // A group with SOME of its workflows missing said nothing at all, which is
+    // how "Volunteers" could show two forms while two others existed and were
+    // hidden — indistinguishable, to the reader, from a feature never built.
+    // The whole-group case below was already explained; this is the partial one.
+    const missing = group.workflows.length - workflows.length;
+    const groupNote = missing === 0 ? "" : '<p class="work-note">' + missing
+      + (missing === 1 ? " further workflow in this group is" : " further workflows in this group are")
+      + " not available to your role.</p>";
+    return '<div class="work-group"><h4>' + esc(group.title) + "</h4>" + groupNote
       + workflows.map(function (workflow) {
           return '<details class="work" id="' + esc(workflow.id) + '">'
             + "<summary>" + esc(workflow.title) + '<span class="caret" aria-hidden="true">›</span></summary>'
@@ -6624,13 +6665,23 @@ function buildWorkflows() {
 
   // A workflow that simply vanishes reads as a page that failed to render. Name
   // the role and name what it is not being shown, so the absence is legible.
+  //
+  // THE COUNT IS THE PART THAT ANSWERS THE ACTUAL QUESTION. Without it the page
+  // gives a reader no way to tell "my role is narrow" from "features were
+  // removed" — and the second is what it looks like, because a citizen sees 9
+  // of 32 forms and nothing on the page says 32 exist. That confusion was
+  // reported by the maintainer of this platform, who knew what had been built.
+  const countNote = shown === total ? "" : '<p class="section-note"><strong>Showing '
+    + shown + " of " + total + " workflows.</strong> The rest are not available to your role"
+    + (actorRole() ? " (" + esc(words(actorRole())) + ")" : "") + ".</p>";
+
   const note = hidden.length === 0 ? "" : '<p class="section-note">'
     + esc(roleRefusal("use every workflow"))
-    + " Hidden here: " + esc(joinList(hidden)) + "."
+    + " Entire sections hidden: " + esc(joinList(hidden)) + "."
     + " The controls are missing because the platform would refuse them, not because anything failed to"
     + " load — this is a display convenience, and the decision is always the server's.</p>";
 
-  host.innerHTML = note + groups;
+  host.innerHTML = countNote + note + groups;
 
   WORKFLOW_GROUPS.forEach(function (group) {
     group.workflows.forEach(function (workflow) { wireForm(workflow); });
