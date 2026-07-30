@@ -479,6 +479,12 @@ code.cmd { display: block; font-family: var(--mono); font-size: 0.75rem; backgro
    grey: a record nobody should believe deserves to look like a caution, not like
    a footnote. */
 .tag.demo { background: var(--warn-bg); color: var(--warn-ink); border-color: var(--warn-line); }
+/* A status, not an action. `.tag` is UPPERCASE, which on a short word in a pill
+   at the right-hand end of a row is indistinguishable from a button — "OPEN"
+   was reported as a button that does nothing, and it read as an instruction
+   rather than a state. Sentence case, normal letter-spacing, and the labels
+   themselves are noun phrases; the verbs are reserved for things you can press. */
+.tag.status { text-transform: none; letter-spacing: 0; font-weight: 500; }
 
 /* A block that says something the reader must not skim past. */
 .callout {
@@ -1182,8 +1188,13 @@ footer a { color: var(--accent-strong); }
     <div class="section hidden" id="suggestions" aria-labelledby="h-suggestions">
       <h3 id="h-suggestions">Ideas already suggested</h3>
       <p class="section-note">Everyone's feature requests, so you can see whether what you want has
-         already been asked for — and whether it has been agreed, built or turned down. Only the
-         one-line summary is shown, and never who asked. Bug reports are not listed here.</p>
+         already been asked for — and whether it has been agreed, built or turned down.</p>
+      <!-- Says outright that the summary IS the whole entry. Without this, a
+           one-line row invites a click that will never lead anywhere, and the
+           label on the right was already being read as a button. -->
+      <p class="section-note"><strong>The one line is all there is here.</strong> The full description
+         and who asked are deliberately not shown — feature requests are written in free text and can
+         name people, so only administrators see the rest. Bug reports are not listed at all.</p>
       <div class="card">
         <div id="suggestions-list" aria-live="polite"></div>
         <div class="msg" id="suggestions-msg" role="status" aria-live="polite"></div>
@@ -7016,18 +7027,45 @@ async function submitReport() {
  * escaping them at the point of display — which puts the whole responsibility
  * here.
  */
+/**
+ * What each status is called on screen.
+ *
+ * NOT the stored value. `open` rendered verbatim, uppercase, in a pill at the
+ * right-hand end of a row was reported as "a button that does nothing" — and
+ * fairly, because in English "OPEN" is an instruction before it is a state. The
+ * same trap sits under `resolved` and `declined`, which read as things that were
+ * done to you rather than as where an idea has got to.
+ *
+ * So statuses are NOUN PHRASES and actions are VERBS, and the two vocabularies
+ * do not overlap anywhere in this feature. See FEEDBACK_STATUS_ACTION_LABEL for
+ * the other half.
+ */
+const FEEDBACK_STATUS_LABEL = {
+  open: "Not yet reviewed",
+  acknowledged: "Being looked at",
+  resolved: "Done",
+  declined: "Not planned"
+};
+
+/** Falls back to the raw value, so a status added server-side still renders. */
+function feedbackStatusLabel(status) {
+  return FEEDBACK_STATUS_LABEL[status] || words(status);
+}
+
 function suggestionRow(suggestion) {
-  const settled = suggestion.status === "resolved" || suggestion.status === "declined";
   return '<li><div class="feedback-row">'
     + '<div class="feedback-row-head">'
     + '<span class="feedback-summary">' + esc(suggestion.summary) + "</span>"
-    + '<span class="tag' + (suggestion.status === "resolved" ? " ok" : "") + '">'
-    + esc(words(suggestion.status)) + "</span>"
+    // `.status` kills the uppercase; `aria-label` says the word "status" out
+    // loud, because a screen reader hears a bare "Done" next to a summary and
+    // has no way to tell a label from a control either.
+    + '<span class="tag status' + (suggestion.status === "resolved" ? " ok" : "") + '"'
+    + ' aria-label="Status: ' + esc(feedbackStatusLabel(suggestion.status)) + '">'
+    + esc(feedbackStatusLabel(suggestion.status)) + "</span>"
     + "</div>"
     // No reporter and no detail: the endpoint does not send them. Stated here
     // so that a future "why is this row so bare?" has its answer in place.
-    + '<div class="feedback-meta">suggested ' + esc(when(suggestion.createdAt))
-    + (settled ? " · closed" : "") + "</div>"
+    + '<div class="feedback-meta">suggested ' + esc(when(suggestion.createdAt)) + "</div>"
     + "</div></li>";
 }
 
@@ -7063,6 +7101,21 @@ async function loadSuggestions() {
 /** The statuses an administrator can move a report to. `FEEDBACK_STATUSES`. */
 const FEEDBACK_STATUS_ACTIONS = ["open", "acknowledged", "resolved", "declined"];
 
+/**
+ * What each transition is called on a button — verbs, deliberately.
+ *
+ * The state a report is IN is a noun phrase (FEEDBACK_STATUS_LABEL); the thing
+ * you can DO to it is a verb. Buttons labelled "open" and "resolved" sat one row
+ * away from a status pill reading "OPEN", which is how a status came to be
+ * reported as a button that does nothing.
+ */
+const FEEDBACK_STATUS_ACTION_LABEL = {
+  open: "Reopen",
+  acknowledged: "Acknowledge",
+  resolved: "Mark done",
+  declined: "Decline"
+};
+
 function feedbackKindLabel(kind) {
   if (kind === "bug") return "Bug";
   if (kind === "feature") return "Feature request";
@@ -7084,19 +7137,23 @@ function feedbackRow(report) {
     report.buildCommit ? "on " + esc(report.buildCommit) + branch : null
   ].filter(Boolean).join(" · ");
 
+  // VERBS, because these are the things you can press — the mirror of the noun
+  // phrases in FEEDBACK_STATUS_LABEL. Keeping one vocabulary for states and
+  // another for actions is what stops a label being mistaken for a control.
   const actions = FEEDBACK_STATUS_ACTIONS.filter(function (s) { return s !== report.status; })
     .map(function (status) {
       return '<button type="button" class="tiny secondary" data-action="feedback-status" '
         + "data-payload='" + JSON.stringify({ id: report.id, status: status }) + "'>"
-        + esc(words(status)) + "</button>";
+        + esc(FEEDBACK_STATUS_ACTION_LABEL[status] || words(status)) + "</button>";
     }).join("");
 
   return '<li><div class="feedback-row">'
     + '<div class="feedback-row-head">'
     + '<span class="feedback-summary">' + esc(report.summary) + "</span>"
     + '<span class="tag">' + esc(feedbackKindLabel(report.kind)) + "</span>"
-    + '<span class="tag' + (report.status === "resolved" ? " ok" : "") + '">'
-    + esc(words(report.status)) + "</span>"
+    + '<span class="tag status' + (report.status === "resolved" ? " ok" : "") + '"'
+    + ' aria-label="Status: ' + esc(feedbackStatusLabel(report.status)) + '">'
+    + esc(feedbackStatusLabel(report.status)) + "</span>"
     + "</div>"
     + (report.detail ? '<div class="feedback-detail">' + esc(report.detail) + "</div>" : "")
     + '<div class="feedback-meta">'

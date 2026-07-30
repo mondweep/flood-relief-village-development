@@ -39,6 +39,9 @@ function pageScript(source: string): string {
 
 const SCRIPT = pageScript(PAGE);
 
+/** The page's single <style> block, for the rules the status pill depends on. */
+const SHEET_TEXT = (/<style[^>]*>([\s\S]*?)<\/style>/.exec(PAGE)?.[1] ?? "");
+
 describe("the page's script is at least syntactically a program", () => {
   /**
    * THE CHEAPEST CHECK IN THE REPOSITORY, AND THE ONE WITH THE WORST FAILURE
@@ -472,5 +475,74 @@ describe("the page and the API agree about the route names", () => {
   it("calls those paths from the page", () => {
     expect(SCRIPT).toContain('api("/feedback"');
     expect(SCRIPT).toContain('api("/feedback/"');
+  });
+});
+
+describe("a status is not mistaken for a button", () => {
+  /**
+   * REPORTED FROM PRODUCTION. The status pill rendered the stored value
+   * verbatim — `open` — through `.tag`, which is `text-transform: uppercase`.
+   * "OPEN", in a pill, at the right-hand end of a row, next to a summary: the
+   * maintainer read it as a button and reported that clicking it did nothing.
+   *
+   * They were right about the affordance and wrong about the intent, which is
+   * the definition of a UI bug. In English "OPEN" is an instruction before it is
+   * a state, and nothing about the rendering said otherwise.
+   *
+   * The fix has two halves and both are pinned here: states are NOUN PHRASES,
+   * actions are VERBS, and the two vocabularies do not overlap.
+   */
+  const stateLabels = /const FEEDBACK_STATUS_LABEL = \{([\s\S]*?)\};/.exec(SCRIPT);
+  const actionLabels = /const FEEDBACK_STATUS_ACTION_LABEL = \{([\s\S]*?)\};/.exec(SCRIPT);
+
+  function labelsFrom(match: RegExpExecArray | null): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [, key, value] of (match?.[1] ?? "").matchAll(/(\w+):\s*"([^"]+)"/g)) {
+      out[key as string] = value as string;
+    }
+    return out;
+  }
+
+  it("gives every status a display label", () => {
+    expect(stateLabels, "FEEDBACK_STATUS_LABEL is gone").not.toBeNull();
+    expect(Object.keys(labelsFrom(stateLabels)).sort()).toEqual([...FEEDBACK_STATUSES].sort());
+  });
+
+  it("names no state with the bare stored word", () => {
+    // `open` was the one that caused this. Any status whose label is just itself
+    // is the same trap waiting for the next reader.
+    for (const [status, label] of Object.entries(labelsFrom(stateLabels))) {
+      expect(label.toLowerCase(), `"${status}" is still displayed as its raw value`).not.toBe(status);
+    }
+  });
+
+  it("keeps the state vocabulary and the action vocabulary disjoint", () => {
+    const states = Object.values(labelsFrom(stateLabels)).map((s) => s.toLowerCase());
+    const actions = Object.values(labelsFrom(actionLabels)).map((s) => s.toLowerCase());
+    expect(actions.length, "FEEDBACK_STATUS_ACTION_LABEL is gone").toBeGreaterThan(0);
+    for (const action of actions) {
+      expect(states, `"${action}" labels both a state and a button`).not.toContain(action);
+    }
+  });
+
+  it("renders the pill in sentence case, not the uppercase that read as a button", () => {
+    const row = /function suggestionRow\(suggestion\)[\s\S]*?\n\}/.exec(SCRIPT);
+    expect(row?.[0] ?? "").toContain('tag status');
+    expect(row?.[0] ?? "").toContain("feedbackStatusLabel(suggestion.status)");
+    // The modifier has to actually exist, or it falls back to the uppercase.
+    expect(SHEET_TEXT).toMatch(/\.tag\.status\s*\{[^}]*text-transform:\s*none/);
+  });
+
+  it("says out loud that it is a status, for anyone who cannot see the styling", () => {
+    const row = /function suggestionRow\(suggestion\)[\s\S]*?\n\}/.exec(SCRIPT);
+    expect(row?.[0] ?? "").toContain('aria-label="Status: ');
+  });
+
+  it("tells the reader there is nothing to click through to", () => {
+    // The row is one line by design; without saying so it invites a click that
+    // can never lead anywhere, which is how this was reported in the first place.
+    const section = /<div class="section hidden" id="suggestions"[\s\S]*?<div class="card">/.exec(PAGE);
+    expect(section?.[0] ?? "").toMatch(/all there is/i);
+    expect(section?.[0] ?? "").toMatch(/administrator/i);
   });
 });
