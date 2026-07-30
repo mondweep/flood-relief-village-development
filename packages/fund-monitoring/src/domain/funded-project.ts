@@ -1,4 +1,4 @@
-import { err, Money, ok, type ProjectId, type Result, type VillageId } from "@afrip/shared-kernel";
+import { err, Money, ok, toMajorUnits, type ProjectId, type Result, type VillageId } from "@afrip/shared-kernel";
 
 export type ProjectCategory =
   | "bridge"
@@ -151,7 +151,12 @@ export class FundedProject {
     if (!newReleased.ok) return err(newReleased.error);
     if (!newReleased.value.lessThanOrEqual(this.sanctioned)) {
       return err(
-        `released total ${newReleased.value.amountMinor} would exceed sanctioned ${this.sanctioned.amountMinor}`,
+        // Major units, because the caller sent major units. Quoting paise back
+        // at someone who submitted rupees ("would exceed sanctioned 5000000"
+        // for a ₹50,000 budget) reads as a hundredfold error in the platform,
+        // and is the one place a rupee-speaking caller was still told a number
+        // in a unit they never used.
+        `released total ${newReleased.value.amountMajor} would exceed sanctioned ${this.sanctioned.amountMajor}`,
       );
     }
 
@@ -179,7 +184,7 @@ export class FundedProject {
     if (!newSpent.ok) return err(newSpent.error);
     if (!newSpent.value.lessThanOrEqual(this._released)) {
       return err(
-        `spent total ${newSpent.value.amountMinor} would exceed released ${this._released.amountMinor}`,
+        `spent total ${newSpent.value.amountMajor} would exceed released ${this._released.amountMajor}`,
       );
     }
 
@@ -241,7 +246,9 @@ export class FundedProject {
         findings.push({
           type: "overspend_vs_comparable",
           detectedAt,
-          details: `spent ${this._spent.amountMinor} exceeds 1.5x median (${threshold}) of ${input.comparableSpentMinor.length} comparable projects`,
+          details:
+            `spent ${toMajorUnits(this._spent.amountMinor)} exceeds 1.5x median ` +
+            `(${toMajorUnits(threshold)}) of ${input.comparableSpentMinor.length} comparable projects`,
         });
       }
     }

@@ -11,6 +11,7 @@ import {
   GetVillageProfile,
   InMemoryVillageRepository,
   ListVillagesBySeverity,
+  MarkAsDemonstration,
   RecordDamageAssessment,
   RegisterVillage,
   UpdateSeverity,
@@ -203,6 +204,7 @@ export interface Platform {
     recordDamageAssessment: RecordDamageAssessment;
     updateSeverity: UpdateSeverity;
     correctVillageProfile: CorrectVillageProfile;
+    markAsDemonstration: MarkAsDemonstration;
     getVillageProfile: GetVillageProfile;
     listVillagesBySeverity: ListVillagesBySeverity;
   };
@@ -329,6 +331,11 @@ export function createPlatform(overrides: PlatformOverrides = {}): Platform {
     }),
     updateSeverity: new UpdateSeverity({ repository: villageRepository, clock, eventPublisher: publisher }),
     correctVillageProfile: new CorrectVillageProfile({
+      repository: villageRepository,
+      clock,
+      eventPublisher: publisher,
+    }),
+    markAsDemonstration: new MarkAsDemonstration({
       repository: villageRepository,
       clock,
       eventPublisher: publisher,

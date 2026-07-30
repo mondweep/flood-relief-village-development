@@ -1,3 +1,4 @@
+import { toMajorUnits } from "@afrip/shared-kernel";
 import type { FundedProject } from "@afrip/fund-monitoring";
 
 /**
@@ -9,10 +10,21 @@ import type { FundedProject } from "@afrip/fund-monitoring";
  * public projection as its own type means adding a field to the operator view
  * cannot silently widen what an anonymous caller sees — the public mapper has
  * to be edited on purpose.
+ *
+ * UNITS. Every money field here is MAJOR units — rupees, `50000` meaning
+ * ₹50,000 — and says so in its own name (`sanctionedInr`, not `sanctioned`).
+ * The name carries the unit because that is the only part of a JSON number a
+ * reader can see; a field called `amount` is exactly the ambiguity the move off
+ * `amountMinor` was made to remove. Storage and arithmetic remain integer paise
+ * inside `Money` — the division happens here, once, on the way out.
+ *
+ * There is no "₹" anywhere in these payloads. The symbol is presentation; the
+ * payload states its currency in a sibling `currency` string field so a client
+ * can format it however its locale wants.
  */
 
 export interface ExpenditureView {
-  readonly amountMinor: number;
+  readonly amountInr: number;
   readonly currency: string;
   readonly description: string;
   readonly evidenceRef: string | null;
@@ -32,9 +44,9 @@ export interface FundProjectView {
   readonly category: string;
   readonly fundSource: string;
   readonly currency: string;
-  readonly sanctionedMinor: number;
-  readonly releasedMinor: number;
-  readonly spentMinor: number;
+  readonly sanctionedInr: number;
+  readonly releasedInr: number;
+  readonly spentInr: number;
   readonly status: string;
   readonly lastReleasedAt: string | null;
   readonly expenditures: readonly ExpenditureView[];
@@ -56,9 +68,9 @@ export interface PublicFundProject {
   readonly category: string;
   readonly fundSource: string;
   readonly currency: string;
-  readonly sanctionedMinor: number;
-  readonly releasedMinor: number;
-  readonly spentMinor: number;
+  readonly sanctionedInr: number;
+  readonly releasedInr: number;
+  readonly spentInr: number;
   readonly status: string;
 }
 
@@ -66,9 +78,9 @@ export interface PublicFundProject {
 export interface FundTotals {
   readonly projectCount: number;
   readonly currency: string;
-  readonly sanctionedMinor: number;
-  readonly releasedMinor: number;
-  readonly spentMinor: number;
+  readonly sanctionedInr: number;
+  readonly releasedInr: number;
+  readonly spentInr: number;
   /** Anomalies already flagged on these projects by `DetectAnomalies`. */
   readonly anomalyCount: number;
 }
@@ -84,13 +96,13 @@ export function toFundProjectView(project: FundedProject): FundProjectView {
     category: project.category,
     fundSource: project.fundSource,
     currency: project.sanctioned.currency,
-    sanctionedMinor: project.sanctioned.amountMinor,
-    releasedMinor: project.released.amountMinor,
-    spentMinor: project.spent.amountMinor,
+    sanctionedInr: project.sanctioned.amountMajor,
+    releasedInr: project.released.amountMajor,
+    spentInr: project.spent.amountMajor,
     status: project.status,
     lastReleasedAt: project.lastReleasedAt,
     expenditures: project.expenditures.map((expenditure) => ({
-      amountMinor: expenditure.amount.amountMinor,
+      amountInr: expenditure.amount.amountMajor,
       currency: expenditure.amount.currency,
       description: expenditure.description,
       evidenceRef: expenditure.evidenceRef ?? null,
@@ -112,9 +124,9 @@ export function toPublicFundProject(project: FundedProject): PublicFundProject {
     category: project.category,
     fundSource: project.fundSource,
     currency: project.sanctioned.currency,
-    sanctionedMinor: project.sanctioned.amountMinor,
-    releasedMinor: project.released.amountMinor,
-    spentMinor: project.spent.amountMinor,
+    sanctionedInr: project.sanctioned.amountMajor,
+    releasedInr: project.released.amountMajor,
+    spentInr: project.spent.amountMajor,
     status: project.status,
   };
 }
@@ -123,6 +135,10 @@ export function toPublicFundProject(project: FundedProject): PublicFundProject {
  * Sums the ladder. Mixed currencies are not summable, so the reported currency
  * is that of the first project and callers must not mix them — the platform
  * only mints INR today (see `Money.of`'s default).
+ *
+ * The accumulation runs in integer paise and converts ONCE at the end. Summing
+ * rupee floats instead would let a dashboard headline disagree with the rows it
+ * is a total of, by a paisa per project.
  */
 export function summariseFunds(projects: readonly FundedProject[]): FundTotals {
   let sanctionedMinor = 0;
@@ -140,9 +156,9 @@ export function summariseFunds(projects: readonly FundedProject[]): FundTotals {
   return {
     projectCount: projects.length,
     currency: projects[0]?.sanctioned.currency ?? DEFAULT_FUND_CURRENCY,
-    sanctionedMinor,
-    releasedMinor,
-    spentMinor,
+    sanctionedInr: toMajorUnits(sanctionedMinor),
+    releasedInr: toMajorUnits(releasedMinor),
+    spentInr: toMajorUnits(spentMinor),
     anomalyCount,
   };
 }

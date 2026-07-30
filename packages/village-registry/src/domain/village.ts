@@ -129,6 +129,19 @@ export interface VillageCreateProps {
   severity: Severity;
 }
 
+/**
+ * State needed to rebuild a Village from storage — see Village.restore.
+ *
+ * `isDemonstration` lives HERE and deliberately NOT on `VillageCreateProps`:
+ * registration must not be able to produce a flagged record (see
+ * `markAsDemonstration`), while a repository must be able to return the flag it
+ * persisted. Splitting the two shapes is what makes the first impossible without
+ * making the second impossible too.
+ */
+export interface VillageRestoreProps extends VillageCreateProps {
+  isDemonstration: boolean;
+}
+
 function isNonNegativeInt(n: number): boolean {
   return Number.isInteger(n) && n >= 0;
 }
@@ -190,6 +203,14 @@ export class Village {
   private _population: number;
   private _households: number;
   private _affectedFamilies: number;
+  /**
+   * "This record exists to be looked at, not to be believed."
+   *
+   * See `markAsDemonstration` for why it starts false and why nothing sets it
+   * back. Not readonly because `markAsDemonstration` moves it once; there is no
+   * other writer.
+   */
+  private _isDemonstration = false;
   private readonly _damageAssessments: DamageAssessment[];
 
   private constructor(props: VillageCreateProps, damageAssessments: DamageAssessment[]) {
@@ -205,10 +226,81 @@ export class Village {
     this._damageAssessments = damageAssessments;
   }
 
+  /**
+   * A newly registered village is REAL. There is no parameter for anything else,
+   * and that omission is the safety property — see `markAsDemonstration`.
+   */
   static create(props: VillageCreateProps): Result<Village> {
     const error = validateVillageProps(props);
     if (error) return err(error);
     return ok(new Village(props, []));
+  }
+
+  /**
+   * Rebuilds a Village from persisted state. Intended for repository adapters
+   * only — application code registers through `create` and marks through
+   * `markAsDemonstration`.
+   *
+   * It exists for exactly one field. `create` cannot take `isDemonstration`
+   * (that is the point of it), so without `restore` an adapter would have to
+   * either re-invoke the marking operation on load — publishing the fact a
+   * second time, as though somebody had just decided it — or drop the flag and
+   * hand the application a demonstration village that says it is real. The
+   * second of those is the failure mode this whole concept exists to prevent.
+   */
+  static restore(props: VillageRestoreProps): Result<Village> {
+    const base = Village.create(props);
+    if (!base.ok) return base;
+    if (typeof props.isDemonstration !== "boolean") {
+      return err(`isDemonstration must be a boolean, got ${typeof props.isDemonstration}`);
+    }
+    const village = base.value;
+    if (props.isDemonstration) village.markAsDemonstration();
+    return ok(village);
+  }
+
+  /**
+   * Whether this record is DEMONSTRATION data: present so that someone can be
+   * shown what the platform does, and never to be read as a claim about a real
+   * place, real households or real people.
+   *
+   * This is a domain fact, not a presentation detail, and the reason is in
+   * `docs/incidents/2026-07-28-id-collision-data-loss.md`: seeded records that
+   * render as ordinary data are indistinguishable from measurements, and its
+   * closing lesson is that "fabrication is worse than deletion and harder to
+   * notice". A flag on the aggregate is what lets every projection label it,
+   * every aggregate figure exclude it, and a query find it — none of which a
+   * naming convention ("Demo Village") can do.
+   */
+  get isDemonstration(): boolean {
+    return this._isDemonstration;
+  }
+
+  /**
+   * Declares this record to be demonstration data. Idempotent.
+   *
+   * TWO DELIBERATE ABSENCES, both of which are the design rather than an
+   * oversight:
+   *
+   * 1. It is NOT a registration parameter. `RegisterVillage` cannot reach this,
+   *    because `VillageCreateProps` has no such field and this method is the
+   *    only writer. A field worker registering a real village down a bad line,
+   *    with a request body they did not hand-write, cannot produce a village
+   *    that is quietly excluded from every count on the dashboard — and a
+   *    village missing from the totals is precisely the kind of absence nobody
+   *    notices.
+   *
+   * 2. There is NO counterpart that clears it. Marking a record demonstration
+   *    says "do not believe this"; unmarking it says "believe this after all",
+   *    which is a claim no amount of application state can support — the record
+   *    was fabricated for a demo, and clearing the flag would launder it into
+   *    the real reporting with no trace. Compare `record_ownership` in migration
+   *    00005, which is append-only for the same reason. If a village was flagged
+   *    in error, the repair is a superuser at the SQL console, deliberately not
+   *    a call any route can make.
+   */
+  markAsDemonstration(): void {
+    this._isDemonstration = true;
   }
 
   get name(): string {

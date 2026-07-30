@@ -6,6 +6,7 @@ export type {
   Severity,
   UpdateDemographicsInput,
   VillageCreateProps,
+  VillageRestoreProps,
 } from "./domain/village.js";
 export {
   COORDINATE_SOURCES_BY_TRUST,
@@ -41,6 +42,13 @@ export {
   type RecordDamageAssessmentInput,
   type RecordDamageAssessmentOutput,
 } from "./application/record-damage-assessment.js";
+
+export {
+  MarkAsDemonstration,
+  type MarkAsDemonstrationDeps,
+  type MarkAsDemonstrationInput,
+  type MarkAsDemonstrationOutput,
+} from "./application/mark-as-demonstration.js";
 
 export {
   UpdateSeverity,

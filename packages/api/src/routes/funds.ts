@@ -1,21 +1,39 @@
-import { projectId, villageId } from "@afrip/shared-kernel";
+import { projectId, toMajorUnits, villageId } from "@afrip/shared-kernel";
 import type { FundedProject } from "@afrip/fund-monitoring";
-import { toFundProjectView } from "../fund-view.js";
-import { badRequest, fromResult, json, type HttpResponse } from "../http-result.js";
+import { DEFAULT_FUND_CURRENCY, toFundProjectView } from "../fund-view.js";
+import {
+  badRequest,
+  fromResult,
+  fromResultWith,
+  json,
+  type HttpResponse,
+} from "../http-result.js";
 import type { RequestContext, Router } from "../router.js";
 import {
   asObject,
+  optionalMajorAmountArray,
   optionalNumber,
-  optionalNumberArray,
   optionalObjectArray,
   optionalString,
-  requiredNumber,
+  requiredMajorAmount,
   requiredString,
 } from "../validate.js";
 import type { RouteDeps } from "./deps.js";
 
 /** Statuses a project can still be spending against — the "active" set. */
 const ACTIVE_STATUSES: ReadonlySet<string> = new Set(["sanctioned", "in_progress"]);
+
+/**
+ * MONEY ON THIS SURFACE IS RUPEES (major units), and every field says so:
+ * `sanctionedInr`, `amountInr`, `comparableSpentInr`. A caller sanctioning
+ * ₹50,000 sends `50000`, not `5000000`.
+ *
+ * The conversion to integer paise happens here at the boundary and nowhere
+ * else — `requiredMajorAmount` hands back a `Money`, the use cases below still
+ * take `...Minor`, and the aggregate's `spent <= released <= sanctioned` ladder
+ * stays integer arithmetic end to end. Responses convert back the same way, in
+ * `fund-view.ts`.
+ */
 
 export function registerFundRoutes(router: Router, deps: RouteDeps): void {
   // ADR 0010: the platform is resolved PER REQUEST off `ctx`, never captured
@@ -25,9 +43,12 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
   const funds = (ctx: RequestContext) => ctx.platform.fundMonitoring;
 
   /**
-   * Sanctions a project. The amount is minor units (paise) as an integer —
-   * `Money` refuses anything else, so a rupee float is rejected by the domain
-   * rather than silently truncated.
+   * Sanctions a project. `sanctionedInr` is rupees — `50000` is ₹50,000.
+   *
+   * Rupees and paise are both accepted forms of the same figure (`1500.75` is
+   * ₹1,500.75), but a THIRD decimal is refused with a 400 rather than rounded:
+   * `1234.567` is not a sum of money anyone meant, and quietly booking
+   * ₹1,234.57 would put a number in an audited ledger that nobody typed.
    */
   router.post("/projects", async (ctx: RequestContext): Promise<HttpResponse> => {
     const body = asObject(ctx.body);
@@ -41,8 +62,8 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
     if (!category.ok) return badRequest(category.error);
     const fundSource = requiredString(body.value, "fundSource");
     if (!fundSource.ok) return badRequest(fundSource.error);
-    const sanctionedMinor = requiredNumber(body.value, "sanctionedMinor");
-    if (!sanctionedMinor.ok) return badRequest(sanctionedMinor.error);
+    const sanctioned = requiredMajorAmount(body.value, "sanctionedInr");
+    if (!sanctioned.ok) return badRequest(sanctioned.error);
 
     // category and fundSource are enums the aggregate validates; we only assert shape.
     return fromResult(
@@ -51,7 +72,7 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
         name: name.value,
         category: category.value,
         fundSource: fundSource.value,
-        sanctionedMinor: sanctionedMinor.value,
+        sanctionedMinor: sanctioned.value.amountMinor,
       }),
       201,
     );
@@ -60,13 +81,19 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
   router.post("/projects/:id/release", async (ctx: RequestContext): Promise<HttpResponse> => {
     const body = asObject(ctx.body);
     if (!body.ok) return badRequest(body.error);
-    const amountMinor = requiredNumber(body.value, "amountMinor");
-    if (!amountMinor.ok) return badRequest(amountMinor.error);
+    const amount = requiredMajorAmount(body.value, "amountInr");
+    if (!amount.ok) return badRequest(amount.error);
 
-    return fromResult(
+    return fromResultWith(
       await funds(ctx).releaseFunds.execute({
         projectId: ctx.params["id"] ?? "",
-        amountMinor: amountMinor.value,
+        amountMinor: amount.value.amountMinor,
+      }),
+      (released) => ({
+        projectId: released.projectId,
+        currency: DEFAULT_FUND_CURRENCY,
+        totalReleasedInr: toMajorUnits(released.totalReleasedMinor),
+        status: released.status,
       }),
       201,
     );
@@ -76,19 +103,24 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
     const body = asObject(ctx.body);
     if (!body.ok) return badRequest(body.error);
 
-    const amountMinor = requiredNumber(body.value, "amountMinor");
-    if (!amountMinor.ok) return badRequest(amountMinor.error);
+    const amount = requiredMajorAmount(body.value, "amountInr");
+    if (!amount.ok) return badRequest(amount.error);
     const description = requiredString(body.value, "description");
     if (!description.ok) return badRequest(description.error);
     const evidenceRef = optionalString(body.value, "evidenceRef");
     if (!evidenceRef.ok) return badRequest(evidenceRef.error);
 
-    return fromResult(
+    return fromResultWith(
       await funds(ctx).recordExpenditure.execute({
         projectId: ctx.params["id"] ?? "",
-        amountMinor: amountMinor.value,
+        amountMinor: amount.value.amountMinor,
         description: description.value,
         ...(evidenceRef.value === undefined ? {} : { evidenceRef: evidenceRef.value }),
+      }),
+      (spent) => ({
+        projectId: spent.projectId,
+        currency: DEFAULT_FUND_CURRENCY,
+        totalSpentInr: toMajorUnits(spent.totalSpentMinor),
       }),
       201,
     );
@@ -107,20 +139,24 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
    * creating a resource, and re-running it over unchanged state is idempotent
    * (the aggregate does not re-flag a finding it already holds).
    *
-   * `comparableSpentMinor` and `otherActiveProjects` are the rules' evidence.
+   * `comparableSpentInr` and `otherActiveProjects` are the rules' evidence.
    * When the caller omits them the route derives them from the project register
    * — comparables are the completed/verified projects in the same category, the
    * duplicate-funding candidates are every other still-active project — so a
    * bare POST runs the rules against real peers instead of against nothing. A
    * caller that supplies either one wins, including with an empty array, which
    * is how you say "there are no comparables" rather than "go and find some".
+   *
+   * `comparableSpentInr` is rupees like every other money field on this
+   * surface; the derived figures never leave paise because they are read
+   * straight off the register.
    */
   router.post("/projects/:id/detect-anomalies", async (ctx: RequestContext): Promise<HttpResponse> => {
     const body = asObject(ctx.body ?? {});
     if (!body.ok) return badRequest(body.error);
 
-    const comparableSpentMinor = optionalNumberArray(body.value, "comparableSpentMinor");
-    if (!comparableSpentMinor.ok) return badRequest(comparableSpentMinor.error);
+    const comparableSpent = optionalMajorAmountArray(body.value, "comparableSpentInr");
+    if (!comparableSpent.ok) return badRequest(comparableSpent.error);
     const stalledAfterDays = optionalNumber(body.value, "stalledAfterDays");
     if (!stalledAfterDays.ok) return badRequest(stalledAfterDays.error);
     const otherActiveProjects = optionalObjectArray(body.value, "otherActiveProjects");
@@ -137,14 +173,17 @@ export function registerFundRoutes(router: Router, deps: RouteDeps): void {
 
     const id = ctx.params["id"] ?? "";
     const derived =
-      comparableSpentMinor.value === undefined || otherActiveProjects.value === undefined
+      comparableSpent.value === undefined || otherActiveProjects.value === undefined
         ? await deriveAnomalyEvidence(ctx, id)
         : null;
 
     return fromResult(
       await funds(ctx).detectAnomalies.execute({
         projectId: id,
-        comparableSpentMinor: comparableSpentMinor.value ?? derived?.comparableSpentMinor ?? [],
+        comparableSpentMinor:
+          comparableSpent.value?.map((money) => money.amountMinor) ??
+          derived?.comparableSpentMinor ??
+          [],
         ...(stalledAfterDays.value === undefined ? {} : { stalledAfterDays: stalledAfterDays.value }),
         otherActiveProjects:
           otherActiveProjects.value === undefined

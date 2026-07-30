@@ -62,6 +62,7 @@ describe("GetVillageProfile", () => {
       households: 250,
       affectedFamilies: 80,
       severity: "severe",
+      isDemonstration: false,
       damageAssessments: village.damageAssessments,
       latestDamageAssessment: village.latestDamageAssessment,
     });
@@ -91,6 +92,22 @@ describe("GetVillageProfile", () => {
       expect(result.value.latestDamageAssessment).toBeNull();
       expect(result.value.damageAssessments).toEqual([]);
     }
+  });
+
+  /**
+   * The profile is what a page renders a village FROM, so a demonstration
+   * village whose profile does not say so is a demonstration village rendered as
+   * real — the exact failure `Village.isDemonstration` exists to prevent.
+   */
+  it("carries the demonstration flag through to the profile", async () => {
+    const village = existingVillage();
+    village.markAsDemonstration();
+    const repository = buildRepository({ findById: vi.fn().mockResolvedValue(village) });
+
+    const result = await new GetVillageProfile({ repository }).execute({ villageId: "village-1" });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.value.isDemonstration).toBe(true);
   });
 
   it("returns an error when the village is not found", async () => {

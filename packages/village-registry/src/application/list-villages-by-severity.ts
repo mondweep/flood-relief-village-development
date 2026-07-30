@@ -25,6 +25,24 @@ export interface VillageSummary {
    * anyone has been there with a device, which is a fact about our records.
    */
   positionSource: CoordinateSource;
+  /**
+   * True when this village is DEMONSTRATION data — present so the platform can
+   * be shown to someone, and never a claim about a real place.
+   *
+   * On the summary, not only on the profile, for the same reason
+   * `positionSource` is: the question this answers ("which of these rows should
+   * I not believe?") is asked of a LIST, and an answer that requires a second
+   * fetch per row is an answer no caller will make. It is also what lets a
+   * counting query separate the real villages from the illustrative ones without
+   * pattern-matching names.
+   *
+   * Never omitted for demonstration rows and never quietly filtered out of the
+   * list: the flag exists so these records can be shown WITH a label, not so
+   * they can be hidden. Hiding them would re-create the problem — a record that
+   * is there in the database and absent from the screen is exactly as misleading
+   * as one that is fabricated and looks real.
+   */
+  isDemonstration: boolean;
 }
 
 export interface ListVillagesBySeverityDeps {
@@ -58,6 +76,7 @@ export class ListVillagesBySeverity {
         affectedFamilies: village.affectedFamilies,
         households: village.households,
         positionSource: village.geo.source,
+        isDemonstration: village.isDemonstration,
       })),
     );
   }

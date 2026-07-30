@@ -68,6 +68,30 @@ describe("the page's permission keys match the server's policy table", () => {
     ).toEqual([]);
   });
 
+  /**
+   * Write use cases the page deliberately offers NO control for, with the reason
+   * each one is absent. An entry here is a claim that there is no form to gate —
+   * not that gating it does not matter.
+   *
+   * Kept as a map rather than a bare list so the reason travels with the key,
+   * and checked against the policy table below so a renamed use case leaves a
+   * stale exemption behind loudly rather than a silently unchecked one.
+   */
+  const NOT_OFFERED_BY_THE_PAGE: Readonly<Record<string, string>> = {
+    "villageRegistry.markAsDemonstration":
+      "Admin-only and permanent: declaring a village to be demonstration data is an operator " +
+      "action taken deliberately against the API (POST /villages/:id/demonstration), not a " +
+      "button on the Operations view. The page RENDERS the flag — every village projection " +
+      "carries `isDemonstration` — it just does not offer a control that sets it.",
+  };
+
+  it("exempts only use cases that still exist", () => {
+    const stale = Object.keys(NOT_OFFERED_BY_THE_PAGE).filter(
+      (key) => PLATFORM_PERMISSIONS[key] === undefined,
+    );
+    expect(stale, `these exemptions name use cases that no longer exist: ${stale.join(", ")}`).toEqual([]);
+  });
+
   it("covers every write use case, so no form is left ungated by omission", () => {
     // Reads are excluded: a read the page performs without a gate simply gets a
     // 403 and renders the refusal, which is handled. A WRITE with no gate is a
@@ -77,7 +101,9 @@ describe("the page's permission keys match the server's policy table", () => {
       (key) => !readOnly.test(key.split(".")[1] as string),
     );
 
-    const missing = writeKeys.filter((key) => !keysInPage.includes(key));
+    const missing = writeKeys.filter(
+      (key) => !keysInPage.includes(key) && NOT_OFFERED_BY_THE_PAGE[key] === undefined,
+    );
     expect(
       missing,
       `these write use cases have no permission key anywhere in the page, so their controls ` +

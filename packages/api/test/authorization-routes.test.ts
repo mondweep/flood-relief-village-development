@@ -332,6 +332,39 @@ describe("role enforcement over HTTP (ADR 0009)", () => {
     ).toBe(201);
   });
 
+  /**
+   * The first genuinely admin-only operation on the platform. Declaring a
+   * village to be demonstration data removes it from every published figure and
+   * is permanent, so it is a statement about what the platform as a whole
+   * asserts rather than a record of district work — and a district officer,
+   * who holds every other key in the table, is refused it.
+   */
+  it("reserves marking a village as demonstration data to the admin", async () => {
+    server = await boot();
+    await post("admin", "/villages", VILLAGE);
+
+    const asOfficer = await post("district_officer", "/villages/village-1/demonstration", {
+      reason: "seeded for a walkthrough",
+    });
+    expect(asOfficer.status, JSON.stringify(asOfficer.body)).toBe(403);
+
+    const asCommittee = await post("village_committee", "/villages/village-1/demonstration", {
+      reason: "seeded for a walkthrough",
+    });
+    expect(asCommittee.status).toBe(403);
+
+    const asAdmin = await post("admin", "/villages/village-1/demonstration", {
+      reason: "seeded for a walkthrough",
+    });
+    expect(asAdmin.status, JSON.stringify(asAdmin.body)).toBe(200);
+    expect((asAdmin.body as { isDemonstration: boolean }).isDemonstration).toBe(true);
+
+    // Refused means refused: the officer's call above left no mark, so the
+    // village was real until the admin said otherwise.
+    const profile = await as("district_officer", "/villages/village-1");
+    expect((profile.body as { isDemonstration: boolean }).isDemonstration).toBe(true);
+  });
+
   // -------------------------------------------------------------------------
   // The public surface is unaffected
   // -------------------------------------------------------------------------

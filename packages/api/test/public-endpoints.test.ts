@@ -92,14 +92,14 @@ describe("public transparency endpoints", () => {
   }
 
   /** Sanctions one bridge project against a village and returns its id. */
-  async function sanctionProject(village: string, sanctionedMinor: number): Promise<string> {
+  async function sanctionProject(village: string, sanctionedInr: number): Promise<string> {
     const created = await server.request("/projects", {
       ...jsonBody({
         villageId: village,
         name: "Rampur footbridge",
         category: "bridge",
         fundSource: "district",
-        sanctionedMinor,
+        sanctionedInr,
       }),
       token: TOKEN,
     });
@@ -128,14 +128,14 @@ describe("public transparency endpoints", () => {
 
     it("publishes a sanctioned project with its sanctioned/released/spent ladder", async () => {
       const { rampur } = await seed();
-      const projectId = await sanctionProject(rampur, 500_000_00);
+      const projectId = await sanctionProject(rampur, 500_000);
 
       await server.request(`/projects/${projectId}/release`, {
-        ...jsonBody({ amountMinor: 200_000_00 }),
+        ...jsonBody({ amountInr: 200_000 }),
         token: TOKEN,
       });
       await server.request(`/projects/${projectId}/expenditure`, {
-        ...jsonBody({ amountMinor: 75_000_00, description: "Piling contractor", evidenceRef: "INV-77" }),
+        ...jsonBody({ amountInr: 75_000, description: "Piling contractor", evidenceRef: "INV-77" }),
         token: TOKEN,
       });
 
@@ -151,22 +151,22 @@ describe("public transparency endpoints", () => {
         category: "bridge",
         fundSource: "district",
         currency: "INR",
-        sanctionedMinor: 500_000_00,
-        releasedMinor: 200_000_00,
-        spentMinor: 75_000_00,
+        sanctionedInr: 500_000,
+        releasedInr: 200_000,
+        spentInr: 75_000,
         status: "in_progress",
       });
     });
 
     it("withholds expenditure free text, which an operator could put a name into", async () => {
       const { rampur } = await seed();
-      const projectId = await sanctionProject(rampur, 500_000_00);
+      const projectId = await sanctionProject(rampur, 500_000);
       await server.request(`/projects/${projectId}/release`, {
-        ...jsonBody({ amountMinor: 200_000_00 }),
+        ...jsonBody({ amountInr: 200_000 }),
         token: TOKEN,
       });
       await server.request(`/projects/${projectId}/expenditure`, {
-        ...jsonBody({ amountMinor: 1_000_00, description: "Paid to Sunita Devi", evidenceRef: "RCPT-9" }),
+        ...jsonBody({ amountInr: 1_000, description: "Paid to Sunita Devi", evidenceRef: "RCPT-9" }),
         token: TOKEN,
       });
 
@@ -193,14 +193,18 @@ describe("public transparency endpoints", () => {
         villagesWithActiveNgo: 0,
         // Nothing scored is "unknown", never "zero recovery".
         averageRecoveryComposite: null,
+        // A measured zero, and never omitted: a field that disappears when there
+        // is nothing to report is a field the page stops rendering, and the
+        // disclosure would then be missing on the day something IS seeded.
+        demonstrationVillages: 0,
         // Money is the other way round: no project means no rupee has moved,
         // which is a measured zero rather than an absence of measurement.
         funds: {
           projectCount: 0,
           currency: "INR",
-          sanctionedMinor: 0,
-          releasedMinor: 0,
-          spentMinor: 0,
+          sanctionedInr: 0,
+          releasedInr: 0,
+          spentInr: 0,
           anomalyCount: 0,
         },
       });
@@ -208,15 +212,15 @@ describe("public transparency endpoints", () => {
 
     it("totals the fund ladder across every sanctioned project", async () => {
       const { rampur, sonpur } = await seed();
-      const first = await sanctionProject(rampur, 500_000_00);
-      await sanctionProject(sonpur, 300_000_00);
+      const first = await sanctionProject(rampur, 500_000);
+      await sanctionProject(sonpur, 300_000);
 
       await server.request(`/projects/${first}/release`, {
-        ...jsonBody({ amountMinor: 200_000_00 }),
+        ...jsonBody({ amountInr: 200_000 }),
         token: TOKEN,
       });
       await server.request(`/projects/${first}/expenditure`, {
-        ...jsonBody({ amountMinor: 60_000_00, description: "Piling contractor" }),
+        ...jsonBody({ amountInr: 60_000, description: "Piling contractor" }),
         token: TOKEN,
       });
 
@@ -225,9 +229,9 @@ describe("public transparency endpoints", () => {
       expect(funds).toEqual({
         projectCount: 2,
         currency: "INR",
-        sanctionedMinor: 800_000_00,
-        releasedMinor: 200_000_00,
-        spentMinor: 60_000_00,
+        sanctionedInr: 800_000,
+        releasedInr: 200_000,
+        spentInr: 60_000,
         anomalyCount: 0,
       });
     });
@@ -235,8 +239,8 @@ describe("public transparency endpoints", () => {
     it("counts anomalies that Fund Monitoring has actually flagged", async () => {
       const { rampur } = await seed();
       // Two active bridge projects in one village is the duplicate-funding rule.
-      const first = await sanctionProject(rampur, 500_000_00);
-      await sanctionProject(rampur, 400_000_00);
+      const first = await sanctionProject(rampur, 500_000);
+      await sanctionProject(rampur, 400_000);
 
       const detected = await server.request(`/projects/${first}/detect-anomalies`, {
         ...jsonBody({}),
@@ -277,6 +281,77 @@ describe("public transparency endpoints", () => {
       expect(scored).toHaveLength(1);
       expect(stats["averageRecoveryComposite"]).toBeCloseTo(scored[0]!.composite, 10);
       expect(stats["averageRecoveryComposite"]).not.toBeNull();
+    });
+  });
+
+  /**
+   * DEMONSTRATION DATA AND THE PUBLISHED FIGURES.
+   *
+   * The rule these tests pin: a demonstration village is LISTED (labelled) and
+   * COUNTED NOWHERE. Both halves matter, and each is the other's failure mode —
+   * filtering the rows out would replace a labelled illustration with an
+   * unexplained absence, while counting them would publish figures the platform
+   * never measured. See `docs/incidents/2026-07-28-id-collision-data-loss.md`:
+   * "fabrication is worse than deletion and harder to notice."
+   */
+  describe("demonstration villages", () => {
+    async function markDemonstration(villageId: string): Promise<void> {
+      const response = await server.request(`/villages/${villageId}/demonstration`, {
+        ...jsonBody({ reason: "seeded so the platform can be shown" }),
+        token: TOKEN,
+      });
+      expect(response.status, JSON.stringify(response.body)).toBe(200);
+    }
+
+    it("labels them in the public list rather than hiding them", async () => {
+      const { rampur } = await seed();
+      await markDemonstration(rampur);
+
+      const villages = record((await server.request("/public/villages")).body)["villages"] as Array<
+        Record<string, unknown>
+      >;
+
+      // Both still published — the flag is not sensitive, it is the disclosure.
+      expect(villages).toHaveLength(2);
+      const byId = new Map(villages.map((village) => [village["id"], village["isDemonstration"]]));
+      expect(byId.get(rampur)).toBe(true);
+      expect([...byId.values()].filter((flag) => flag === false)).toHaveLength(1);
+    });
+
+    it("counts none of them in any published figure, and says how many it left out", async () => {
+      // `rampur` is the seeded village that carries the recovery index and the
+      // active NGO, so marking it moves every figure at once.
+      const { rampur } = await seed();
+      await markDemonstration(rampur);
+
+      const stats = record((await server.request("/public/stats")).body);
+
+      expect(stats["totalVillages"]).toBe(1);
+      expect(stats["bySeverity"]).toEqual({ critical: 1, severe: 0, moderate: 0, minor: 0 });
+      expect(stats["villagesWithActiveNgo"]).toBe(0);
+      // The one scored village was the demonstration one, so the honest answer
+      // is "unknown" — NOT the composite that was made up to fill a screen.
+      expect(stats["averageRecoveryComposite"]).toBeNull();
+      // And the exclusion is stated, so "1 village" cannot be read as "we have
+      // one village" when the registry holds two.
+      expect(stats["demonstrationVillages"]).toBe(1);
+    });
+
+    it("reports zero real villages honestly when every village is a demonstration", async () => {
+      const { rampur, sonpur } = await seed();
+      await markDemonstration(rampur);
+      await markDemonstration(sonpur);
+
+      const stats = record((await server.request("/public/stats")).body);
+
+      expect(stats["totalVillages"]).toBe(0);
+      expect(stats["demonstrationVillages"]).toBe(2);
+      expect(stats["bySeverity"]).toEqual({ critical: 0, severe: 0, moderate: 0, minor: 0 });
+      expect(stats["averageRecoveryComposite"]).toBeNull();
+      // The rows are still there to be looked at; it is the CLAIMS that are zero.
+      expect(
+        (record((await server.request("/public/villages")).body)["villages"] as unknown[]).length,
+      ).toBe(2);
     });
   });
 

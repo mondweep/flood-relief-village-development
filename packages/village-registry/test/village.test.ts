@@ -248,3 +248,104 @@ describe("Village encapsulation (regression)", () => {
     expect(village.latestDamageAssessment?.housesDamaged).toBe(10);
   });
 });
+
+/**
+ * The flag from `docs/incidents/2026-07-28-id-collision-data-loss.md`: some
+ * records exist to be looked at, not believed, and the platform must be able to
+ * say which. These tests pin the two properties the concept rests on — it cannot
+ * be switched on by accident, and it cannot be switched off at all.
+ */
+describe("Village demonstration data", () => {
+  it("is false on a newly created village", () => {
+    expect(unwrap(Village.create(baseProps())).isDemonstration).toBe(false);
+  });
+
+  it("cannot be set through create, whatever a caller puts in the props", () => {
+    // The props type has no such field, so this is what a caller who tried it
+    // anyway (an `as` cast, a spread of a request body) would actually get.
+    const smuggled = { ...baseProps(), isDemonstration: true } as VillageCreateProps;
+
+    const village = unwrap(Village.create(smuggled));
+
+    // A real village registered by a field worker cannot arrive flagged, which
+    // is what stops it silently vanishing from every published figure.
+    expect(village.isDemonstration).toBe(false);
+  });
+
+  it("is true after markAsDemonstration, and marking twice is a no-op", () => {
+    const village = unwrap(Village.create(baseProps()));
+
+    village.markAsDemonstration();
+    expect(village.isDemonstration).toBe(true);
+
+    village.markAsDemonstration();
+    expect(village.isDemonstration).toBe(true);
+  });
+
+  /**
+   * THE MUTATION-CHECK ANCHOR. Marking a record demonstration data says "do not
+   * believe this"; clearing it would say "believe it after all", which launders a
+   * fabricated record into the real reporting leaving no trace. If a future
+   * change adds `unmarkAsDemonstration`, a `set isDemonstration`, or makes the
+   * field writable, this test is the one that should stop it — and it is written
+   * against the aggregate's whole surface rather than one method name so that
+   * renaming the escape hatch does not evade it.
+   */
+  it("exposes no way to clear the flag once set", () => {
+    const village = unwrap(Village.create(baseProps()));
+    village.markAsDemonstration();
+
+    const surface = [
+      ...Object.getOwnPropertyNames(village),
+      ...Object.getOwnPropertyNames(Object.getPrototypeOf(village) as object),
+    ];
+    const clearing = surface.filter((name) => /^(unmark|clear|unset|reset)/i.test(name));
+    expect(clearing, `these members can clear a demonstration flag: ${clearing.join(", ")}`).toEqual([]);
+
+    // Assignment through the public getter is a TypeScript error, and under ESM
+    // strict mode a THROW at runtime rather than a silent no-op — a getter with
+    // no setter. Pinned so that adding a setter is a test failure rather than a
+    // quiet capability.
+    expect(() => {
+      (village as unknown as Record<string, unknown>)["isDemonstration"] = false;
+    }).toThrow(TypeError);
+    expect(village.isDemonstration).toBe(true);
+
+    // updateDemographics is the one bulk-write path onto the aggregate. It must
+    // not carry the flag with it.
+    unwrap(village.updateDemographics({ name: "Renamed", population: 999 }));
+    expect(village.isDemonstration).toBe(true);
+  });
+});
+
+describe("Village.restore", () => {
+  it("rebuilds a demonstration village with its flag", () => {
+    const village = unwrap(Village.restore({ ...baseProps(), isDemonstration: true }));
+    expect(village.isDemonstration).toBe(true);
+    expect(village.name).toBe("Rampur");
+  });
+
+  it("rebuilds an ordinary village with the flag off", () => {
+    expect(unwrap(Village.restore({ ...baseProps(), isDemonstration: false })).isDemonstration).toBe(false);
+  });
+
+  it("rejects a non-boolean flag rather than guessing at it", () => {
+    // `"false"`, `0` and `"f"` are each truthy or falsy in some reading, and
+    // guessing which would eventually publish a demonstration village as real.
+    const result = Village.restore({
+      ...baseProps(),
+      isDemonstration: "false" as unknown as boolean,
+    });
+    expect(result.ok).toBe(false);
+  });
+
+  it("still enforces every ordinary invariant", () => {
+    const result = Village.restore({
+      ...baseProps(),
+      households: 100,
+      affectedFamilies: 101,
+      isDemonstration: true,
+    });
+    expect(result.ok).toBe(false);
+  });
+});

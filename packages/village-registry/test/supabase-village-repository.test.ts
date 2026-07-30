@@ -70,6 +70,7 @@ describe("SupabaseVillageRepository — schema contract", () => {
       "geo_source",
       "households",
       "id",
+      "is_demonstration",
       "lat",
       "lng",
       "name",
@@ -91,7 +92,24 @@ describe("SupabaseVillageRepository — schema contract", () => {
       households: 250,
       affected_families: 80,
       severity: "severe",
+      is_demonstration: false,
     });
+  });
+
+  /**
+   * `save` is an upsert, so an omitted column on an UPDATE leaves whatever the
+   * row already held. Writing the flag on every save is what keeps row and
+   * aggregate in step — and the direction that matters is that a demonstration
+   * village can never be written back as real.
+   */
+  it("writes the demonstration flag on every save, not only when it is set", async () => {
+    const fake = createFakeSupabase();
+    const demo = makeVillage();
+    demo.markAsDemonstration();
+
+    await new SupabaseVillageRepository(fake.client).save(demo);
+
+    expect((fake.callTo(VILLAGES_TABLE, "upsert").payload as FakeRow)["is_demonstration"]).toBe(true);
   });
 
   it("writes exactly the columns of village_registry_damage_assessments", async () => {
@@ -280,6 +298,37 @@ describe("SupabaseVillageRepository — corrupt rows", () => {
     affected_families: 80,
     severity: "severe",
   };
+
+  it("restores the demonstration flag off the row", () => {
+    expect(fromRow({ ...validRow, is_demonstration: true }, []).isDemonstration).toBe(true);
+    expect(fromRow({ ...validRow, is_demonstration: false }, []).isDemonstration).toBe(false);
+  });
+
+  /**
+   * A database that has not had migration 00008 applied has no such column, and
+   * "no village has been marked" is the literal truth of that database — nothing
+   * could have been. Compare `geo_source`, where a missing value had to be
+   * invented and so is treated as corruption instead.
+   */
+  it("reads a missing column as not-a-demonstration, since nothing can have been marked", () => {
+    const { is_demonstration, ...withoutColumn } = { ...validRow, is_demonstration: false };
+    void is_demonstration;
+    expect(fromRow(withoutColumn as VillageRow, []).isDemonstration).toBe(false);
+    expect(fromRow({ ...validRow, is_demonstration: null as unknown as boolean }, []).isDemonstration).toBe(
+      false,
+    );
+  });
+
+  /**
+   * The one direction of this flag's failure that must be loud: a value that is
+   * present but not a boolean (`"false"`, `0`, `"f"`) is a row nobody can read
+   * safely, and guessing would eventually publish a demonstration village as real.
+   */
+  it("throws on a non-boolean is_demonstration rather than guessing at it", () => {
+    expect(() => fromRow({ ...validRow, is_demonstration: "false" as unknown as boolean }, [])).toThrow(
+      /corrupt row in village_registry_villages \(id=village-1\).*is_demonstration/s,
+    );
+  });
 
   it("throws rather than returning a village with an unknown severity", () => {
     expect(() => fromRow({ ...validRow, severity: "apocalyptic" }, [])).toThrow(

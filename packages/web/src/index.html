@@ -1118,13 +1118,46 @@ const DIMENSIONS = ["infrastructure", "education", "health", "livelihood", "agri
                     "employment", "water", "sanitation", "road", "electricity"];
 
 /** Plain text (unescaped). Escape at the point of interpolation. */
-function money(minor, currency) {
-  if (typeof minor !== "number" || !isFinite(minor)) return "—";
-  const major = minor / 100;
+/**
+ * Renders an amount in MAJOR units — rupees, not paise.
+ *
+ * The API now sends major units throughout (`sanctionedInr`, `amountInr`, …), so
+ * this no longer divides by 100. Handing it a paise figure would show a hundred
+ * times too much, which is why every call site was renamed alongside: a function
+ * that silently accepted either unit is how that mistake goes unnoticed.
+ *
+ * `en-IN` grouping is deliberate and not cosmetic. Indian numbering groups by
+ * lakh and crore — ₹12,34,567, not ₹1,234,567 — and relief budgets are discussed
+ * in exactly those units. Western grouping would make an Assamese officer
+ * mentally re-parse every figure on the page.
+ *
+ * The symbol is added HERE and never travels in the payload. The API sends a
+ * number and a separate `currency` field, because a symbol inside a JSON number
+ * makes the value unparseable and forces a locale decision onto the server.
+ */
+const RUPEE = "₹";
+
+function money(major, currency) {
+  if (typeof major !== "number" || !isFinite(major)) return "—";
+  const code = currency || "INR";
   let text;
-  try { text = major.toLocaleString(undefined, { maximumFractionDigits: 0 }); }
-  catch (_) { text = String(Math.round(major)); }
-  return (currency ? currency + " " : "") + text;
+  try {
+    // Indian grouping belongs to the rupee, not to the page: applying en-IN to a
+    // dollar figure would render $2,500,000 as "25,00,000", which is wrong in a
+    // way that looks deliberate. Nothing emits a non-rupee amount today; this
+    // costs one conditional and stops that being a trap if anything ever does.
+    text = major.toLocaleString(code === "INR" ? "en-IN" : undefined, {
+      // Whole rupees. Paise on a relief budget is noise, and the underlying
+      // value keeps them regardless — this is display, not truncation of record.
+      maximumFractionDigits: 0,
+    });
+  } catch (_) {
+    text = String(Math.round(major));
+  }
+  // A non-rupee amount keeps its code rather than being drawn with the wrong
+  // symbol. Nothing emits one today; showing "₹" over a USD figure would be a
+  // quiet lie if anything ever did.
+  return code === "INR" ? RUPEE + text : code + " " + text;
 }
 
 function when(iso) {
@@ -1598,10 +1631,10 @@ function recoveryBar(composite) {
  * arithmetic rather than take a single percentage on trust. If the numbers ever
  * violate the invariant the render says so instead of clamping it out of sight.
  */
-function fundLadder(sanctionedMinor, releasedMinor, spentMinor, currency) {
-  const sanctioned = Number(sanctionedMinor) || 0;
-  const released = Number(releasedMinor) || 0;
-  const spent = Number(spentMinor) || 0;
+function fundLadder(sanctionedInr, releasedInr, spentInr, currency) {
+  const sanctioned = Number(sanctionedInr) || 0;
+  const released = Number(releasedInr) || 0;
+  const spent = Number(spentInr) || 0;
   const label = "Sanctioned " + money(sanctioned, currency)
     + ", released " + money(released, currency) + ", spent " + money(spent, currency);
   const breach = released > sanctioned || spent > released;
@@ -1646,12 +1679,28 @@ function villageHref(villageId) {
  * href is the deep link, so the row can be shared, opened in a new tab and
  * returned to with the browser's own Back button.
  */
+/**
+ * The label for a village that exists to be looked at rather than believed.
+ *
+ * Rendered wherever a village name is, and never suppressed. The incident of
+ * 2026-07-28 concluded that "fabrication is worse than deletion and harder to
+ * notice", because invented records render as ordinary data — this badge is the
+ * one thing standing between a demonstration record and that outcome, so it does
+ * not get hidden to tidy up a layout.
+ */
+function demoBadge(village) {
+  return village && village.isDemonstration === true
+    ? ' <span class="tag demo" title="Demonstration data — not a real village">Demo</span>'
+    : "";
+}
+
 function villageRow(village, extraHtml) {
   const composite = village.recovery && typeof village.recovery.composite === "number"
     ? village.recovery.composite : null;
   return '<li class="row is-link' + (village.severity === "critical" ? " is-critical" : "") + '">'
     + '<div class="row-top"><a class="row-link row-name" href="' + villageHref(village.id) + '">'
       + esc(village.name) + "</a>"
+      + demoBadge(village)
       + severityChip(village.severity) + "</div>"
     + '<p class="row-meta">' + esc(village.district) + (village.state ? ", " + esc(village.state) : "")
       + " · " + esc(String(village.affectedFamilies)) + " of " + esc(String(village.households))
@@ -2009,9 +2058,9 @@ function fundSummary(projects) {
   let sanctioned = 0, released = 0, spent = 0;
   const currency = projects[0] && projects[0].currency ? projects[0].currency : "";
   projects.forEach(function (project) {
-    sanctioned += project.sanctionedMinor || 0;
-    released += project.releasedMinor || 0;
-    spent += project.spentMinor || 0;
+    sanctioned += project.sanctionedInr || 0;
+    released += project.releasedInr || 0;
+    spent += project.spentInr || 0;
   });
   return '<div class="card"><div class="card-head"><span class="card-title">All projects</span>'
     + '<span class="row-meta">' + esc(String(projects.length)) + " project" + (projects.length === 1 ? "" : "s") + "</span></div>"
@@ -2023,9 +2072,9 @@ function fundTable(projects) {
     return "<tr><td>" + esc(project.name) + "</td>"
       + "<td>" + esc(words(project.category)) + "</td>"
       + "<td>" + esc(words(project.fundSource)) + "</td>"
-      + '<td class="num">' + esc(money(project.sanctionedMinor, project.currency)) + "</td>"
-      + '<td class="num">' + esc(money(project.releasedMinor, project.currency)) + "</td>"
-      + '<td class="num">' + esc(money(project.spentMinor, project.currency)) + "</td>"
+      + '<td class="num">' + esc(money(project.sanctionedInr, project.currency)) + "</td>"
+      + '<td class="num">' + esc(money(project.releasedInr, project.currency)) + "</td>"
+      + '<td class="num">' + esc(money(project.spentInr, project.currency)) + "</td>"
       + "<td>" + esc(words(project.status)) + "</td></tr>";
   }).join("");
   return '<div class="table-scroll" style="margin-top:8px"><table>'
@@ -2137,7 +2186,7 @@ function renderDistrictTiles(unassigned) {
   let utilisation = null;
   if (funds && funds.length > 0) {
     let sanctioned = 0, spent = 0;
-    funds.forEach(function (p) { sanctioned += p.sanctionedMinor || 0; spent += p.spentMinor || 0; });
+    funds.forEach(function (p) { sanctioned += p.sanctionedInr || 0; spent += p.spentInr || 0; });
     utilisation = sanctioned > 0 ? Math.round(pct(spent, sanctioned)) : null;
   }
   $("#dist-tiles").innerHTML =
@@ -2257,7 +2306,7 @@ async function renderDistrictFunds() {
           + statusChip(project.status) + "</div>"
           + '<p class="row-meta">' + esc(words(project.category)) + " · funded by " + esc(words(project.fundSource))
           + " · " + esc(villageName(project.villageId)) + "</p>"
-          + fundLadder(project.sanctionedMinor, project.releasedMinor, project.spentMinor, project.currency)
+          + fundLadder(project.sanctionedInr, project.releasedInr, project.spentInr, project.currency)
           + '<p class="mono">' + esc(project.id) + "</p></li>";
       }).join("") + "</ul>"
     + (loaded.source === "public"
@@ -2604,7 +2653,7 @@ async function renderNgoWorkload(out, villageIds) {
       + projects.map(function (project) {
           return '<div style="margin-top:12px"><p class="row-meta"><strong>' + esc(project.name) + "</strong> · "
             + esc(words(project.status)) + "</p>"
-            + fundLadder(project.sanctionedMinor, project.releasedMinor, project.spentMinor, project.currency) + "</div>";
+            + fundLadder(project.sanctionedInr, project.releasedInr, project.spentInr, project.currency) + "</div>";
         }).join("")
       + "</div>";
   }));
@@ -2808,8 +2857,19 @@ function numTile(label, value, alertWhenPositive) {
 function villageHeadHtml(village) {
   const geo = village.geo && typeof village.geo.lat === "number" && typeof village.geo.lng === "number"
     ? num1(village.geo.lat) + ", " + num1(village.geo.lng) : null;
-  return '<div class="view-head"><h2 id="h-village-detail">' + esc(village.name) + "</h2>"
-      + "<p>" + esc(village.district) + (village.state ? ", " + esc(village.state) : "") + "</p></div>"
+  return '<div class="view-head"><h2 id="h-village-detail">' + esc(village.name) + demoBadge(village) + "</h2>"
+      + "<p>" + esc(village.district) + (village.state ? ", " + esc(village.state) : "") + "</p>"
+      // Spelled out on the detail page, not just badged. This is the screen
+      // where someone reads a household count, an aid record or an issue and
+      // decides what to do about it, so the label has to be a sentence rather
+      // than a chip they might take for a status.
+      + (village.isDemonstration === true
+          ? '<div class="callout warn"><p><strong>Demonstration data.</strong> This village and '
+            + 'everything attached to it — damage, aid, beneficiaries, issues — exist so you can see '
+            + 'how the platform works. No part of it describes a real household, and it is excluded '
+            + 'from the published totals.</p></div>'
+          : "")
+      + "</div>"
     + '<div class="card">'
       + '<div class="card-head"><span class="card-title">Profile</span>' + severityChip(village.severity) + "</div>"
       + '<div class="tiles" style="margin-top:8px">'
@@ -3531,7 +3591,7 @@ async function renderVillageProjects(villageId) {
     return '<li class="row"><div class="row-top"><span class="row-name">' + esc(project.name) + "</span>"
       + statusChip(project.status) + "</div>"
       + '<p class="row-meta">' + esc(words(project.category)) + " · funded by " + esc(words(project.fundSource)) + "</p>"
-      + fundLadder(project.sanctionedMinor, project.releasedMinor, project.spentMinor, project.currency)
+      + fundLadder(project.sanctionedInr, project.releasedInr, project.spentInr, project.currency)
       + anomalies.map(function (anomaly) {
           return '<div class="flag" style="margin-top:8px"><strong>' + esc(words(anomaly.type)) + "</strong>"
             + esc(anomaly.details) + "</div>";
@@ -5290,14 +5350,14 @@ const WORKFLOW_GROUPS = [
     workflows: [
       {
         id: "w-project", title: "Sanction a funded project", submit: "Sanction project", optional: true,
-        note: "Amounts are in minor units (paise), so ₹50,000 is 5000000. The aggregate enforces spent ≤ released ≤ sanctioned from here on.",
+        note: "Amounts are in rupees. The aggregate enforces spent \u2264 released \u2264 sanctioned from here on, and rejects anything with more than two decimal places.",
         fields: [fVillage, t("name", "Project name", { required: true }),
                  sel("category", "Category", PROJECT_CATEGORY_OPTIONS, { half: true }),
                  sel("fundSource", "Fund source", FUND_SOURCE_OPTIONS, { half: true }),
-                 n("sanctionedMinor", "Sanctioned amount (minor units)", { min: 1, required: true })],
+                 n("sanctionedInr", "Sanctioned amount (\u20b9)", { min: 1, required: true })],
         build: function (v) {
           return { path: "/projects", body: { villageId: v.villageId, name: v.name, category: v.category,
-            fundSource: v.fundSource, sanctionedMinor: Number(v.sanctionedMinor) } };
+            fundSource: v.fundSource, sanctionedInr: Number(v.sanctionedInr) } };
         },
         done: function (data, msg, v) {
           rememberId("projects", data.projectId, v.name);
@@ -5308,31 +5368,31 @@ const WORKFLOW_GROUPS = [
       {
         id: "w-release", title: "Release funds", submit: "Release funds", optional: true,
         note: "Released may never exceed sanctioned. The first release moves the project to in progress.",
-        fields: [fProject, n("amountMinor", "Amount (minor units)", { min: 1, required: true })],
+        fields: [fProject, n("amountInr", "Amount (\u20b9)", { min: 1, required: true })],
         build: function (v) {
           return { path: "/projects/" + encodeURIComponent(v.projectId) + "/release",
-                   body: { amountMinor: Number(v.amountMinor) } };
+                   body: { amountInr: Number(v.amountInr) } };
         },
         done: function (data, msg) {
           setMsg(msg, "ok", "Funds released",
-            "Total released is now <strong>" + esc(money(data.totalReleasedMinor)) + "</strong>"
+            "Total released is now <strong>" + esc(money(data.totalReleasedInr)) + "</strong>"
             + (data.status ? " · status " + esc(words(data.status)) : "") + ".");
         }
       },
       {
         id: "w-expenditure", title: "Record expenditure", submit: "Record expenditure", optional: true,
         note: "Spent may never exceed released. An over-run is rejected with the exact arithmetic, shown below verbatim.",
-        fields: [fProject, n("amountMinor", "Amount (minor units)", { min: 1, required: true }),
+        fields: [fProject, n("amountInr", "Amount (\u20b9)", { min: 1, required: true }),
                  t("description", "Description", { required: true }),
                  t("evidenceRef", "Evidence reference", { optional: true, hint: "Photo or document reference, if any." })],
         build: function (v) {
-          const body = { amountMinor: Number(v.amountMinor), description: v.description };
+          const body = { amountInr: Number(v.amountInr), description: v.description };
           if (v.evidenceRef) body.evidenceRef = v.evidenceRef;
           return { path: "/projects/" + encodeURIComponent(v.projectId) + "/expenditure", body: body };
         },
         done: function (data, msg) {
           setMsg(msg, "ok", "Expenditure recorded",
-            "Total spent is now <strong>" + esc(money(data.totalSpentMinor)) + "</strong>, still within what was released.");
+            "Total spent is now <strong>" + esc(money(data.totalSpentInr)) + "</strong>, still within what was released.");
         }
       },
       {
@@ -6046,8 +6106,8 @@ function fieldForError(workflow, message) {
     if (label && lower.indexOf(label) !== -1) return name;
   }
   if (/affected famil/.test(lower)) return "affectedFamilies";
-  if (/sanction/.test(lower)) return "sanctionedMinor";
-  if (/released|spent|amount/.test(lower)) return "amountMinor";
+  if (/sanction/.test(lower)) return "sanctionedInr";
+  if (/released|spent|amount/.test(lower)) return "amountInr";
   if (/severity/.test(lower)) return "severity";
   return null;
 }

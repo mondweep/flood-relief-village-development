@@ -136,7 +136,7 @@ async function exerciseWrites(server: Awaited<ReturnType<typeof startTestServerW
       name: "Culvert rebuild",
       category: "bridge",
       fundSource: "district",
-      sanctionedMinor: 500000,
+      sanctionedInr: 5000,
     }),
   );
 

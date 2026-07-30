@@ -46,6 +46,33 @@ describe("RegisterVillage", () => {
     expect(saved.severity).toBe("severe");
   });
 
+  /**
+   * A registration can never produce DEMONSTRATION data. The input type has no
+   * such field, so this is what a caller who sent one anyway would get — a form
+   * post with an extra key, a copied curl command, a stale client. A real
+   * village that arrived flagged would be quietly excluded from every published
+   * figure, and a missing village is the hardest kind of error to notice
+   * (docs/incidents/2026-07-28-id-collision-data-loss.md).
+   */
+  it("never produces a demonstration village, whatever the input carries", async () => {
+    const repository = buildRepository();
+    const useCase = new RegisterVillage({
+      repository,
+      clock: new FixedClock(new Date("2026-01-01T00:00:00.000Z")),
+      idGenerator: new SequentialIdGenerator("village"),
+      eventPublisher: new CapturingEventPublisher(),
+    });
+
+    const result = await useCase.execute({
+      ...validInput(),
+      isDemonstration: true,
+    } as RegisterVillageInput);
+
+    expect(result.ok).toBe(true);
+    const saved = (repository.save as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    expect(saved.isDemonstration).toBe(false);
+  });
+
   it("publishes village.registered.v1 with the correct payload", async () => {
     const repository = buildRepository();
     const clock = new FixedClock(new Date("2026-01-01T00:00:00.000Z"));

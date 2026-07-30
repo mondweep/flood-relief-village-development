@@ -45,11 +45,11 @@ describe("PLATFORM_PERMISSIONS completeness", () => {
     expect(contexts.size).toBe(9);
   });
 
-  it("gates exactly the 48 members the platform exposes", () => {
+  it("gates exactly the 49 members the platform exposes", () => {
     // A count, so adding a member without a rule fails here too even if the
     // completeness filter above is ever weakened.
-    expect(platformMemberKeys()).toHaveLength(48);
-    expect(Object.keys(PLATFORM_PERMISSIONS)).toHaveLength(48);
+    expect(platformMemberKeys()).toHaveLength(49);
+    expect(Object.keys(PLATFORM_PERMISSIONS)).toHaveLength(49);
   });
 });
 

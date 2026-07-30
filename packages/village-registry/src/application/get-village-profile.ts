@@ -16,6 +16,12 @@ export interface VillageProfile {
   households: number;
   affectedFamilies: number;
   severity: Severity;
+  /**
+   * True when this record exists to be looked at rather than believed. Carried
+   * on every projection of a village, never inferred from the name: a reader who
+   * has to recognise "Demo Village" is a reader who will one day not.
+   */
+  isDemonstration: boolean;
   damageAssessments: readonly DamageAssessment[];
   latestDamageAssessment: DamageAssessment | null;
 }
@@ -40,6 +46,7 @@ export function toVillageProfile(village: Village): VillageProfile {
     households: village.households,
     affectedFamilies: village.affectedFamilies,
     severity: village.severity,
+    isDemonstration: village.isDemonstration,
     damageAssessments: village.damageAssessments,
     latestDamageAssessment: village.latestDamageAssessment,
   };

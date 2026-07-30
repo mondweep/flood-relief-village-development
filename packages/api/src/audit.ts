@@ -227,6 +227,7 @@ export const AUDIT_SUBJECTS: Readonly<Record<string, SubjectRule>> = {
 
   // village-registry
   "village.damage-assessed.v1": { subjectType: "village", idKey: "villageId" },
+  "village.marked-as-demonstration.v1": { subjectType: "village", idKey: "villageId" },
   "village.profile-corrected.v1": { subjectType: "village", idKey: "villageId" },
   "village.registered.v1": { subjectType: "village", idKey: "villageId" },
   "village.severity-updated.v1": { subjectType: "village", idKey: "villageId" },

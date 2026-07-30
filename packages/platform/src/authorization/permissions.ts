@@ -108,6 +108,24 @@ export const PLATFORM_PERMISSIONS: Record<string, PermissionRule> = {
     ownable: OWNED_VILLAGE,
     operation: "correct village profiles",
   },
+  /**
+   * ADMIN ONLY — an empty role list, which under `authorize-platform.ts` means
+   * "nobody but admin", since admin is granted implicitly and never listed here.
+   *
+   * Declaring a village to be demonstration data removes it from every real
+   * figure the platform publishes and is, by design, permanent (see
+   * `Village.markAsDemonstration`). That is a statement about what the platform
+   * as a whole is asserting, not a fact about one village's recovery, so it
+   * belongs with whoever runs the platform rather than with the people
+   * recording work in it. A district officer who could reach this could quietly
+   * take a real village out of the reporting; no `ownable` clause either, for
+   * the same reason — creating a record must not confer the right to declare it
+   * fictional.
+   */
+  "villageRegistry.markAsDemonstration": {
+    roles: [],
+    operation: "mark villages as demonstration data",
+  },
   "villageRegistry.getVillageProfile": { roles: EVERYONE, operation: "read village profiles" },
   "villageRegistry.listVillagesBySeverity": { roles: EVERYONE, operation: "list villages by severity" },
 

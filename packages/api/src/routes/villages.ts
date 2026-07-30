@@ -179,6 +179,37 @@ export function registerVillageRoutes(router: Router, deps: RouteDeps): void {
   });
 
   /**
+   * Declares a village to be DEMONSTRATION data — a record that exists so the
+   * platform can be shown to someone, and that must never be read as a claim
+   * about a real place.
+   *
+   * A route of its own, and a POST rather than a field on `POST /villages` or a
+   * key in `PATCH /villages/:id/profile`. The registration path cannot express
+   * this at all (`Village.create` has no such parameter), so a real village
+   * cannot arrive flagged by a mistyped body, and the correction path cannot
+   * either — a correction says "our record of the world was wrong", while this
+   * says "this record is not about the world".
+   *
+   * NOTE WHAT IS MISSING: there is no DELETE. The flag is permanent by design;
+   * see `Village.markAsDemonstration`. Admin-only, per
+   * `villageRegistry.markAsDemonstration` in the permission table.
+   */
+  router.post("/villages/:id/demonstration", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const body = asObject(ctx.body);
+    if (!body.ok) return badRequest(body.error);
+
+    const reason = requiredString(body.value, "reason");
+    if (!reason.ok) return badRequest(reason.error);
+
+    return fromResult(
+      await villages(ctx).markAsDemonstration.execute({
+        villageId: ctx.params["id"] ?? "",
+        reason: reason.value,
+      }),
+    );
+  });
+
+  /**
    * The village's timeline (ADR 0013), oldest first.
    *
    * ADR 0013 shipped this with a hole it named: severity transitions, profile
@@ -321,6 +352,7 @@ const KIND_BY_EVENT: Readonly<Record<string, string>> = {
   "village.registered.v1": "registered",
   "village.severity-updated.v1": "severity-change",
   "village.profile-corrected.v1": "correction",
+  "village.marked-as-demonstration.v1": "demonstration-marked",
 };
 
 /** Plain-language one-liners. Falls back to the event name rather than guessing. */
@@ -339,6 +371,10 @@ function summariseEvent(entry: AuditEntry): string {
         typeof changed === "object" && changed !== null ? Object.keys(changed).join(", ") : "details";
       return `Corrected ${fields} — ${String(p["reason"] ?? "no reason given")}`;
     }
+    case "village.marked-as-demonstration.v1":
+      // Phrased as what it means rather than as a field change: a reader of this
+      // timeline needs to know that everything above and below it is illustrative.
+      return `Marked as demonstration data, not a real village — ${String(p["reason"] ?? "no reason given")}`;
     case "village.damage-assessed.v1":
       return `Damage assessment recorded: ${String(p["housesDamaged"] ?? "?")} houses damaged`;
     case "recovery.score-calculated.v1":

@@ -8,7 +8,7 @@ const PROJECT_BODY = {
   name: "Rampur footbridge",
   category: "bridge",
   fundSource: "district",
-  sanctionedMinor: 500_000_00,
+  sanctionedInr: 500_000,
 };
 
 describe("fund monitoring routes", () => {
@@ -63,12 +63,73 @@ describe("fund monitoring routes", () => {
       expect(record(response.body)["error"]).toBe("invalid fundSource: crypto");
     });
 
-    it("rejects a rupee float rather than truncating it to paise", async () => {
+    it("accepts paise as the second decimal of a rupee amount", async () => {
       const villageId = await village();
-      const response = await post("/projects", { ...PROJECT_BODY, villageId, sanctionedMinor: 1500.75 });
+      const response = await post("/projects", {
+        ...PROJECT_BODY,
+        villageId,
+        sanctionedInr: 1500.75,
+      });
+
+      expect(response.status).toBe(201);
+
+      const listed = await server.request("/projects", { token: TOKEN });
+      const projects = record(listed.body)["projects"] as Record<string, unknown>[];
+      expect(projects[0]!["sanctionedInr"]).toBe(1500.75);
+    });
+
+    /**
+     * `19.99` is `1998.9999999999998` once multiplied by 100. Asserting the
+     * figure survives the round trip EXACTLY is the point — a boundary that
+     * truncated instead of rounding would book ₹19.98 and nobody would notice
+     * until the ledger was a paisa short per project.
+     */
+    it.each([19.99, 0.01, 1234567.89, 0.1 + 0.2])(
+      "round-trips the awkward decimal %p without losing a paisa",
+      async (sanctionedInr) => {
+        const villageId = await village();
+        const created = await post("/projects", { ...PROJECT_BODY, villageId, sanctionedInr });
+        expect(created.status).toBe(201);
+
+        const listed = await server.request("/projects", { token: TOKEN });
+        const projects = record(listed.body)["projects"] as Record<string, unknown>[];
+        expect(projects[0]!["sanctionedInr"]).toBe(Number(sanctionedInr.toFixed(2)));
+      },
+    );
+
+    it("rejects more precision than a rupee has, rather than rounding it away", async () => {
+      const villageId = await village();
+      const response = await post("/projects", { ...PROJECT_BODY, villageId, sanctionedInr: 1234.567 });
 
       expect(response.status).toBe(400);
-      expect(record(response.body)["error"]).toBe("Money amount must be integer minor units");
+      expect(record(response.body)["error"]).toBe(
+        "sanctionedInr: Money amount cannot have more than 2 decimal places",
+      );
+
+      // 0.145 is the one that matters: bare Math.round(0.145 * 100) is 14, so a
+      // paisa would vanish silently instead of the caller being told.
+      const sneaky = await post("/projects", { ...PROJECT_BODY, villageId, sanctionedInr: 0.145 });
+      expect(sneaky.status).toBe(400);
+    });
+
+    it("rejects an amount too large to hold as exact paise", async () => {
+      const villageId = await village();
+      const response = await post("/projects", {
+        ...PROJECT_BODY,
+        villageId,
+        sanctionedInr: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(response.status).toBe(400);
+      expect(String(record(response.body)["error"])).toContain("sanctionedInr:");
+    });
+
+    it("rejects a non-numeric amount at the boundary", async () => {
+      const villageId = await village();
+      const response = await post("/projects", { ...PROJECT_BODY, villageId, sanctionedInr: "50000" });
+
+      expect(response.status).toBe(400);
+      expect(record(response.body)["error"]).toBe("sanctionedInr must be a finite number");
     });
 
     it("rejects a missing field at the boundary", async () => {
@@ -89,28 +150,44 @@ describe("fund monitoring routes", () => {
   describe("POST /projects/:id/release", () => {
     it("releases funds and reports the running total and status", async () => {
       const projectId = await sanction();
-      const response = await post(`/projects/${projectId}/release`, { amountMinor: 200_000_00 });
+      const response = await post(`/projects/${projectId}/release`, { amountInr: 200_000 });
 
       expect(response.status).toBe(201);
       expect(record(response.body)).toEqual({
         projectId,
-        totalReleasedMinor: 200_000_00,
+        currency: "INR",
+        totalReleasedInr: 200_000,
         status: "in_progress",
       });
     });
 
     it("refuses to release more than was sanctioned", async () => {
       const projectId = await sanction();
-      const response = await post(`/projects/${projectId}/release`, { amountMinor: 900_000_00 });
+      const response = await post(`/projects/${projectId}/release`, { amountInr: 900_000 });
+
+      expect(response.status).toBe(400);
+      // The ladder is still enforced in integer paise INSIDE the aggregate —
+      // that is the whole point of Money holding integers — but the message
+      // quotes the unit the caller used. Telling someone who sent ₹900,000 that
+      // "90000000 would exceed 50000000" reads as a hundredfold error in the
+      // platform rather than as their own overspend.
+      expect(record(response.body)["error"]).toBe(
+        "released total 900000 would exceed sanctioned 500000",
+      );
+    });
+
+    it("rejects a release with more precision than a rupee has", async () => {
+      const projectId = await sanction();
+      const response = await post(`/projects/${projectId}/release`, { amountInr: 100.005 });
 
       expect(response.status).toBe(400);
       expect(record(response.body)["error"]).toBe(
-        "released total 90000000 would exceed sanctioned 50000000",
+        "amountInr: Money amount cannot have more than 2 decimal places",
       );
     });
 
     it("answers 404 for an unknown project", async () => {
-      const response = await post("/projects/project-404/release", { amountMinor: 1 });
+      const response = await post("/projects/project-404/release", { amountInr: 1 });
 
       expect(response.status).toBe(404);
       expect(record(response.body)["error"]).toBe("Project not found: project-404");
@@ -120,7 +197,7 @@ describe("fund monitoring routes", () => {
       const projectId = await sanction();
       const response = await server.request(
         `/projects/${projectId}/release`,
-        jsonBody({ amountMinor: 1 }),
+        jsonBody({ amountInr: 1 }),
       );
 
       expect(response.status).toBe(401);
@@ -130,35 +207,75 @@ describe("fund monitoring routes", () => {
   describe("POST /projects/:id/expenditure", () => {
     it("records an expenditure against released funds", async () => {
       const projectId = await sanction();
-      await post(`/projects/${projectId}/release`, { amountMinor: 200_000_00 });
+      await post(`/projects/${projectId}/release`, { amountInr: 200_000 });
 
       const response = await post(`/projects/${projectId}/expenditure`, {
-        amountMinor: 75_000_00,
+        amountInr: 75_000,
         description: "Piling contractor",
         evidenceRef: "INV-77",
       });
 
       expect(response.status).toBe(201);
-      expect(record(response.body)).toEqual({ projectId, totalSpentMinor: 75_000_00 });
+      expect(record(response.body)).toEqual({ projectId, currency: "INR", totalSpentInr: 75_000 });
     });
 
-    it("refuses to spend more than has been released", async () => {
+    /**
+     * Three expenditures whose rupee values do not add up cleanly in floats:
+     * 0.07 + 0.02 + 0.01 is 0.10000000000000002 as doubles. The running total
+     * must be exactly 0.1, because the aggregate adds 7 + 2 + 1 paise.
+     */
+    it("keeps the running total exact across expenditures that float arithmetic would drift on", async () => {
       const projectId = await sanction();
-      await post(`/projects/${projectId}/release`, { amountMinor: 100_00 });
+      await post(`/projects/${projectId}/release`, { amountInr: 1 });
+
+      for (const amountInr of [0.07, 0.02, 0.01]) {
+        const posted = await post(`/projects/${projectId}/expenditure`, {
+          amountInr,
+          description: "Sundries",
+        });
+        expect(posted.status).toBe(201);
+      }
+
+      const listed = await server.request("/projects", { token: TOKEN });
+      const projects = record(listed.body)["projects"] as Record<string, unknown>[];
+      expect(projects[0]!["spentInr"]).toBe(0.1);
+      expect(
+        (projects[0]!["expenditures"] as Record<string, unknown>[]).map((e) => e["amountInr"]),
+      ).toEqual([0.07, 0.02, 0.01]);
+    });
+
+    it("rejects an expenditure with more precision than a rupee has", async () => {
+      const projectId = await sanction();
+      await post(`/projects/${projectId}/release`, { amountInr: 200_000 });
 
       const response = await post(`/projects/${projectId}/expenditure`, {
-        amountMinor: 200_00,
+        amountInr: 12.3456,
         description: "Piling contractor",
       });
 
       expect(response.status).toBe(400);
-      expect(record(response.body)["error"]).toBe("spent total 20000 would exceed released 10000");
+      expect(record(response.body)["error"]).toBe(
+        "amountInr: Money amount cannot have more than 2 decimal places",
+      );
+    });
+
+    it("refuses to spend more than has been released", async () => {
+      const projectId = await sanction();
+      await post(`/projects/${projectId}/release`, { amountInr: 100 });
+
+      const response = await post(`/projects/${projectId}/expenditure`, {
+        amountInr: 200,
+        description: "Piling contractor",
+      });
+
+      expect(response.status).toBe(400);
+      expect(record(response.body)["error"]).toBe("spent total 200 would exceed released 100");
     });
 
     it("refuses an expenditure before any funds are released", async () => {
       const projectId = await sanction();
       const response = await post(`/projects/${projectId}/expenditure`, {
-        amountMinor: 100,
+        amountInr: 1,
         description: "Piling contractor",
       });
 
@@ -171,7 +288,7 @@ describe("fund monitoring routes", () => {
     it("answers 401 without a token", async () => {
       const projectId = await sanction();
       const response = await server.request(`/projects/${projectId}/expenditure`, {
-        ...jsonBody({ amountMinor: 1, description: "x" }),
+        ...jsonBody({ amountInr: 1, description: "x" }),
       });
 
       expect(response.status).toBe(401);
@@ -181,7 +298,7 @@ describe("fund monitoring routes", () => {
   describe("POST /projects/:id/complete and /verify", () => {
     it("walks a project through completion and village verification", async () => {
       const projectId = await sanction();
-      await post(`/projects/${projectId}/release`, { amountMinor: 200_000_00 });
+      await post(`/projects/${projectId}/release`, { amountInr: 200_000 });
 
       const completed = await post(`/projects/${projectId}/complete`, {});
       expect(completed.status).toBe(200);
@@ -247,6 +364,33 @@ describe("fund monitoring routes", () => {
       expect(record(response.body)["findings"]).toEqual([]);
     });
 
+    it("takes comparable spend in rupees and refuses excess precision there too", async () => {
+      const projectId = await sanction();
+      await post(`/projects/${projectId}/release`, { amountInr: 200_000 });
+      await post(`/projects/${projectId}/expenditure`, {
+        amountInr: 150_000,
+        description: "Piling contractor",
+      });
+
+      // Median of the comparables is ₹10,000, so 1.5x is ₹15,000 and a
+      // ₹150,000 spend is far over it. Sent as rupees, not paise.
+      const flagged = await post(`/projects/${projectId}/detect-anomalies`, {
+        comparableSpentInr: [9_000, 10_000, 11_000],
+        otherActiveProjects: [],
+      });
+      expect(flagged.status).toBe(200);
+      const findings = record(flagged.body)["findings"] as Record<string, unknown>[];
+      expect(findings.map((finding) => finding["type"])).toContain("overspend_vs_comparable");
+
+      const tooPrecise = await post(`/projects/${projectId}/detect-anomalies`, {
+        comparableSpentInr: [9_000, 10_000.123],
+      });
+      expect(tooPrecise.status).toBe(400);
+      expect(record(tooPrecise.body)["error"]).toBe(
+        "comparableSpentInr[]: Money amount cannot have more than 2 decimal places",
+      );
+    });
+
     it("rejects a non-positive stalledAfterDays with the domain message", async () => {
       const projectId = await sanction();
       const response = await post(`/projects/${projectId}/detect-anomalies`, { stalledAfterDays: 0 });
@@ -276,9 +420,9 @@ describe("fund monitoring routes", () => {
   describe("GET /projects and GET /villages/:id/projects", () => {
     it("lists every project with its full operator view", async () => {
       const projectId = await sanction();
-      await post(`/projects/${projectId}/release`, { amountMinor: 200_000_00 });
+      await post(`/projects/${projectId}/release`, { amountInr: 200_000 });
       await post(`/projects/${projectId}/expenditure`, {
-        amountMinor: 50_000_00,
+        amountInr: 50_000,
         description: "Piling contractor",
         evidenceRef: "INV-77",
       });
@@ -294,14 +438,14 @@ describe("fund monitoring routes", () => {
         category: "bridge",
         fundSource: "district",
         currency: "INR",
-        sanctionedMinor: 500_000_00,
-        releasedMinor: 200_000_00,
-        spentMinor: 50_000_00,
+        sanctionedInr: 500_000,
+        releasedInr: 200_000,
+        spentInr: 50_000,
         status: "in_progress",
       });
       expect(projects[0]!["expenditures"]).toEqual([
         {
-          amountMinor: 50_000_00,
+          amountInr: 50_000,
           currency: "INR",
           description: "Piling contractor",
           evidenceRef: "INV-77",

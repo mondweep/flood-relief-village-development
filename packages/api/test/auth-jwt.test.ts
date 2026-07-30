@@ -167,25 +167,35 @@ describe("Supabase JWT gate", () => {
   });
 
   /**
-   * A FINDING, pinned so it cannot be assumed away: `district_officer` currently
-   * holds every key in the table, so it is indistinguishable from `admin` in
-   * capability. Every role set in `permissions.ts` includes it — the officer is
-   * the role that operates the district's whole platform, and the one thing ADR
-   * 0009 reserves to `admin` alone is user management, which has no use case yet
-   * (role grants are a SQL insert into `role_grants`).
+   * This test used to record a FINDING: `district_officer` held every key in the
+   * table, so it was indistinguishable from `admin` in capability, and the note
+   * here said that "the day a genuine admin-only operation is added, this test
+   * should fail and be updated deliberately rather than the distinction quietly
+   * never arriving".
    *
-   * This is not asserted because it is desirable. It is asserted because the
-   * separation reads as though it exists and does not, and the day a genuine
-   * admin-only operation is added, this test should fail and be updated
-   * deliberately rather than the distinction quietly never arriving.
+   * That day is this one. `villageRegistry.markAsDemonstration` declares a
+   * village to be demonstration data — a statement about what the platform as a
+   * whole is asserting, permanent by design, and removing that village from
+   * every published figure. It belongs to whoever runs the platform, not to the
+   * role that records the district's work in it.
+   *
+   * The list is still asserted EXACTLY, so the separation cannot widen by
+   * accident either: a second admin-only rule fails this test and has to be
+   * named here on purpose.
    */
-  it("gives a district officer every permission there is — admin differs only in name today", async () => {
+  const ADMIN_ONLY = ["villageRegistry.markAsDemonstration"];
+
+  it("gives a district officer every permission except the admin-only ones", async () => {
     server = await boot();
 
     const response = await server.request("/me", { token: await signToken() });
     const permissions = (response.body as { permissions: string[] }).permissions;
 
-    expect(permissions).toEqual(permissionsFor("admin"));
+    expect(permissions).toEqual(permissionsFor("admin").filter((key) => !ADMIN_ONLY.includes(key)));
+    for (const key of ADMIN_ONLY) {
+      expect(permissionsFor("admin"), `${key} is not an admin permission at all`).toContain(key);
+      expect(permissions, `${key} is reachable by a district officer`).not.toContain(key);
+    }
   });
 
   /**

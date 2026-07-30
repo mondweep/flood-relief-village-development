@@ -1,4 +1,4 @@
-import { err, ok, type Result } from "@afrip/shared-kernel";
+import { err, Money, ok, type CurrencyCode, type Result } from "@afrip/shared-kernel";
 
 /**
  * Boundary validation. The domain owns the real rules (severity enums, ranges,
@@ -44,6 +44,51 @@ export function optionalNumber(body: Body, key: string): Result<number | undefin
     return err(`${key} must be a finite number when present`);
   }
   return ok(value);
+}
+
+/**
+ * Money arriving in MAJOR units (rupees) from the wire.
+ *
+ * The boundary is the only place the two units meet. Callers send rupees —
+ * `sanctionedInr: 50000` — and everything past this function is integer paise,
+ * because the ladder `spent <= released <= sanctioned` is only trustworthy
+ * while it is integer arithmetic.
+ *
+ * `Money.fromMajor` refuses excess precision rather than rounding it, and that
+ * refusal is deliberately surfaced as a 400: somebody who typed `1234.567` has
+ * made a mistake, and quietly booking ₹1,234.57 would hide it in an audited
+ * ledger. The `Money` (not a bare number) is returned so the unit stays in the
+ * type all the way to the use case call.
+ */
+export function requiredMajorAmount(
+  body: Body,
+  key: string,
+  currency: CurrencyCode = "INR",
+): Result<Money> {
+  const value = requiredNumber(body, key);
+  if (!value.ok) return err(value.error);
+  const money = Money.fromMajor(value.value, currency);
+  if (!money.ok) return err(`${key}: ${money.error}`);
+  return ok(money.value);
+}
+
+/** As `requiredMajorAmount`, for a list of rupee figures. Absent stays absent. */
+export function optionalMajorAmountArray(
+  body: Body,
+  key: string,
+  currency: CurrencyCode = "INR",
+): Result<Money[] | undefined> {
+  const values = optionalNumberArray(body, key);
+  if (!values.ok) return err(values.error);
+  if (values.value === undefined) return ok(undefined);
+
+  const out: Money[] = [];
+  for (const value of values.value) {
+    const money = Money.fromMajor(value, currency);
+    if (!money.ok) return err(`${key}[]: ${money.error}`);
+    out.push(money.value);
+  }
+  return ok(out);
 }
 
 /**

@@ -180,6 +180,120 @@ describe("village amendment and history routes", () => {
     });
   });
 
+  /**
+   * Declaring a record to be DEMONSTRATION data — present so the platform can be
+   * shown to someone, never a claim about a real place. See
+   * `docs/incidents/2026-07-28-id-collision-data-loss.md`, whose closing lesson
+   * is that fabricated records are harder to notice than deleted ones.
+   */
+  describe("POST /villages/:id/demonstration", () => {
+    it("marks the village and shows the flag on every projection of it", async () => {
+      const villageId = await village();
+
+      const response = await post(`/villages/${villageId}/demonstration`, {
+        reason: "seeded so the dashboard has something to show",
+      });
+
+      expect(response.status).toBe(200);
+      expect(record(response.body)).toEqual({
+        villageId,
+        isDemonstration: true,
+        alreadyMarked: false,
+        reason: "seeded so the dashboard has something to show",
+      });
+
+      // The profile, the authenticated list and the public list all say so. A
+      // reader must not have to know which endpoint carries the truth.
+      expect(record((await get(`/villages/${villageId}`)).body)["isDemonstration"]).toBe(true);
+      const listed = record((await get("/villages")).body)["villages"] as Record<string, unknown>[];
+      expect(listed[0]?.["isDemonstration"]).toBe(true);
+      const publicList = record((await server.request("/public/villages")).body)["villages"] as Record<
+        string,
+        unknown
+      >[];
+      expect(publicList[0]?.["isDemonstration"]).toBe(true);
+    });
+
+    it("registers villages as real, so the flag is only ever set deliberately", async () => {
+      // Including when the registration body asks for it, which is what a stale
+      // client or a copied curl command looks like.
+      const created = await post("/villages", { ...VILLAGE_BODY, isDemonstration: true });
+      const villageId = record(created.body)["villageId"] as string;
+
+      expect(record((await get(`/villages/${villageId}`)).body)["isDemonstration"]).toBe(false);
+    });
+
+    it("requires a reason", async () => {
+      const villageId = await village();
+
+      const response = await post(`/villages/${villageId}/demonstration`, {});
+
+      expect(response.status).toBe(400);
+    });
+
+    it("is idempotent, so re-running a marking script is safe", async () => {
+      const villageId = await village();
+      await post(`/villages/${villageId}/demonstration`, { reason: "seeded" });
+
+      const again = await post(`/villages/${villageId}/demonstration`, { reason: "seeded" });
+
+      expect(again.status).toBe(200);
+      expect(record(again.body)["alreadyMarked"]).toBe(true);
+      expect(record(again.body)["isDemonstration"]).toBe(true);
+    });
+
+    /**
+     * There is no route that clears the flag, and this asserts it against the
+     * live router rather than in prose. Clearing it would launder a fabricated
+     * record into the real reporting; the repair path for a village flagged in
+     * error is deliberately a superuser at the SQL console (migration 00008).
+     */
+    it("offers no way to clear the flag", async () => {
+      const villageId = await village();
+      await post(`/villages/${villageId}/demonstration`, { reason: "seeded" });
+
+      const deleted = await server.request(`/villages/${villageId}/demonstration`, {
+        method: "DELETE",
+        token: TOKEN,
+      });
+      // 405: the path exists, the method does not — there is no unmark.
+      expect(deleted.status).toBe(405);
+
+      // Nor through the correction path, which amends the record of the WORLD
+      // and not what kind of record this is. A real correction is applied here
+      // (the name genuinely changes, so the request succeeds) with the flag
+      // smuggled alongside it: the correction must land and the flag must not
+      // move. A no-op correction would have been refused for the wrong reason
+      // and would prove nothing.
+      const corrected = await patch(`/villages/${villageId}/profile`, {
+        isDemonstration: false,
+        name: "Renamed Village",
+        reason: "trying the back door",
+      });
+      expect(corrected.status, JSON.stringify(corrected.body)).toBe(200);
+      expect(record(record(corrected.body)["profile"])["name"]).toBe("Renamed Village");
+      expect(record(record(corrected.body)["profile"])["isDemonstration"]).toBe(true);
+
+      expect(record((await get(`/villages/${villageId}`)).body)["isDemonstration"]).toBe(true);
+    });
+
+    it("puts the declaration on the village's timeline", async () => {
+      const villageId = await village();
+      await post(`/villages/${villageId}/demonstration`, { reason: "seeded for a walkthrough" });
+
+      const history = record((await get(`/villages/${villageId}/history`)).body)[
+        "history"
+      ] as Record<string, unknown>[];
+
+      // The audit log is what carries this entry, and it is only wired when the
+      // deployment has one. Where it is absent the timeline is thinner, not wrong.
+      const marked = history.filter((item) => item["kind"] === "demonstration-marked");
+      for (const item of marked) {
+        expect(String(item["summary"])).toMatch(/demonstration data/i);
+      }
+    });
+  });
+
   describe("GET /villages/:id/history", () => {
     it("returns an empty timeline for a village with nothing recorded yet", async () => {
       const villageId = await village();

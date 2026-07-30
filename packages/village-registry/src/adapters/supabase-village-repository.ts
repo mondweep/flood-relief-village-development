@@ -6,7 +6,7 @@ import {
   type DamageAssessment,
   type GeoCoordinates,
   type Severity,
-  type VillageCreateProps,
+  type VillageRestoreProps,
 } from "../domain/village.js";
 import type { VillageRepository } from "../application/ports.js";
 
@@ -30,6 +30,18 @@ export interface VillageRow {
   households: number;
   affected_families: number;
   severity: string;
+  /**
+   * Demonstration data (migration 00008). `not null default false` in Postgres.
+   *
+   * Optional HERE, and only here, because a deployment can run this code against
+   * a database that has not had 00008 applied yet. Absent then means "no village
+   * has been marked", which is the literal truth of a database with no such
+   * column — nothing has been flagged because nothing could be. That is why the
+   * fallback below is honest, where 00007's equivalent fallback for `geo_source`
+   * would not have been: a missing provenance would have had to be invented,
+   * whereas a missing flag has a correct value.
+   */
+  is_demonstration?: boolean;
 }
 
 /** Row shape of `village_registry_damage_assessments` (identity `id` is DB-assigned). */
@@ -72,6 +84,14 @@ export function toRow(village: Village): VillageRow {
     households: village.households,
     affected_families: village.affectedFamilies,
     severity: village.severity,
+    // Always written, never omitted-so-the-default-applies: `save` is an upsert,
+    // so an omitted column on an UPDATE leaves whatever was there. Writing the
+    // aggregate's value every time keeps row and aggregate in step in the one
+    // direction that matters — a demonstration village re-saved cannot come back
+    // as real. It cannot go the other way either: the aggregate has no way to
+    // reach false once true, and migration 00008 refuses the transition in the
+    // database as well.
+    is_demonstration: village.isDemonstration,
   };
 }
 
@@ -125,6 +145,25 @@ function toGeoCoordinates(row: VillageRow): GeoCoordinates {
 }
 
 /**
+ * Reads the demonstration flag off a row.
+ *
+ * Absent or null -> false, for the reason set out on `VillageRow
+ * .is_demonstration`: a database without the column is a database in which
+ * nothing has been marked. Present but not a boolean is a CORRUPT row, not a
+ * falsy one — `"false"`, `0` and `"f"` are all truthy-or-falsy in some reading,
+ * and guessing which would eventually let a demonstration village be published
+ * as real. That is the one direction of this flag's failure that must be loud.
+ */
+function toIsDemonstration(row: VillageRow): boolean {
+  const raw: unknown = row.is_demonstration;
+  if (raw === undefined || raw === null) return false;
+  if (typeof raw !== "boolean") {
+    throw corrupt(VILLAGES_TABLE, row.id, `is_demonstration must be a boolean, got ${typeof raw}`);
+  }
+  return raw;
+}
+
+/**
  * Rebuilds a Village from its row plus its damage-assessment rows, oldest
  * first. Every factory failure throws — a half-built aggregate is never
  * returned to the application.
@@ -133,7 +172,7 @@ export function fromRow(row: VillageRow, assessmentRows: readonly DamageAssessme
   const id = villageId(row.id);
   if (!id.ok) throw corrupt(VILLAGES_TABLE, String(row.id), id.error);
 
-  const props: VillageCreateProps = {
+  const props: VillageRestoreProps = {
     id: id.value,
     name: row.name,
     district: row.district,
@@ -143,9 +182,13 @@ export function fromRow(row: VillageRow, assessmentRows: readonly DamageAssessme
     households: row.households,
     affectedFamilies: row.affected_families,
     severity: row.severity as Severity,
+    isDemonstration: toIsDemonstration(row),
   };
 
-  const created = Village.create(props);
+  // `restore`, not `create`: the flag is not a creation parameter (see
+  // `Village.markAsDemonstration`), and re-invoking the marking operation on
+  // every read would republish a decision somebody made once.
+  const created = Village.restore(props);
   if (!created.ok) throw corrupt(VILLAGES_TABLE, row.id, created.error);
   const village = created.value;
 
