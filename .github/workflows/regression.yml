@@ -1,0 +1,97 @@
+# The regression pack, run on every push and every pull request.
+#
+# WHY THIS EXISTS ALONGSIDE THE GATE IN scripts/deploy-cloudrun.sh.
+#
+# That gate protects production: nothing ships unless the suite passes. It runs
+# on the machine doing the deploying, which means it proves the tree passes
+# HERE — with this Node version, these installed modules, and whatever else the
+# operator happens to have. It also only runs when somebody deploys.
+#
+# This runs on every push, on a clean machine, from a lockfile install. It
+# catches the two things the local gate cannot:
+#
+#   * a commit that passes on the author's machine and fails on a fresh one,
+#     usually because something was installed globally or a file was never added
+#     to git — the classic "works for me";
+#   * a broken commit on a branch nobody has deployed yet, found in minutes
+#     rather than at the moment somebody needs to ship.
+#
+# Neither replaces the other. The local gate is the one that actually protects
+# the live service, because a green tick on a commit says nothing about the
+# working tree `--source` is about to upload.
+name: Regression pack
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  # So a suite can be re-run against an unchanged tree — useful when a failure is
+  # suspected to be flaky rather than real.
+  workflow_dispatch:
+
+# A newer push to the same branch makes the older run pointless. Cancel it rather
+# than paying for both; the exception is the default branch, where every commit's
+# result is worth having on the record.
+concurrency:
+  group: regression-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Matches the --target=node22 the bundle is built for. A CI Node that
+          # differs from the runtime's is a CI that tests something else.
+          node-version: "22"
+          cache: npm
+
+      # `ci`, not `install`: it installs exactly the lockfile and fails if
+      # package.json and the lockfile disagree, which is the point of running on
+      # a clean machine at all.
+      - run: npm ci
+
+      # Cheapest first, so the fastest signal fails soonest — the same order the
+      # deploy gate uses, deliberately, so a failure here reproduces there.
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test suite
+        run: npm test
+
+      # `npm test` does NOT exercise esbuild. The frontend is a single HTML file
+      # inlined by the bundler, so a missing loader or an unresolved import is
+      # invisible to vitest and fatal at deploy. That break has happened here.
+      - name: Bundle
+        run: npm run build
+
+      # A bundle that builds but will not boot is still broken. This starts the
+      # real server against the in-memory runtime and asks it whether it is
+      # alive — the cheapest possible check that the artefact runs at all.
+      - name: Smoke test the bundle
+        run: |
+          PERSISTENCE=memory PORT=8080 node dist/server.js &
+          SERVER=$!
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:8080/health >/dev/null 2>&1; then
+              echo "server answered /health"
+              curl -fsS http://localhost:8080/health
+              echo
+              curl -fsS -o /dev/null -w 'public projection: %{http_code}\n' http://localhost:8080/public/villages
+              curl -fsS -o /dev/null -w 'dashboard: %{http_code}\n' http://localhost:8080/
+              kill $SERVER
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "the bundle did not answer /health within 20s"
+          kill $SERVER 2>/dev/null || true
+          exit 1

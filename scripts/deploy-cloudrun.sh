@@ -90,6 +90,45 @@ die()  { printf '\n%s[fatal]%s %s\n' "$RED" "$RESET" "$*" >&2; exit 1; }
 # ---------------------------------------------------------------------------
 # Step 0 — preflight: gcloud present, authenticated, project reachable
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Step 0a — the regression gate
+# ---------------------------------------------------------------------------
+# THE SUITE RUNS BEFORE ANYTHING IS BUILT OR SHIPPED. Until this existed the
+# script deployed whatever was in the working tree, and the only thing standing
+# between a broken build and production was whoever ran it remembering to type
+# `npm test` first. That worked for eight consecutive deploys and was luck, not
+# process — a regression pack nothing consults is documentation.
+#
+# It runs FIRST, before the gcloud preflight, deliberately: a failing suite
+# should cost nothing and reach no conclusion about your credentials. It also
+# runs before Cloud Build, so a broken commit never spends a build minute.
+#
+# Order within the gate is cheapest-first, so the fastest signal fails soonest:
+# typecheck (seconds), then the suite, then the bundle. The bundle is included
+# because `npm test` does NOT exercise esbuild — the frontend is inlined by the
+# bundler and a build-only failure (a missing loader, an unresolved import) is
+# invisible to vitest. That exact class of break has happened here.
+#
+# SKIP_TESTS=1 exists for one legitimate case: re-running a deploy of a revision
+# whose suite has already passed, when only deploy configuration changed. It
+# prints a warning naming what was skipped, because a silent skip is how a gate
+# stops being one.
+if [[ "${SKIP_TESTS:-0}" == "1" ]]; then
+  warn "SKIP_TESTS=1 — regression pack NOT run. Nothing has verified this tree."
+else
+  step "Regression pack (typecheck, ${TEST_LABEL:-full suite}, bundle)"
+  info "Running from ${REPO_ROOT}"
+  npm --prefix "$REPO_ROOT" run typecheck >/dev/null 2>&1 \
+    || die "typecheck failed. Run 'npm run typecheck' to see it. Nothing was deployed."
+  info "typecheck clean"
+  npm --prefix "$REPO_ROOT" test >/dev/null 2>&1 \
+    || die "the test suite failed. Run 'npm test' to see it. Nothing was deployed."
+  info "test suite passed"
+  npm --prefix "$REPO_ROOT" run build >/dev/null 2>&1 \
+    || die "the bundle failed to build. Run 'npm run build' to see it. Nothing was deployed."
+  info "bundle built"
+fi
+
 step "Preflight checks"
 
 command -v gcloud >/dev/null 2>&1 || die \
