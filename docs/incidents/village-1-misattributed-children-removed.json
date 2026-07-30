@@ -1,0 +1,20 @@
+{
+  "removed_at": "2026-07-30",
+  "why": "These four records were left attached to village-1 by the id collision recorded in docs/incidents/. The village they described was destroyed; village-1 is now Gaurisagar, Sivasagar, a demonstration village they have nothing to do with. Removed on the maintainer's instruction. Neither record_ownership nor audit_log held a row for any of them — they predate both — so this file is the only record that they existed.",
+  "note": "Seeded demonstration data. No real household is described here.",
+  "beneficiaries": [
+    { "id": "beneficiary-1", "village_id": "village-1", "name": "Rekha Das", "category": "widow", "created_at": "2026-07-28T22:10:11.456431+00:00" },
+    { "id": "beneficiary-2", "village_id": "village-1", "name": "Arun Bora", "category": "orphan", "created_at": "2026-07-28T22:10:12.99469+00:00" }
+  ],
+  "aid_records": [
+    { "id": 2, "beneficiary_id": "beneficiary-1", "aid_type": "food", "provider_id": "ngo-1", "provider_type": "ngo", "delivered_at": "2026-07-28T22:10:14.068+00:00", "notes": null },
+    { "id": 3, "beneficiary_id": "beneficiary-1", "aid_type": "food", "provider_id": "district-admin", "provider_type": "government", "delivered_at": "2026-07-28T22:10:15.12+00:00", "notes": null }
+  ],
+  "duplicate_flags": [
+    { "id": 1, "beneficiary_id": "beneficiary-1", "aid_type": "food", "provider_ids": ["ngo-1", "district-admin"], "flagged_at": "2026-07-28T22:10:15.12+00:00" }
+  ],
+  "issues": [
+    { "id": "issue-1", "village_id": "village-1", "category": "water", "description": "Handpump contaminated after flood", "photo_refs": [], "lat": 26.32, "lng": 91, "status": "routed", "routed_party_type": "lead_ngo", "routed_party": "ngo-1", "reported_at": "2026-07-28T22:10:16.088+00:00", "resolved_at": null, "resolution_note": null, "routed_at": "2026-07-28T22:10:17.714+00:00", "progress_started_at": null, "verified_at": null },
+    { "id": "issue-2", "village_id": "village-1", "category": "corruption", "description": "Relief lists allegedly altered", "photo_refs": [], "lat": 26.32, "lng": 91, "status": "routed", "routed_party_type": "government_department", "routed_party": "district_administration", "reported_at": "2026-07-28T22:10:16.849+00:00", "resolved_at": null, "resolution_note": null, "routed_at": "2026-07-28T22:10:18.51+00:00", "progress_started_at": null, "verified_at": null }
+  ]
+}
