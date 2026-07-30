@@ -410,6 +410,60 @@ info "Source revision: ${GIT_BRANCH} @ ${GIT_COMMIT}"
 # does not have, and would cost a secret access on every cold start to publish a
 # value that is already public. The SERVICE-ROLE key is the opposite and stays in
 # Secret Manager below — do not confuse the two.
+#
+# INHERITED FROM THE RUNNING SERVICE WHEN THE CALLER SUPPLIES NONE, and that is
+# not a convenience — it is a fix for a fault that took sign-in down.
+#
+# `gcloud run deploy --set-env-vars` REPLACES the environment; it does not merge.
+# So every variable this script does not pass is silently REMOVED from the
+# service. This one used to be forwarded only when it happened to be exported in
+# the operator's shell, which meant a redeploy from a fresh terminal — the normal
+# case — blanked it. `GET /public/config` then answered
+# `supabasePublishableKey: null`, the page rendered "Accounts are not available
+# on this deployment", and nobody could sign in. Deploy reported success, the
+# smoke test passed, `/health` was green. That happened, to real users.
+#
+# Reading the live value back means a redeploy preserves what is already
+# working, and only a caller who explicitly supplies a different key changes it.
+#
+# `gcloud run services describe --filter` does not exist, and the `.filter()`
+# format transform takes different arguments than its docs suggest — both were
+# tried. The flattened text form is stable and needs no jq, so it is parsed
+# directly. A variable that is absent yields the empty string, which is exactly
+# what the callers below test for.
+read_service_env() {
+  gcloud run services describe "$SERVICE" --region="$REGION" --project="$PROJECT_ID" \
+    --format='value[delimiter="
+"](spec.template.spec.containers[0].env)' 2>/dev/null \
+  | sed -n "s/^{'name': '$1', 'value': '\(.*\)'}$/\1/p" | head -1
+}
+
+if [[ -z "${SUPABASE_PUBLISHABLE_KEY:-}" ]]; then
+  SUPABASE_PUBLISHABLE_KEY="$(read_service_env SUPABASE_PUBLISHABLE_KEY || true)"
+  if [[ -n "$SUPABASE_PUBLISHABLE_KEY" ]]; then
+    info "Reusing the SUPABASE_PUBLISHABLE_KEY already on ${SERVICE}."
+  fi
+fi
+
+# A deployment with JWT auth on and no publishable key is one nobody can sign
+# into. It looks entirely healthy from the outside, which is exactly why this is
+# a hard failure rather than a warning — the last warning in this script was read
+# past by the person it was written for.
+if [[ "${AUTH_JWT:-on}" != "off" && -z "${SUPABASE_PUBLISHABLE_KEY:-}" ]]; then
+  die \
+"AUTH_JWT is on but no SUPABASE_PUBLISHABLE_KEY is set, and none is on the
+  running service. The browser cannot reach Supabase Auth without it, so the
+  sign-in panel would render 'Accounts are not available on this deployment'
+  and there would be no way in.
+
+  Supply it (it is publishable, not secret — GET /public/config serves it to
+  every visitor):
+
+    SUPABASE_PUBLISHABLE_KEY=sb_publishable_... ./scripts/deploy-cloudrun.sh
+
+  Supabase dashboard → Project Settings → API keys. Nothing was deployed."
+fi
+
 if [[ -n "${SUPABASE_PUBLISHABLE_KEY:-}" ]]; then
   ENV_VARS="${ENV_VARS},SUPABASE_PUBLISHABLE_KEY=${SUPABASE_PUBLISHABLE_KEY}"
 fi
@@ -417,6 +471,16 @@ fi
 # Which social providers the sign-in page offers. It only draws buttons; enabling
 # a provider is done in the Supabase dashboard, and listing one here that is not
 # configured there produces a button that fails on click.
+#
+# Inherited from the running service for the same reason as the key above: a
+# redeploy that drops it does not break sign-in outright, it just quietly removes
+# the Google button, which is worse — it looks like a design change.
+if [[ -z "${AUTH_PROVIDERS:-}" ]]; then
+  AUTH_PROVIDERS="$(read_service_env AUTH_PROVIDERS || true)"
+  if [[ -n "$AUTH_PROVIDERS" ]]; then
+    info "Reusing the AUTH_PROVIDERS already on ${SERVICE}: ${AUTH_PROVIDERS}"
+  fi
+fi
 if [[ -n "${AUTH_PROVIDERS:-}" ]]; then
   ENV_VARS="${ENV_VARS},AUTH_PROVIDERS=${AUTH_PROVIDERS}"
 fi
