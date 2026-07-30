@@ -137,10 +137,10 @@ a { color: inherit; }
 button.pill { font: inherit; font-size: 0.75rem; cursor: pointer; }
 button.pill:disabled { cursor: default; opacity: 1; }
 button.pill:not(:disabled):hover { border-color: var(--line-strong); background: var(--surface); }
-button.pill:not(:disabled):focus-visible { outline: 2px solid var(--accent-ink); outline-offset: 2px; }
+button.pill:not(:disabled):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .pill-action {
   border-left: 1px solid var(--line); margin-left: 2px; padding-left: var(--s2);
-  color: var(--accent-ink); font-weight: 600;
+  color: var(--accent-strong); font-weight: 600;
 }
 
 /* Tab bar: fixed to the bottom on a phone (thumb reach), a top strip on wider screens. */
@@ -422,14 +422,13 @@ code.cmd { display: block; font-family: var(--mono); font-size: 0.75rem; backgro
 }
 .or::before, .or::after { content: ""; flex: 1 1 0; height: 1px; background: var(--line); }
 .pw-rules { font-size: 0.8125rem; color: var(--ink-muted); margin: calc(-1 * var(--s2)) 0 var(--s3); max-width: 42ch; }
-/* A button that reads as a link. A real <button> rather than an <a href="#">,
-   so it is keyboard-operable and announced as an action rather than as
-   navigation — and so it cannot leave a stray "#" in the address bar, which on
-   this page is the router's territory. */
-.linkish { background: none; border: 0; padding: 0; font: inherit; color: var(--accent-ink);
-           text-decoration: underline; cursor: pointer; width: auto !important; }
-.linkish:hover { text-decoration: none; }
-.auth-form .actions > .linkish { width: auto !important; margin-top: var(--s3); display: block; }
+/* `button.link` (above) is the page's link-shaped button and already handles
+   both themes. An earlier version of this file defined a near-identical
+   `.linkish` here using --accent-ink, which is the colour for text ON an accent
+   background — near-black in dark mode, so the control vanished. Deleted rather
+   than corrected: two classes for one thing is how the second one drifts. This
+   rule only restores the full-width override the .actions layout imposes. */
+.auth-form .actions > button.link { width: auto; margin-top: var(--s3); display: block; }
 
 .identity { display: flex; flex-wrap: wrap; gap: var(--s3) var(--s4); align-items: center; }
 .identity .who { font-weight: 600; overflow-wrap: anywhere; }
@@ -452,7 +451,7 @@ details.legacy[open] > summary::before { content: "−"; }
 
 footer { margin-top: var(--s6); padding-top: var(--s4); border-top: 1px solid var(--line); font-size: 0.8125rem; color: var(--ink-muted); }
 footer p + p { margin-top: var(--s1); }
-footer a { color: var(--accent-ink); }
+footer a { color: var(--accent-strong); }
 
 /* Attribution and data residency. A definition list because that is what it is —
    a label and its value — which also gives assistive technology the pairing for
@@ -513,7 +512,7 @@ footer a { color: var(--accent-ink); }
 .geo-cand-name { display: block; font-weight: 600; }
 .geo-cand-meta { display: block; color: var(--ink-muted); font-size: 0.75rem; }
 
-.origin { background: var(--surface-2); border-left: 3px solid var(--accent-ink); }
+.origin { background: var(--surface-2); border-left: 3px solid var(--accent); }
 .origin p { max-width: 68ch; }
 .origin p + p { margin-top: var(--s2); }
 
@@ -768,7 +767,7 @@ footer a { color: var(--accent-ink); }
           </div>
           <div class="actions"><button type="submit" id="signin-submit">Sign in</button></div>
           <p class="hint" style="margin-top:10px">
-            <button type="button" class="linkish" id="forgot-password">Forgotten your password?</button>
+            <button type="button" class="link" id="forgot-password">Forgotten your password?</button>
           </p>
         </form>
 
@@ -788,7 +787,7 @@ footer a { color: var(--accent-ink); }
           </div>
           <div class="actions">
             <button type="submit" id="recover-submit">Email me a reset link</button>
-            <button type="button" class="linkish" id="recover-cancel">Back to sign in</button>
+            <button type="button" class="link" id="recover-cancel">Back to sign in</button>
           </div>
         </form>
 
@@ -3998,7 +3997,7 @@ function applyAuthState() {
       + "</strong>. That account exists, but it is not yet a user of this platform, so only the "
       + "public view is available. Registering takes one step and gives you the citizen role: "
       + "read the dashboards, report issues, and sign up as a volunteer."
-      + '<p style="margin-top:10px"><button type="button" class="btn" data-enrol>Register with AFRIP</button></p>');
+      + '<p style="margin-top:10px"><button type="button" data-enrol>Register with AFRIP</button></p>');
   }
 
   if (connected) {
