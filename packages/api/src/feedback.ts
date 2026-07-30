@@ -57,6 +57,77 @@ export type FeedbackStatus = (typeof FEEDBACK_STATUSES)[number];
 /** What a report starts as, and the column default in 00009. */
 export const DEFAULT_FEEDBACK_STATUS: FeedbackStatus = "open";
 
+/**
+ * The one line of a feature request that other signed-in users may read.
+ *
+ * WHY THIS TYPE EXISTS AT ALL, given ADR 0016 argued for `admin` alone.
+ *
+ * The argument that produced `admin` alone was about *free text written by
+ * somebody nobody has briefed* — it will name beneficiaries, and the reader set
+ * for that should be the smallest set that can act on it. That argument is
+ * untouched and still governs `GET /feedback`.
+ *
+ * What it did not anticipate is the cost of a suggestion box nobody can see
+ * into: the same idea arrives five times, each reporter believing they are the
+ * first, and none of them can tell whether the thing they want is already
+ * agreed, already built, or already declined. A backlog only one person can read
+ * is not a backlog.
+ *
+ * SO THE SHAPE IS THE CONTROL, not the role. This is a strictly narrower
+ * projection of `FeedbackReport`, and every field absent from it is absent
+ * deliberately:
+ *
+ *   detail        — the long free-text box. This is where a name would be
+ *                   written, and it is exactly what ADR 0016 restricted.
+ *   reporterId / reporterEmail / reporterRole
+ *                 — who complained about what is nobody else's business, and
+ *                   an idea's merit does not depend on whose it was.
+ *   buildCommit / buildBranch / viewPath / userAgent
+ *                 — diagnostics. Useless to a reader, and `viewPath` leaks
+ *                   which part of the platform somebody was working in.
+ *
+ * `summary` remains, because without it there is nothing to read, and it is
+ * capped at 200 characters — one line, typed under a heading that now says it
+ * will be visible to other signed-in users. That disclosure is the second half
+ * of this decision and is not optional: `bug` and `other` reports are NOT
+ * exposed, so nobody's private report becomes public retroactively.
+ */
+export interface FeedbackSuggestion {
+  readonly id: string;
+  readonly summary: string;
+  readonly status: FeedbackStatus;
+  readonly createdAt: string;
+}
+
+/**
+ * The only kind of report that is readable by every signed-in user.
+ *
+ * A single value rather than a list, and it is `feature` rather than `bug`
+ * because of what each one IS. A feature request describes something the
+ * platform does not do — it is about the software. A bug report describes
+ * something that went wrong, and the way anybody describes what went wrong is
+ * by naming the record it went wrong on. "The aid record for X shows twice" is
+ * the useful form of a bug report and the dangerous form of a public one.
+ */
+export const SHARED_FEEDBACK_KIND: FeedbackKind = "feature";
+
+/**
+ * Narrows a stored report to what other signed-in users may see.
+ *
+ * IN ONE PLACE, and callers must not assemble this shape by hand. A route that
+ * spreads the row and deletes three fields is a route that leaks the fourth one
+ * added next year; this drops everything by construction, so a new column on
+ * `FeedbackReport` is invisible here until somebody deliberately adds it.
+ */
+export function toSuggestion(report: FeedbackReport): FeedbackSuggestion {
+  return {
+    id: report.id,
+    summary: report.summary,
+    status: report.status,
+    createdAt: report.createdAt,
+  };
+}
+
 export function isFeedbackKind(value: unknown): value is FeedbackKind {
   return typeof value === "string" && (FEEDBACK_KINDS as readonly string[]).includes(value);
 }

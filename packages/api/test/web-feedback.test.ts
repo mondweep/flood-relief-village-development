@@ -316,11 +316,120 @@ describe("#/report — the shareable link to the form", () => {
    */
   it("arms the intent rather than dropping it, and finishes after sign-in", () => {
     expect(SCRIPT).toMatch(/function settleReportLink\(\)/);
-    expect(SCRIPT).toMatch(/reportPending = true/);
+    expect(SCRIPT).toMatch(/function armReportIntent\(\)/);
     // Consumed where the session becomes known, so signing in finishes the job.
     const availability = /function applyFeedbackAvailability\(\)[\s\S]*?\n\}/.exec(SCRIPT);
-    expect(availability?.[0] ?? "").toMatch(/reportPending && canReport\(\)/);
+    expect(availability?.[0] ?? "").toMatch(/reportIntentArmed\(\) && canReport\(\)/);
     expect(availability?.[0] ?? "").toMatch(/openReport\(\)/);
+  });
+
+  /**
+   * THE BUG THIS SHIPPED WITH, and the reason the intent is not a plain
+   * variable.
+   *
+   * Signing in with Google is a FULL PAGE REDIRECT — the browser leaves for
+   * accounts.google.com and returns to a cold load, destroying every variable in
+   * this script. The first version kept `reportPending` in memory alone, so
+   * "follow the link, sign in with Google, get dropped on the Operations tab
+   * with no form" was not an edge case, it was the guaranteed outcome on the
+   * commonest path. It reached production and a user reported it.
+   *
+   * `sessionStorage`, matching REFRESH_KEY, so the intent belongs to this tab
+   * and this sitting rather than ambushing somebody next week.
+   */
+  it("survives the OAuth page reload, which is how most people sign in", () => {
+    const key = /const REPORT_KEY = "([^"]+)";/.exec(SCRIPT);
+    expect(key, "the report intent is no longer persisted anywhere").not.toBeNull();
+    expect(key?.[1]).toMatch(/^afrip\./);
+
+    const arm = /function armReportIntent\(\)[\s\S]*?\n\}/.exec(SCRIPT);
+    const armed = /function reportIntentArmed\(\)[\s\S]*?\n\}/.exec(SCRIPT);
+    expect(arm?.[0] ?? "").toContain("sessionStorage.setItem(REPORT_KEY");
+    expect(armed?.[0] ?? "").toContain("sessionStorage.getItem(REPORT_KEY)");
+    // Not localStorage: that would outlive the tab and the reason for the visit.
+    expect(arm?.[0] ?? "").not.toContain("localStorage");
+  });
+
+  it("drops the intent when the session ends, so signing back in is not ambushed", () => {
+    // `signOutLocal` forgets the session in this tab; the half-finished intent
+    // belongs to that session and has to go with it, or signing out and back in
+    // re-opens a form nobody asked for the second time.
+    const signOut = /function signOutLocal\(\)[\s\S]*?\n\}/.exec(SCRIPT);
+    expect(signOut, "signOutLocal is gone from the page").not.toBeNull();
+    expect(signOut?.[0] ?? "").toContain("disarmReportIntent()");
+  });
+});
+
+describe("what other signed-in users may see of the suggestion box", () => {
+  /**
+   * The page's copy of `SHARED_FEEDBACK_KIND` must be the server's.
+   *
+   * If they drift, the disclosure shown above the summary field — "this line
+   * will be visible to other signed-in users" — is displayed for the wrong kind
+   * of report. Either somebody is warned about sharing that will not happen, or,
+   * far worse, somebody types a bug report believing it is private when the
+   * server is about to publish its summary.
+   */
+  it("agrees with the API about which kind is shared", async () => {
+    const { SHARED_FEEDBACK_KIND } = await import("../src/feedback.js");
+    const pageCopy = /const SHARED_FEEDBACK_KIND = "([a-z]+)";/.exec(SCRIPT);
+    expect(pageCopy, "the page no longer declares SHARED_FEEDBACK_KIND").not.toBeNull();
+    expect(pageCopy?.[1]).toBe(SHARED_FEEDBACK_KIND);
+    // And it is a real kind, not a typo that would silently share nothing.
+    expect(FEEDBACK_KINDS as readonly string[]).toContain(pageCopy?.[1] as string);
+  });
+
+  /**
+   * CONSENT AT THE POINT OF ENTRY. The moment to tell somebody their words will
+   * be read by others is before they type them, not in a policy page nobody
+   * opens — and only for the kind it is true of, or the warning becomes noise
+   * that gets ignored on the report where it matters.
+   */
+  it("warns that a feature summary is shared, above the field it is about", () => {
+    const note = PAGE.indexOf('id="report-shared-note"');
+    const field = PAGE.indexOf('id="report-summary"');
+    expect(note, "the sharing disclosure is gone from the dialog").toBeGreaterThan(-1);
+    expect(note).toBeLessThan(field);
+
+    const shown = /const note = \$\("#report-shared-note"\);[\s\S]{0,200}/.exec(SCRIPT);
+    expect(shown?.[0] ?? "").toContain("reportKind !== SHARED_FEEDBACK_KIND");
+  });
+
+  /**
+   * Two panels, not one filtered panel. The shared list follows `canReport()`
+   * and the admin queue follows `canReadFeedback()`; a single panel with a
+   * filter could be widened to the whole table by changing the filter, which is
+   * precisely the mistake the split exists to make impossible.
+   */
+  it("keeps the shared list and the admin queue as separate panels with separate gates", () => {
+    expect(PAGE).toContain('id="suggestions"');
+    expect(PAGE).toContain('id="feedback-admin"');
+    const availability = /function applyFeedbackAvailability\(\)[\s\S]*?\n\}/.exec(SCRIPT);
+    expect(availability?.[0] ?? "").toMatch(/#suggestions"\)[\s\S]{0,120}canReport\(\)/);
+    expect(availability?.[0] ?? "").toMatch(/#feedback-admin"\)[\s\S]{0,120}canReadFeedback\(\)/);
+  });
+
+  /**
+   * This is the only place on the platform where text one user typed is
+   * rendered to another user, so it is the only place where a `<script>` in a
+   * form field would matter. The API stores the string verbatim — deliberately,
+   * because mangling somebody's words is worse than escaping them at display —
+   * which puts the entire responsibility on this function.
+   */
+  it("escapes a summary before rendering it to somebody else", () => {
+    const row = /function suggestionRow\(suggestion\)[\s\S]*?\n\}/.exec(SCRIPT);
+    expect(row, "suggestionRow is gone").not.toBeNull();
+    expect(row?.[0] ?? "").toContain("esc(suggestion.summary)");
+    // Nothing may be interpolated raw. Catches `+ suggestion.summary +`.
+    expect(row?.[0] ?? "", "a field is interpolated without esc()")
+      .not.toMatch(/\+\s*suggestion\.(summary|status)\s*\+/);
+  });
+
+  it("asks the endpoint that returns the narrowed shape, not the admin queue", () => {
+    const loader = /async function loadSuggestions\(\)[\s\S]*?\n\}/.exec(SCRIPT);
+    expect(loader?.[0] ?? "").toContain('api("/feedback/suggestions")');
+    // A non-admin calling the admin queue gets a 403 and an alarming red box.
+    expect(loader?.[0] ?? "").not.toMatch(/api\("\/feedback"\)/);
   });
 
   /**

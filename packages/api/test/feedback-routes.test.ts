@@ -273,8 +273,30 @@ describe("who may read and triage feedback", () => {
    * signed-in account on the platform, including `citizen`, and that should cost
    * a failing test and a sentence of justification rather than a quiet line.
    */
-  it("keeps exactly one route open to every signed-in user — the submission itself", () => {
-    expect([...FEEDBACK_ROUTES_OPEN_TO_ANY_SIGNED_IN_USER]).toEqual(["POST /feedback"]);
+  it("keeps exactly two routes open to every signed-in user, and no more", () => {
+    // WHY THIS LIST GREW FROM ONE TO TWO, since the whole point of the test is
+    // that growing it costs a sentence.
+    //
+    // The write was always open — that is what the feature is for. The READ was
+    // `admin` alone, on the argument that free text written by somebody nobody
+    // has briefed will name beneficiaries, and the reader set for that should be
+    // the smallest set that can act on it. That argument is untouched and still
+    // governs `GET /feedback`.
+    //
+    // What it did not weigh is that a suggestion box nobody can see into
+    // collects the same idea five times, and tells no one it is already agreed,
+    // already built, or already declined.
+    //
+    // So the second entry is a READ, and its control is the SHAPE of what it
+    // returns rather than the role that may call it: feature requests only, and
+    // `toSuggestion` keeps id, summary, status and date. The `detail` box — the
+    // field the PII argument is actually about — and the reporter's identity
+    // never leave the server on that path. Both properties are tested below;
+    // this entry is not to be trusted on the strength of the comment.
+    expect([...FEEDBACK_ROUTES_OPEN_TO_ANY_SIGNED_IN_USER]).toEqual([
+      "POST /feedback",
+      "GET /feedback/suggestions",
+    ]);
   });
 
   it("admits admin alone, per ADR 0016 — not the audit log's two roles", () => {
@@ -565,5 +587,115 @@ describe("the administrator's queue", () => {
     });
 
     expect(response.status).toBe(404);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The shared list of suggestions
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /feedback/suggestions` — the one READ open to every signed-in account.
+ *
+ * This is a deliberate narrowing of ADR 0016's `admin` alone, and the whole
+ * safety of it rests on two properties that a refactor could quietly remove:
+ * only `feature` reports appear, and each one is reduced to four fields. Both
+ * are tested here against the real HTTP server rather than the projection
+ * function, because a route that forgets to call `toSuggestion` would leave a
+ * unit test of `toSuggestion` perfectly green.
+ */
+describe("what other signed-in users may see of the suggestion box", () => {
+  let server: TestServer;
+  afterEach(async () => { await server?.close(); });
+
+  const IDEA = {
+    kind: "feature",
+    summary: "let a village committee export its own recovery history",
+    detail: "the committee for the village in Nazira asked for this in person",
+    viewPath: "/villages/village-1",
+  };
+
+  async function file(body: unknown, role: UserRole): Promise<void> {
+    const response = await server.request("/feedback", {
+      method: "POST",
+      token: await tokenFor(role),
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    expect(response.status, "the fixture itself failed to file").toBe(201);
+  }
+
+  it("refuses an unidentified caller, like every other feedback route", async () => {
+    server = await boot();
+    const response = await server.request("/feedback/suggestions");
+    expect(response.status).toBe(401);
+  });
+
+  it.each(NON_ADMIN_ROLES)("lets %s read it — this is the point of the endpoint", async (role) => {
+    server = await boot();
+    await file(IDEA, "citizen");
+
+    const response = await server.request("/feedback/suggestions", { token: await tokenFor(role) });
+    expect(response.status).toBe(200);
+    const body = response.body as { suggestions: { summary: string }[] };
+    expect(body.suggestions.map((s) => s.summary)).toContain(IDEA.summary);
+  });
+
+  /**
+   * THE ONE THAT MATTERS MOST.
+   *
+   * A bug report is how somebody describes what went wrong, and the way anybody
+   * describes what went wrong is by naming the record it went wrong on — the
+   * `REPORT` fixture above says "the aid record for the beneficiary in Nazira".
+   * That is the useful form of a bug report and the dangerous form of a public
+   * one. If this endpoint ever returns one, the PII argument ADR 0016 was built
+   * on has been lost, silently, to whoever reads the suggestion list next.
+   */
+  it("never returns a bug report, whatever else is in the store", async () => {
+    server = await boot();
+    await file(REPORT, "district_officer");            // kind: "bug"
+    await file({ ...IDEA, kind: "other" }, "citizen"); // and the third kind
+    await file(IDEA, "citizen");
+
+    const response = await server.request("/feedback/suggestions", { token: await tokenFor("citizen") });
+    const body = response.body as { suggestions: { summary: string }[] };
+
+    expect(body.suggestions).toHaveLength(1);
+    expect(body.suggestions[0]?.summary).toBe(IDEA.summary);
+    // Named explicitly, so the failure message says what leaked.
+    expect(JSON.stringify(body)).not.toContain("aid record for the beneficiary");
+  });
+
+  /**
+   * `detail` is the long free-text box — the field ADR 0016's argument is
+   * actually about, and the one where somebody writes a name. It must not be on
+   * this path at all, and neither must the reporter: an idea's merit does not
+   * depend on whose it was, and who complained about what is nobody else's
+   * business.
+   */
+  it("carries only id, summary, status and date — no detail, no reporter, no diagnostics", async () => {
+    server = await boot();
+    await file(IDEA, "district_officer");
+
+    const response = await server.request("/feedback/suggestions", { token: await tokenFor("citizen") });
+    const body = response.body as { suggestions: Record<string, unknown>[] };
+    const suggestion = body.suggestions[0] as Record<string, unknown>;
+
+    expect(Object.keys(suggestion).sort()).toEqual(["createdAt", "id", "status", "summary"]);
+    // And by value, so that a field renamed rather than removed still fails.
+    const serialised = JSON.stringify(body);
+    for (const leaked of [IDEA.detail, IDEA.viewPath, "district_officer", "@"]) {
+      expect(serialised, `${leaked} reached a non-admin reader`).not.toContain(leaked);
+    }
+  });
+
+  it("still shows the admin the whole report, so nothing was taken away", async () => {
+    server = await boot();
+    await file(IDEA, "citizen");
+
+    const response = await server.request("/feedback", { token: await tokenFor("admin") });
+    const body = response.body as { reports: FeedbackBody[] };
+    expect(body.reports[0]?.detail).toBe(IDEA.detail);
+    expect(body.reports[0]?.reporterRole).toBe("citizen");
   });
 });

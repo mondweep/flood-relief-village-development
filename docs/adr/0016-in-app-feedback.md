@@ -1,6 +1,6 @@
 # ADR 0016 — In-app feedback: reports from the people using it, with the context attached
 
-**Status:** Accepted
+**Status:** Accepted — amended 2026-07-30, see the amendment at the end
 
 ## Context
 
@@ -129,3 +129,88 @@ response, which is the more expensive confusion.
   handful of users that is honest; it stops being honest the moment there are several.
 - A public visitor cannot report a fault in the public view. That is a real gap, recorded here so it
   is a decision rather than a discovery.
+
+---
+
+## Amendment (2026-07-30) — feature requests are visible to every signed-in user
+
+**Status of the amendment:** Accepted, and implemented.
+
+### What prompted it
+
+The maintainer filed a suggestion through the new form and asked the obvious next question: how does
+anybody know what has already been suggested?
+
+They cannot. As built, the queue is `admin` alone, so a suggestion box is write-only to everyone
+except one person. That produces the same idea arriving five times, each reporter believing they are
+the first, and none of them able to tell whether the thing they want is already agreed, already
+built, or already declined. **A backlog only one person can read is not a backlog.**
+
+### What is being changed, and what is not
+
+`GET /feedback/suggestions` is readable by **any signed-in user**. It returns:
+
+| Field | Why it is here |
+|---|---|
+| `summary` | Without it there is nothing to read. One line, capped at 200 characters |
+| `status` | The whole point — "already declined" is as useful as "already agreed" |
+| `createdAt` | Whether this is a live idea or a two-year-old one |
+| `id` | So it can be referred to |
+
+Everything else is **absent by construction**, via `toSuggestion`:
+
+- **`detail`** — the long free-text box. This is where a name gets written, and it is exactly what
+  the "Administrators only" section above is about. It never leaves the server on this path.
+- **`reporterId` / `reporterEmail` / `reporterRole`** — an idea's merit does not depend on whose it
+  was, and who complained about what is nobody else's business.
+- **`buildCommit` / `buildBranch` / `viewPath` / `userAgent`** — diagnostics, useless to a reader,
+  and `viewPath` discloses which part of the platform somebody was working in.
+
+**Only `kind: "feature"`.** Bug reports and "other" stay `admin` alone, and the split is not
+arbitrary. A feature request describes something the platform *does not do* — it is about the
+software. A bug report describes something that *went wrong*, and the way anybody describes what went
+wrong is by naming the record it went wrong on: *"the aid record for X shows twice"* is the useful
+form of a bug report and the dangerous form of a public one.
+
+Two consequences of restricting it to one kind are worth stating. No report filed before this
+amendment has become visible unless it was already a feature request — nobody's private report was
+made public retroactively. And the disclosure below is only ever shown for the kind it is true of, so
+it does not become noise that gets ignored on the report where it matters.
+
+### The disclosure is half the decision
+
+The dialog now says, **above the summary field and only when the report is a feature request**, that
+the line about to be typed will be visible to other signed-in users. Consent at the point of entry,
+not in a policy page nobody opens. Without it this would be a change to what happens to somebody's
+words after they have written them, which is the thing the original section was trying to prevent.
+
+### Why the control is the shape, not the role
+
+The original argument was about *free text written by somebody nobody has briefed*, and it still
+governs `GET /feedback`, which is untouched. What changes here is that a strictly narrower projection
+is exposed to a wider audience — so the safety comes from `toSuggestion` dropping everything by
+construction, rather than from a route remembering to omit three fields. A route that spread the row
+and deleted fields would leak the fourth one added next year.
+
+This is enforced in two places rather than one: the store is asked for a single kind, *and* the
+result is filtered again in the route. The second check is redundant today. It is there because this
+is the one list non-admin readers see, and a bug report reaching it is the failure this endpoint has
+to not have.
+
+The frontend keeps the shared list and the admin queue as **two separate panels with two separate
+gates** — `canReport()` and `canReadFeedback()`. One panel with a filter could be widened to the
+whole table by changing the filter, which is precisely the mistake the split makes impossible.
+
+### What is still true
+
+Escaping now matters in a way it did not before: this is the **only** place on the platform where
+text one user typed is rendered to another user. The API stores summaries verbatim — deliberately,
+since mangling somebody's words is worse than escaping them at the point of display — which puts the
+entire responsibility on the renderer, and a test holds it there.
+
+There is still no moderation queue. A summary appears the moment it is filed, so a user could put
+something objectionable in front of other users, and the only remedy is an administrator setting the
+status to `declined` — which hides nothing, because `declined` items remain listed. If that becomes a
+real problem the fix is an admin-visible-only default with an explicit "share" action, and it is not
+built now because a moderation step on a platform with a handful of users would mean ideas sitting
+invisible until somebody remembered to look.

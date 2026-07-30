@@ -3,7 +3,9 @@ import {
   isFeedbackStatus,
   normaliseDraft,
   normaliseFeedbackFilter,
+  toSuggestion,
   FEEDBACK_STATUSES,
+  SHARED_FEEDBACK_KIND,
   type FeedbackDraft,
   type FeedbackFilter,
 } from "../feedback.js";
@@ -72,9 +74,15 @@ export const FEEDBACK_ADMIN_ROLES: readonly UserRole[] = ["admin"];
  * — and the test additionally pins the size of this list so that growing it
  * cannot happen quietly.
  *
- * One entry, and it is the submission itself.
+ * Two entries. The submission itself, and the shared list of suggestions —
+ * which is a READ, and therefore the one that needed an argument rather than an
+ * assumption. See `FeedbackSuggestion` in `../feedback.ts` for it: the control
+ * on that route is the SHAPE of what it returns, not the role that may call it.
  */
-export const FEEDBACK_ROUTES_OPEN_TO_ANY_SIGNED_IN_USER: readonly string[] = ["POST /feedback"];
+export const FEEDBACK_ROUTES_OPEN_TO_ANY_SIGNED_IN_USER: readonly string[] = [
+  "POST /feedback",
+  "GET /feedback/suggestions",
+];
 
 /**
  * ANONYMOUS SUBMISSION IS REFUSED, and ADR 0016 §"Signed-in only" calls this a
@@ -252,6 +260,57 @@ export function registerFeedbackRoutes(router: Router, deps: RouteDeps): void {
       return json(502, { error: result.error, code: "feedback_unwritable" });
     }
     return json(201, result.value);
+  });
+
+  /**
+   * What has already been suggested — readable by any signed-in user.
+   *
+   * REGISTERED BEFORE `GET /feedback/:id` would be, and that ordering matters:
+   * `/feedback/suggestions` must not be matched as an id by a future
+   * single-report route. There is no such route today; this comment is here so
+   * that adding one does not silently turn this endpoint into a 404 or, worse,
+   * a lookup for a report whose id happens to be "suggestions".
+   *
+   * The gate is `refuseUnlessSignedIn`, NOT `refuseUnlessAdmin`, and that is the
+   * one place this feature departs from ADR 0016 as written. The departure is
+   * argued in full at `FeedbackSuggestion` in `../feedback.ts`; the short form
+   * is that a suggestion box only one person can see into collects the same idea
+   * five times and tells nobody it is already agreed.
+   *
+   * TWO THINGS MAKE THAT SAFE, and both are enforced here rather than trusted:
+   *
+   *   1. Only `SHARED_FEEDBACK_KIND` — `feature`. Bug reports stay admin-only,
+   *      because the way anybody describes what went wrong is by naming the
+   *      record it went wrong on.
+   *   2. `toSuggestion` drops everything except id, summary, status and date.
+   *      The long free-text `detail` box — the field ADR 0016's PII argument is
+   *      actually about — never leaves the server on this path, and neither
+   *      does who filed it.
+   *
+   * The filter is applied at the STORE, not after fetching: a `detail` string
+   * this endpoint never asked for cannot be leaked by a later refactor that
+   * forgets to project.
+   */
+  router.get("/feedback/suggestions", async (ctx: RequestContext): Promise<HttpResponse> => {
+    const refusal = refuseUnlessSignedIn(ctx);
+    if (refusal !== null) return refusal;
+
+    const result = await deps.runtime.feedback.query({ kind: SHARED_FEEDBACK_KIND });
+    if (!result.ok) {
+      // Same reasoning as the admin queue: never an empty list on failure.
+      // "Nobody has suggested anything" is an invitation to file a duplicate.
+      return json(502, { error: result.error, code: "feedback_unreadable" });
+    }
+
+    // Defence in depth. `query` was asked for one kind and the adapters honour
+    // it, but this list is the one non-admin readers see, so the kind is
+    // checked again here rather than assumed. A bug report reaching this array
+    // is the failure this whole endpoint has to not have.
+    const suggestions = result.value.reports
+      .filter((report) => report.kind === SHARED_FEEDBACK_KIND)
+      .map(toSuggestion);
+
+    return json(200, { suggestions });
   });
 
   /**

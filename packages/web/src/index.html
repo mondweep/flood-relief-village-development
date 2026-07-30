@@ -1170,6 +1170,26 @@ footer a { color: var(--accent-strong); }
     <!-- Workflow forms are generated from the WORKFLOW_GROUPS spec in script §8. -->
     <div class="section hidden" id="workflows" aria-label="Operational workflows"></div>
 
+    <!-- ADR 0016, amended: what has already been suggested, readable by every
+         signed-in user.
+
+         SEPARATE FROM THE ADMIN QUEUE BELOW, and the separation is the control.
+         This list is fed by GET /feedback/suggestions, which returns feature
+         requests only and carries just the one-line summary, the status and the
+         date — no detail, no reporter. The admin queue below is the whole row
+         and stays `admin` alone. Two panels rather than one filtered panel, so
+         that nobody can widen the visible one by changing a filter. -->
+    <div class="section hidden" id="suggestions" aria-labelledby="h-suggestions">
+      <h3 id="h-suggestions">Ideas already suggested</h3>
+      <p class="section-note">Everyone's feature requests, so you can see whether what you want has
+         already been asked for — and whether it has been agreed, built or turned down. Only the
+         one-line summary is shown, and never who asked. Bug reports are not listed here.</p>
+      <div class="card">
+        <div id="suggestions-list" aria-live="polite"></div>
+        <div class="msg" id="suggestions-msg" role="status" aria-live="polite"></div>
+      </div>
+    </div>
+
     <!-- ADR 0016: the reports queue. `admin` ALONE, deliberately narrower than
          the audit log's admin + district officer, because a feedback row is
          unbounded free text written by somebody nobody has briefed and it will
@@ -1305,6 +1325,17 @@ footer a { color: var(--accent-strong); }
         <button type="button" class="secondary" data-kind="feature" aria-pressed="false">I would like a feature</button>
         <button type="button" class="secondary" data-kind="other" aria-pressed="false">Something else</button>
       </div>
+    </div>
+
+    <!-- Shown only when the report is a feature request. CONSENT AT THE POINT OF
+         ENTRY: the one-line summary of a feature request is readable by every
+         signed-in user, and the moment to say so is before it is typed, not in
+         a policy page nobody opens. `bug` and `other` are not shared, so nobody
+         who filed one before this existed has had their report made visible. -->
+    <div class="callout hidden" id="report-shared-note">
+      <p>The one line below will be <strong>visible to other signed-in users</strong>, so they can see
+         what has already been asked for. The detail box and your name are not shared — only
+         administrators see those.</p>
     </div>
 
     <div class="field">
@@ -1918,7 +1949,40 @@ function applyRoute() {
  * `reportPending` is cleared by whoever consumes it, so an abandoned sign-in
  * does not ambush the next thing this tab does with a dialog nobody asked for.
  */
+/**
+ * "This visitor followed a `#/report` link and still owes us a report."
+ *
+ * MIRRORED INTO sessionStorage, and that is not belt-and-braces — it is the
+ * whole mechanism for the commonest path. Signing in with Google is a FULL PAGE
+ * REDIRECT: the browser leaves for accounts.google.com and comes back to a cold
+ * load. Every variable in this script is destroyed in between. The first version
+ * of this kept the intent in memory alone, so following the link, signing in
+ * with Google and being dropped on the Operations tab with no form was the
+ * guaranteed outcome rather than an edge case. It shipped that way.
+ *
+ * `sessionStorage` rather than `localStorage`, matching REFRESH_KEY: the intent
+ * belongs to this tab and this sitting, and a report form ambushing somebody
+ * next week because they once clicked a link is not a feature.
+ */
+const REPORT_KEY = "afrip.report.pending";
+
 let reportPending = false;
+
+function armReportIntent() {
+  reportPending = true;
+  try { sessionStorage.setItem(REPORT_KEY, "1"); } catch (_) { /* private mode: memory only */ }
+}
+
+function reportIntentArmed() {
+  if (reportPending) return true;
+  try { return sessionStorage.getItem(REPORT_KEY) === "1"; } catch (_) { return false; }
+}
+
+/** Cleared by whoever acts on it, so an abandoned sign-in cannot ambush the tab later. */
+function disarmReportIntent() {
+  reportPending = false;
+  try { sessionStorage.removeItem(REPORT_KEY); } catch (_) { /* ignore */ }
+}
 
 /**
  * True once `startAuth` has finished deciding whether this tab has a session.
@@ -1949,7 +2013,7 @@ function renderReportLink() {
 }
 
 function openReportFromLink() {
-  reportPending = true;
+  armReportIntent();
   // Not known yet whether there is a session. Boot settles it — see below.
   if (!authResolved) return;
   settleReportLink();
@@ -1968,8 +2032,8 @@ function openReportFromLink() {
  * explanation, which reads as a broken link rather than as a requirement.
  */
 function settleReportLink() {
-  if (!reportPending) return;
-  if (canReport()) { reportPending = false; openReport(); return; }
+  if (!reportIntentArmed()) return;
+  if (canReport()) { disarmReportIntent(); openReport(); return; }
 
   goto("ops");
   setMsg($("#auth-msg"), "info", "Sign in to send your report",
@@ -1987,7 +2051,7 @@ function loadView(view) {
   // applyAuthState shows or hides the queue; loading it is separate so that
   // returning to this tab re-reads it rather than showing what was there when
   // the session started.
-  if (view === "ops") { applyAuthState(); loadFeedbackQueue(); return; }
+  if (view === "ops") { applyAuthState(); loadSuggestions(); loadFeedbackQueue(); return; }
 }
 
 /** Re-reads the current view plus the always-on service indicators. */
@@ -4467,6 +4531,9 @@ function signOutLocal() {
   if (refreshTimer !== null) { clearTimeout(refreshTimer); refreshTimer = null; }
   try { sessionStorage.removeItem(REFRESH_KEY); } catch (_) { /* ignore */ }
   try { sessionStorage.removeItem(LEGACY_KEY); } catch (_) { /* ignore */ }
+  // Any half-finished `#/report` intent dies with the session. Otherwise
+  // signing out and back in re-opens a form nobody asked for the second time.
+  disarmReportIntent();
   if (tokenInput) tokenInput.value = "";
   state.assignments = null; state.assignmentsSupported = null; state.projects = null;
   applyAuthState();
@@ -6774,14 +6841,20 @@ function applyFeedbackAvailability() {
   const open = $("#report-open");
   if (open) open.classList.toggle("hidden", !canReport());
 
+  // Two panels, two audiences. The shared list follows `canReport()` — every
+  // signed-in user — while the queue below follows `canReadFeedback()`, which is
+  // `admin` alone. Conflating them is exactly the mistake the split prevents.
+  const shared = $("#suggestions");
+  if (shared) shared.classList.toggle("hidden", !canReport());
+
   const panel = $("#feedback-admin");
   if (panel) panel.classList.toggle("hidden", !canReadFeedback());
 
   // Somebody followed a `#/report` link, was sent to sign in, and has now
   // signed in. Finish what the link promised. Cleared first, so a failure to
   // open cannot leave it armed for the rest of the tab's life.
-  if (reportPending && canReport()) {
-    reportPending = false;
+  if (reportIntentArmed() && canReport()) {
+    disarmReportIntent();
     openReport();
   }
 
@@ -6791,11 +6864,27 @@ function applyFeedbackAvailability() {
   if (dialog && dialog.open && !canReport()) dialog.close();
 }
 
+/**
+ * The one kind of report other signed-in users can read — `SHARED_FEEDBACK_KIND`
+ * in packages/api/src/feedback.ts, and the two are pinned together by
+ * `web-feedback.test.ts`.
+ *
+ * `feature`, not `bug`, because of what each one IS. A feature request describes
+ * something the platform does not do; it is about the software. A bug report
+ * describes something that went wrong, and the way anybody describes what went
+ * wrong is by naming the record it went wrong on — which is the useful form of a
+ * bug report and the dangerous form of a public one.
+ */
+const SHARED_FEEDBACK_KIND = "feature";
+
 function setReportKind(kind) {
   reportKind = FEEDBACK_KINDS.indexOf(kind) !== -1 ? kind : "bug";
   $$("#report-kinds button").forEach(function (button) {
     button.setAttribute("aria-pressed", String(button.getAttribute("data-kind") === reportKind));
   });
+  // Said before the typing starts, and only for the kind it is true of.
+  const note = $("#report-shared-note");
+  if (note) note.classList.toggle("hidden", reportKind !== SHARED_FEEDBACK_KIND);
 }
 
 /**
@@ -6908,7 +6997,65 @@ async function submitReport() {
     + (id ? " Your reference is <code>" + esc(id) + "</code>." : ""));
   $("#report-summary").value = "";
   $("#report-detail").value = "";
+  // A feature request has just joined the shared list, so refresh it — otherwise
+  // the reporter closes the dialog and cannot see their own idea, which reads as
+  // the submission having failed despite the message saying otherwise.
+  loadSuggestions();
   if (canReadFeedback()) loadFeedbackQueue();
+}
+
+/* --- What has already been suggested (every signed-in user) ---------- */
+
+/**
+ * Renders the shared list.
+ *
+ * `esc()` on the summary is not decoration. This is the one place on the
+ * platform where text one user typed is rendered to another user, so it is the
+ * one place where a `<script>` in a form field would matter. The API stores the
+ * string verbatim — deliberately, since mangling somebody's words is worse than
+ * escaping them at the point of display — which puts the whole responsibility
+ * here.
+ */
+function suggestionRow(suggestion) {
+  const settled = suggestion.status === "resolved" || suggestion.status === "declined";
+  return '<li><div class="feedback-row">'
+    + '<div class="feedback-row-head">'
+    + '<span class="feedback-summary">' + esc(suggestion.summary) + "</span>"
+    + '<span class="tag' + (suggestion.status === "resolved" ? " ok" : "") + '">'
+    + esc(words(suggestion.status)) + "</span>"
+    + "</div>"
+    // No reporter and no detail: the endpoint does not send them. Stated here
+    // so that a future "why is this row so bare?" has its answer in place.
+    + '<div class="feedback-meta">suggested ' + esc(when(suggestion.createdAt))
+    + (settled ? " · closed" : "") + "</div>"
+    + "</div></li>";
+}
+
+async function loadSuggestions() {
+  if (!canReport()) return;
+  const out = $("#suggestions-list");
+  const msg = $("#suggestions-msg");
+  if (!out) return;
+  out.innerHTML = '<p class="hint">Loading…</p>';
+
+  const res = await api("/feedback/suggestions");
+  if (res.network || !res.ok) {
+    out.innerHTML = "";
+    // Never an empty list on failure, for a sharper reason than usual here:
+    // "nobody has suggested anything" is an active invitation to file the
+    // duplicate this panel exists to prevent.
+    const why = res.data && res.data.error ? esc(String(res.data.error)) : "the service did not answer";
+    setMsg(msg, "error", "The list of suggestions could not be read.", why);
+    return;
+  }
+  setMsg(msg, null);
+
+  const list = res.data && Array.isArray(res.data.suggestions) ? res.data.suggestions : [];
+  if (list.length === 0) {
+    out.innerHTML = '<p class="hint">Nobody has suggested anything yet. Yours would be the first.</p>';
+    return;
+  }
+  out.innerHTML = '<ul class="feedback-list">' + list.map(suggestionRow).join("") + "</ul>";
 }
 
 /* --- The administrator's queue --------------------------------------- */

@@ -17,7 +17,7 @@
 | [0013](0013-village-detail-and-amendment.md) | Viewing and amending a village: correction is not the same as change | Accepted |
 | [0014](0014-membership-on-a-shared-supabase-project.md) | Membership is explicit: no auto-enrolment on a shared Supabase project | Accepted |
 | [0015](0015-ending-a-session.md) | Ending a session: deliberate, reachable, and automatic | Accepted |
-| [0016](0016-in-app-feedback.md) | In-app feedback: reports from the people using it, with the context attached | Accepted |
+| [0016](0016-in-app-feedback.md) | In-app feedback: reports from the people using it, with the context attached | Accepted — amended |
 | [0017](0017-migration-rehearsal-instead-of-a-staging-environment.md) | Rehearse the migrations, rather than build a staging environment | Accepted |
 
 0008–0011 form one coherent change — identity, what identities may do, how identity reaches the
