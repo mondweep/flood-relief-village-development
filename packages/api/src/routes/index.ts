@@ -2,6 +2,7 @@ import { Router } from "../router.js";
 import { registerAuditRoutes } from "./audit.js";
 import { registerBeneficiaryRoutes } from "./beneficiaries.js";
 import { registerDashboardRoutes } from "./dashboard.js";
+import { registerFeedbackRoutes } from "./feedback.js";
 import { registerFundRoutes } from "./funds.js";
 import { registerGeocodeRoutes } from "./geocode.js";
 import { registerHealthRoutes } from "./health.js";
@@ -34,6 +35,7 @@ export function buildRouter(deps: RouteDeps): Router {
   registerPlanningRoutes(router, deps);
   registerSignalRoutes(router, deps);
   registerAuditRoutes(router, deps);
+  registerFeedbackRoutes(router, deps);
   registerGeocodeRoutes(router, deps);
   registerMapRoutes(router, deps, deps.fetchTile === undefined ? {} : { fetchTile: deps.fetchTile });
   registerPublicRoutes(router, deps);

@@ -23,6 +23,7 @@ import type { ProfileDirectory } from "./auth.js";
 import type { ApiConfig, PersistenceMode } from "./config.js";
 import { attachAuditLog, InMemoryAuditLog, SupabaseAuditLog, type AuditLog, type AuditLogSubscriber } from "./audit.js";
 import { SupabaseEnrolmentService, type EnrolmentService } from "./enrolment.js";
+import { InMemoryFeedbackStore, SupabaseFeedbackStore, type FeedbackStore } from "./feedback.js";
 import { SupabaseOwnershipRegistry } from "./ownership.js";
 import { SupabaseProfileDirectory } from "./profiles.js";
 import { OSM_USER_AGENT } from "./routes/map.js";
@@ -124,6 +125,19 @@ export interface PlatformRuntime {
    */
   readonly auditWriter: AuditLogSubscriber;
   /**
+   * The in-app feedback queue (ADR 0016). Always present, for the same reason
+   * `auditLog` is: in memory mode it is an `InMemoryFeedbackStore`, whose rows
+   * die with the process — which is the same guarantee everything else in that
+   * mode has, so nothing is inconsistent.
+   *
+   * Making it optional and answering 501 in memory mode was the alternative, and
+   * it is worse in a specific way: the dev server and the whole test suite run in
+   * memory mode, so the submission path would be unreachable everywhere except
+   * production. A form whose first real exercise is the deployment that users see
+   * is a form nobody has ever run.
+   */
+  readonly feedback: FeedbackStore;
+  /**
    * Where village-name lookups go (ADR 0012 §3). Absent when nothing is
    * configured, and `GET /geocode/villages` then answers 501 rather than an
    * empty candidate list — "the geocoder found nothing" and "there is no
@@ -161,6 +175,11 @@ export function createMemoryRuntime(overrides: PlatformOverrides = {}): Platform
     ownership,
     auditLog,
     auditWriter,
+    // The id generator is threaded through from the same override the platform
+    // uses, so a test that pins ids to `village-1` also gets `feedback-1` and
+    // does not have to know that feedback ids come from somewhere else. `now` is
+    // left at its default; only the store's own tests need to pin the clock.
+    feedback: new InMemoryFeedbackStore(undefined, overrides.idGenerator?.("feedback")),
     beneficiaryDirectory: new BeneficiaryDirectory(platform.bus),
     // `mode: "memory"` already says every context is volatile; repeating four of
     // them under a "partial" heading would imply the other six are durable.
@@ -225,6 +244,9 @@ export function createSupabaseRuntimeFromClient(
     ownership,
     auditLog,
     auditWriter: attachAuditLog(platform.bus, auditLog),
+    // Same client, same schema as every other adapter: reports are stored beside
+    // the data they complain about rather than in a second place that can drift.
+    feedback: new SupabaseFeedbackStore(client, schema, overrides.idGenerator?.("feedback")),
     // The adapter requires an explicit User-Agent and offers no default, which is
     // the right call: Nominatim's usage policy identifies callers by it, and an
     // anonymous or generic one gets the IP banned — with every village lookup
