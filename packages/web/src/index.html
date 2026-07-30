@@ -836,6 +836,27 @@ footer a { color: var(--accent-strong); }
          administrator.</p>
       <p class="hint">Where the records physically live is stated at the bottom of every page.</p>
     </section>
+
+    <!-- ADR 0016. Last in the Read me, because it is what somebody comes back
+         for after they have used the app rather than before. The link is spelled
+         out in full so it can be copied into an email or a WhatsApp message —
+         "press the button in the header" is not something you can send to a
+         district office. -->
+    <section class="section" aria-labelledby="h-rm-report">
+      <h3 id="h-rm-report">Found a bug, or want something changed?</h3>
+      <p>Press <strong>Report a problem</strong> in the header — it is there on every tab once you
+         are signed in. Or go straight to <a href="#/report">this page's report form</a>, which is
+         the link to share with anybody else:</p>
+      <p><code class="cmd" id="rm-report-link"></code></p>
+      <p>Your report automatically records which version of the app you were using and which screen
+         you were on, so nobody has to remember. You need an account, because a report nobody can
+         reply to is a report that goes nowhere — if you follow the link signed out, it will ask you
+         to sign in and then open the form for you.</p>
+      <p class="callout warn"><strong>Please do not type anyone's name, phone number or address into
+         a report.</strong> Refer to a village, a beneficiary or an issue by its identifier — the
+         code shown on the record, such as <code>village-1</code>. Reports are free text and are read
+         by administrators; identifiers are enough for us to find the record.</p>
+    </section>
   </section>
 
   <section class="view" id="view-public" aria-labelledby="h-public">
@@ -1824,13 +1845,33 @@ const state = {
 
 const VIEWS = ["readme", "public", "district", "ngo", "villages", "ops"];
 
+/**
+ * `#/report` — the shareable link to the feedback form (ADR 0016).
+ *
+ * NOT A VIEW, and that is the point. The form is a dialog that opens over
+ * whatever you were looking at, because a report is about the thing on screen.
+ * But "press the button in the header" is not something you can put in an email
+ * to a district office, so this exists to be pasted: it opens the same dialog,
+ * from a cold load, for somebody who has never noticed the button.
+ *
+ * It is kept out of VIEWS so that no nav tab lights up and no `#view-report`
+ * section is looked for. `parseHash` reports it separately and `applyRoute`
+ * routes the page underneath to the Public view — the one that needs no
+ * account — before opening the dialog on top.
+ */
+const REPORT_ROUTE = "report";
+
 function parseHash() {
   const raw = String(location.hash || "").replace(/^#\/?/, "");
   const parts = raw.split("/").filter(function (p) { return p.length > 0; });
   // `#/village/:id` was the earlier spelling; keep the old links working.
   const head = parts[0] === "village" ? "villages" : parts[0];
-  const view = VIEWS.indexOf(head) !== -1 ? head : "public";
-  return { view: view, arg: parts[1] ? decodeURIComponent(parts[1]) : null };
+  const report = head === REPORT_ROUTE;
+  // A shared link lands on Public underneath: it is the only view that renders
+  // anything without an account, so the page behind the dialog is never a wall
+  // of empty panels.
+  const view = report ? "public" : (VIEWS.indexOf(head) !== -1 ? head : "public");
+  return { view: view, arg: parts[1] ? decodeURIComponent(parts[1]) : null, report: report };
 }
 
 function goto(view, arg) {
@@ -1853,6 +1894,88 @@ function applyRoute() {
     if (current) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
   });
   loadView(route.view);
+
+  // ADR 0016. Last, so the page underneath is already routed and rendered — a
+  // dialog opening over a blank document reads as a broken load.
+  if (route.report) openReportFromLink();
+}
+
+/**
+ * Opens the form for somebody who arrived on `#/report`.
+ *
+ * THE SIGNED-OUT CASE IS THE WHOLE DIFFICULTY. Submission is signed-in only
+ * (ADR 0016), and a shared link will mostly be opened by people who are not
+ * signed in — that is what makes it worth sharing. Doing nothing would be the
+ * worst outcome: they followed a link that promised a form and got the Public
+ * dashboard with no explanation, which reads as a broken link rather than as a
+ * requirement.
+ *
+ * So the intent is REMEMBERED. They are sent to the sign-in panel with a line
+ * saying why, and `applyFeedbackAvailability` opens the form the moment a
+ * session exists — so the link ends where it said it would, one step later,
+ * without them having to find a button they were never told about.
+ *
+ * `reportPending` is cleared by whoever consumes it, so an abandoned sign-in
+ * does not ambush the next thing this tab does with a dialog nobody asked for.
+ */
+let reportPending = false;
+
+/**
+ * True once `startAuth` has finished deciding whether this tab has a session.
+ *
+ * THE RACE THIS EXISTS FOR. On a cold load of `#/report`, `applyRoute` runs
+ * before `startAuth` resolves — and a returning user's session lives in a
+ * refresh token that has to be exchanged over the network first. So at route
+ * time `canReport()` is false for somebody who is, in fact, perfectly signed in.
+ * Deciding then would bounce a signed-in user to the sign-in panel and tell them
+ * to do something they had already done, before the dialog opened anyway.
+ *
+ * So the link only ARMS the intent until this flips.
+ */
+let authResolved = false;
+
+/**
+ * Writes the full, copyable report URL into the Read me tab.
+ *
+ * Built from `location` rather than written into the markup, so it is right on
+ * every deployment — localhost, a preview revision, production — and cannot
+ * become a link to somewhere else the day the service is renamed. That has
+ * already happened once to this app's URL.
+ */
+function renderReportLink() {
+  const out = $("#rm-report-link");
+  if (!out) return;
+  out.textContent = location.origin + location.pathname.replace(/\/+$/, "/") + "#/" + REPORT_ROUTE;
+}
+
+function openReportFromLink() {
+  reportPending = true;
+  // Not known yet whether there is a session. Boot settles it — see below.
+  if (!authResolved) return;
+  settleReportLink();
+}
+
+/**
+ * Acts on an armed `#/report`, once it is known whether anyone is signed in.
+ *
+ * Signed in → open the form. Signed out → send them to the sign-in panel with a
+ * line saying why, and leave the intent armed: `applyFeedbackAvailability` opens
+ * the form the moment a session exists, so the link ends where it promised, one
+ * step later, without them hunting for a button nobody told them about.
+ *
+ * Doing nothing in the signed-out case would be the worst outcome — somebody
+ * follows a link that promised a form and lands on the Public dashboard with no
+ * explanation, which reads as a broken link rather than as a requirement.
+ */
+function settleReportLink() {
+  if (!reportPending) return;
+  if (canReport()) { reportPending = false; openReport(); return; }
+
+  goto("ops");
+  setMsg($("#auth-msg"), "info", "Sign in to send your report",
+    "Reports are attached to an account so that somebody can come back to you about what you "
+    + "found — an anonymous report is one nobody can follow up. Sign in or create an account "
+    + "below, and the form will open by itself.");
 }
 
 /** Loads the data a view needs. Each loader is independently safe to re-run. */
@@ -6654,6 +6777,14 @@ function applyFeedbackAvailability() {
   const panel = $("#feedback-admin");
   if (panel) panel.classList.toggle("hidden", !canReadFeedback());
 
+  // Somebody followed a `#/report` link, was sent to sign in, and has now
+  // signed in. Finish what the link promised. Cleared first, so a failure to
+  // open cannot leave it armed for the rest of the tab's life.
+  if (reportPending && canReport()) {
+    reportPending = false;
+    openReport();
+  }
+
   // Signing out with the dialog open would leave a form on screen whose submit
   // can only 403. Close it rather than let it sit there looking usable.
   const dialog = $("#report-dialog");
@@ -6940,6 +7071,7 @@ window.addEventListener("hashchange", applyRoute);
 const pendingAuth = consumeAuthFragment();
 
 buildWorkflows();
+renderReportLink();
 applyAuthState();
 checkHealth();
 checkReady();
@@ -6947,7 +7079,14 @@ if (!location.hash) location.hash = "#/public";
 applyRoute();
 // Resolves the session (OAuth return, refresh-token reload, or legacy token)
 // and re-renders whatever it unlocks.
-startAuth(pendingAuth);
+// `.finally`, not `.then`: a sign-in that FAILED has still resolved the
+// question "is anyone signed in?", and a `#/report` link that stayed armed
+// forever because the network dropped would be a link that silently does
+// nothing. Either way the answer is known, so act on it.
+startAuth(pendingAuth).finally(function () {
+  authResolved = true;
+  settleReportLink();
+});
 // Keep the connection indicator honest without hammering the service.
 setInterval(checkHealth, 30000);
 </script>

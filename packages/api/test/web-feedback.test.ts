@@ -238,6 +238,107 @@ describe("the controls follow the session", () => {
   });
 });
 
+describe("#/report — the shareable link to the form", () => {
+  /**
+   * RUN, NOT GREPPED. Everything else in this file reads the page as text,
+   * because the page cannot be imported. `parseHash` is the exception worth
+   * making: it depends on `location`, `VIEWS` and `REPORT_ROUTE` and nothing
+   * else, so its real source can be lifted out and executed against a fake
+   * `location`. That tests the routing decision itself rather than the presence
+   * of some strings near each other.
+   *
+   * Extracted from the page rather than restated here — a copy of the function
+   * would pass forever after the original was changed.
+   */
+  function routerFrom(source: string): (hash: string) => { view: string; arg: string | null; report: boolean } {
+    const views = /const VIEWS = (\[[^\]]*\]);/.exec(source);
+    const reportRoute = /const REPORT_ROUTE = ("[a-z]+");/.exec(source);
+    const parseHash = /function parseHash\(\)[\s\S]*?\n\}/.exec(source);
+    expect(views, "VIEWS is gone from the page").not.toBeNull();
+    expect(reportRoute, "REPORT_ROUTE is gone from the page").not.toBeNull();
+    expect(parseHash, "parseHash is gone from the page").not.toBeNull();
+
+    const factory = new Function(
+      "hash",
+      `const location = { hash };
+       const VIEWS = ${views?.[1]};
+       const REPORT_ROUTE = ${reportRoute?.[1]};
+       ${parseHash?.[0]}
+       return parseHash();`,
+    );
+    return factory as (hash: string) => { view: string; arg: string | null; report: boolean };
+  }
+
+  const route = routerFrom(SCRIPT);
+
+  it("recognises #/report", () => {
+    expect(route("#/report").report).toBe(true);
+  });
+
+  it("puts the Public view underneath it — the only one that renders without an account", () => {
+    // A shared link is opened mostly by people who are not signed in. Landing
+    // them on a view full of empty panels behind the dialog reads as breakage.
+    expect(route("#/report").view).toBe("public");
+  });
+
+  it.each(["#/public", "#/ops", "#/villages", "#/readme", "#/district", "#/ngo", "", "#/nonsense"])(
+    "does not mistake %s for the report link",
+    (hash) => {
+      expect(route(hash).report).toBe(false);
+    },
+  );
+
+  it("keeps every ordinary route working", () => {
+    expect(route("#/ops").view).toBe("ops");
+    expect(route("#/villages/village-3")).toMatchObject({ view: "villages", arg: "village-3" });
+    // The pre-existing alias, which a regression here would silently break.
+    expect(route("#/village/village-3")).toMatchObject({ view: "villages", arg: "village-3" });
+    expect(route("#/nonsense").view).toBe("public");
+  });
+
+  it("is not a view, so no nav tab lights up and no #view-report is looked for", () => {
+    // `applyRoute` toggles `#view-<name>` for every entry in VIEWS. A "report"
+    // entry would make it query an element that does not exist and throw,
+    // taking the whole route with it.
+    expect(route("#/readme").view).toBe("readme"); // VIEWS still works at all
+    expect(SCRIPT).not.toMatch(/const VIEWS = \[[^\]]*"report"/);
+    expect(PAGE).not.toContain('id="view-report"');
+  });
+
+  /**
+   * The signed-out case is the one that matters, because it is the common one:
+   * a link is worth sharing precisely with people who are not already signed in,
+   * and submission is signed-in only (ADR 0016).
+   *
+   * Doing nothing there would land somebody on the Public dashboard with no
+   * explanation after following a link that promised a form — indistinguishable
+   * from a broken link.
+   */
+  it("arms the intent rather than dropping it, and finishes after sign-in", () => {
+    expect(SCRIPT).toMatch(/function settleReportLink\(\)/);
+    expect(SCRIPT).toMatch(/reportPending = true/);
+    // Consumed where the session becomes known, so signing in finishes the job.
+    const availability = /function applyFeedbackAvailability\(\)[\s\S]*?\n\}/.exec(SCRIPT);
+    expect(availability?.[0] ?? "").toMatch(/reportPending && canReport\(\)/);
+    expect(availability?.[0] ?? "").toMatch(/openReport\(\)/);
+  });
+
+  /**
+   * A cold load of `#/report` routes BEFORE `startAuth` has exchanged the stored
+   * refresh token, so `canReport()` is false at that moment even for somebody
+   * who is signed in. Deciding then bounces them to a sign-in panel telling them
+   * to do what they have already done.
+   */
+  it("waits for auth to resolve before deciding the visitor is signed out", () => {
+    expect(SCRIPT).toMatch(/if \(!authResolved\) return;/);
+    // `.finally`, not `.then`: a failed sign-in has still answered the question.
+    expect(SCRIPT).toMatch(/startAuth\(pendingAuth\)\.finally\(/);
+    const boot = /startAuth\(pendingAuth\)\.finally\([\s\S]*?\}\);/.exec(SCRIPT);
+    expect(boot?.[0] ?? "").toContain("authResolved = true");
+    expect(boot?.[0] ?? "").toContain("settleReportLink()");
+  });
+});
+
 describe("the page and the API agree about the route names", () => {
   /**
    * The page hand-writes three paths. A rename on either side is invisible until
