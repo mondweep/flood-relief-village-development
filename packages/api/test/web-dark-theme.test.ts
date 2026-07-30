@@ -96,6 +96,45 @@ describe("accent variables are used for what they are", () => {
    */
 });
 
+describe("the two themes", () => {
+  const mediaDark = /:root:not\(\[data-theme="light"\]\)\s*\{([^}]*)\}/.exec(SHEET);
+  const explicitDark = /:root\[data-theme="dark"\]\s*\{([^}]*)\}/.exec(SHEET);
+  const normalise = (css: string): string => css.split(/\s+/).filter(Boolean).join(" ");
+
+  it("declares a dark palette for the device preference and for an explicit choice", () => {
+    expect(mediaDark, "no prefers-color-scheme dark block").not.toBeNull();
+    expect(explicitDark, "no [data-theme=dark] block").not.toBeNull();
+  });
+
+  /**
+   * The two dark blocks are duplicated on purpose — CSS cannot share one rule
+   * body between a media query and a plain selector, and the alternative (set
+   * data-theme from JS on load) flashes the light theme first on a slow
+   * connection. Duplication that cannot flash beats elegance that can.
+   *
+   * The cost of duplication is drift, and drift here means a colour that is
+   * correct when the OS picks dark and wrong when the reader picks it — a bug
+   * nobody would think to look for. This is the lock.
+   */
+  it("keeps the two dark palettes identical", () => {
+    const a = normalise(mediaDark?.[1] ?? "A");
+    const b = normalise(explicitDark?.[1] ?? "B");
+    expect(a, "the media-query dark palette and the explicit one have drifted apart").toBe(b);
+  });
+
+  it("lets an explicit light choice override a dark device", () => {
+    // `:not([data-theme="light"])` is what makes the override possible at all.
+    // Without it a reader on a dark phone is stuck with dark whatever they pick.
+    expect(mediaDark?.[0] ?? "").toContain(':not([data-theme="light"])');
+  });
+
+  it("offers all three states, so the device preference can be handed back", () => {
+    // A two-state toggle takes the choice away from anyone whose phone switches
+    // at sunset and gives them no way to return to it.
+    expect(PAGE).toMatch(/THEMES\s*=\s*\[\s*"system",\s*"light",\s*"dark"\s*\]/);
+  });
+});
+
 describe("the page does not reference styles it never defines", () => {
   /**
    * `class="btn"` shipped on the "Register with AFRIP" button. No `.btn` rule

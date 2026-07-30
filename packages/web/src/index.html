@@ -73,8 +73,24 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --shadow: 0 1px 2px rgba(16, 22, 26, 0.05);
 }
+/* ---------------------------------------------------------------------------
+   Theme. The light palette above is the default; the dark one below is applied
+   when the device asks for it, OR when the reader has chosen dark explicitly.
+   `data-theme` on <html> is that explicit choice and always wins — a reader on a
+   dark phone who wants light gets light.
+
+   The dark declarations appear TWICE, and that is not an oversight. CSS has no
+   way to share one rule body between a media query and a plain selector, and the
+   alternative — dropping the media query and setting data-theme from JavaScript
+   on every load — means the page renders light for a moment before correcting
+   itself, on exactly the slow connections this platform is built for. Duplication
+   that cannot flash beats elegance that can.
+
+   `web-dark-theme.test.ts` asserts the two blocks are character-identical, so
+   they cannot drift.
+   --------------------------------------------------------------------------- */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #14161a; --surface: #1c1f23; --surface-2: #23272c; --surface-3: #2b3037;
     --ink: #e7e9ea; --ink-muted: #a2a9b2; --ink-faint: #838b94;
     --line: #2c3138; --line-strong: #3d444d;
@@ -89,6 +105,21 @@
     --sev-critical-ink: #eda19c;   --sev-critical-bg: #37201f;
     --shadow: none;
   }
+}
+:root[data-theme="dark"] {
+    --bg: #14161a; --surface: #1c1f23; --surface-2: #23272c; --surface-3: #2b3037;
+    --ink: #e7e9ea; --ink-muted: #a2a9b2; --ink-faint: #838b94;
+    --line: #2c3138; --line-strong: #3d444d;
+    --accent: #8ab8b6; --accent-ink: #10201f; --accent-soft: #23383a; --accent-strong: #a8cecc;
+    --ok: #74b892; --ok-bg: #1c2a24;
+    --warn-bg: #322810; --warn-line: #c79a3d; --warn-ink: #f0dcaa;
+    --danger: #e79b96; --danger-bg: #391e1d; --danger-ink: #f0b8b4;
+    --fund-spent: #8ab8b6; --fund-released: #4d6f70; --fund-rest: #2b3037;
+    --sev-minor-ink: #93cbb2;      --sev-minor-bg: #1d2f28;
+    --sev-moderate-ink: #dcc07f;   --sev-moderate-bg: #322a15;
+    --sev-severe-ink: #e5a97f;     --sev-severe-bg: #35251a;
+    --sev-critical-ink: #eda19c;   --sev-critical-bg: #37201f;
+    --shadow: none;
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -142,6 +173,8 @@ button.pill:not(:disabled):focus-visible { outline: 2px solid var(--accent); out
   border-left: 1px solid var(--line); margin-left: 2px; padding-left: var(--s2);
   color: var(--accent-strong); font-weight: 600;
 }
+.theme-toggle { cursor: pointer; }
+.theme-toggle .theme-icon { font-size: 0.875rem; line-height: 1; }
 
 /* Tab bar: fixed to the bottom on a phone (thumb reach), a top strip on wider screens. */
 .nav {
@@ -573,6 +606,13 @@ footer a { color: var(--accent-strong); }
     <h1 class="brand">AFRIP
       <span>AI-Powered Flood Recovery &amp; Village Development Intelligence Platform</span></h1>
     <div class="header-status">
+      <!-- Overrides the device preference. Not a gimmick here: a field worker
+           reading this outdoors wants light regardless of what their phone
+           decided indoors, and the two palettes already existed. -->
+      <button type="button" class="pill theme-toggle" id="theme-toggle" aria-pressed="false">
+        <span class="theme-icon" id="theme-icon" aria-hidden="true">◐</span>
+        <span id="theme-label">Theme</span>
+      </button>
       <p class="pill" id="conn" aria-live="polite">
         <span class="dot pending" id="conn-dot" aria-hidden="true"></span>
         <span id="conn-text">Checking service…</span>
@@ -1106,6 +1146,40 @@ footer a { color: var(--accent-strong); }
 
 const $ = (sel, root) => (root || document).querySelector(sel);
 const $$ = (sel, root) => Array.prototype.slice.call((root || document).querySelectorAll(sel));
+
+/* --- Theme -----------------------------------------------------------
+ * Three states, not two: "system" (follow the device), "light", "dark".
+ * A two-state toggle would silently take the choice away from anyone who has
+ * set their phone to switch at sunset, and give them no way to hand it back.
+ *
+ * localStorage rather than sessionStorage, which is the OPPOSITE of what ADR
+ * 0008 mandates for the refresh token. Deliberately: that rule exists because a
+ * credential surviving tab close is a credential left on a shared device. A
+ * theme preference is not a credential, and one that had to be re-chosen every
+ * visit would be worse than useless.
+ * ------------------------------------------------------------------- */
+const THEME_KEY = "afrip.theme";           // localStorage: "light" | "dark" | absent
+const THEMES = ["system", "light", "dark"];
+
+function storedTheme() {
+  let raw = null;
+  try { raw = localStorage.getItem(THEME_KEY); } catch (_) { raw = null; }
+  return raw === "light" || raw === "dark" ? raw : "system";
+}
+
+/**
+ * Applied to <html> BEFORE first paint (see the call at the bottom of this
+ * block), so a reader who chose light on a dark device never sees a dark flash.
+ * "system" removes the attribute entirely and lets the media query decide.
+ */
+function applyTheme(theme) {
+  const root = document.documentElement;
+  if (theme === "system") root.removeAttribute("data-theme");
+  else root.setAttribute("data-theme", theme);
+}
+
+// Runs immediately, at parse time, ahead of any rendering.
+applyTheme(storedTheme());
 
 /** Escape anything from the API before it can touch innerHTML. Village names,
  *  issue descriptions, NGO names and error strings are all user-supplied. */
@@ -4665,6 +4739,52 @@ $("#sign-out").addEventListener("click", function () {
 
 // ADR 0015: the same action from the header, reachable in every view. Without
 // it, a signed-in user on any view but Operations has no way out on screen.
+/* --- Theme toggle ---------------------------------------------------- */
+
+/**
+ * Cycles system → light → dark → system.
+ *
+ * The label names the CURRENT state rather than the next one. "Dark" on a button
+ * that switches to light is the classic ambiguity, and it is genuinely 50/50
+ * whether a reader takes such a label as a description or an instruction —
+ * `aria-pressed` plus a state-naming label removes the guess.
+ */
+function themeLabel(theme) {
+  if (theme === "light") return { icon: "☀", text: "Light" };
+  if (theme === "dark") return { icon: "☾", text: "Dark" };
+  return { icon: "◐", text: "Auto" };
+}
+
+function renderThemeToggle() {
+  const theme = storedTheme();
+  const shown = themeLabel(theme);
+  $("#theme-icon").textContent = shown.icon;
+  $("#theme-label").textContent = shown.text;
+  const next = THEMES[(THEMES.indexOf(theme) + 1) % THEMES.length];
+  $("#theme-toggle").setAttribute("aria-pressed", String(theme !== "system"));
+  $("#theme-toggle").setAttribute(
+    "aria-label",
+    "Colour theme: " + shown.text + (theme === "system" ? " (following your device)" : "")
+      + ". Activate for " + themeLabel(next).text + ".",
+  );
+}
+
+$("#theme-toggle").addEventListener("click", function () {
+  const next = THEMES[(THEMES.indexOf(storedTheme()) + 1) % THEMES.length];
+  try {
+    if (next === "system") localStorage.removeItem(THEME_KEY);
+    else localStorage.setItem(THEME_KEY, next);
+  } catch (_) {
+    // Private mode, or storage disabled. The theme still applies for this page
+    // view; it simply will not be remembered. Silently degrading is right here —
+    // an error toast about a colour preference would be noise.
+  }
+  applyTheme(next);
+  renderThemeToggle();
+});
+
+renderThemeToggle();
+
 $("#session-pill").addEventListener("click", function () {
   if ($("#session-pill").disabled) return;
   goto("ops");
