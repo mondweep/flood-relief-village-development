@@ -486,6 +486,18 @@ code.cmd { display: block; font-family: var(--mono); font-size: 0.75rem; backgro
    themselves are noun phrases; the verbs are reserved for things you can press. */
 .tag.status { text-transform: none; letter-spacing: 0; font-weight: 500; }
 
+/* The role matrix in the Read me. `th, td` above is `white-space: nowrap`,
+   which is right for the data tables it was written for and wrong here: these
+   row headers are sentences, and left unwrapped they push the table several
+   screens wide on a phone. */
+.role-matrix th[scope="row"] { white-space: normal; min-width: 20ch; font-weight: 500; }
+.role-matrix td { text-align: center; }
+/* "No" is the common case and must not read as a failure — most people are
+   citizens, and a column of red would say the platform is refusing them rather
+   than that they are not a fund officer. */
+.role-matrix td { color: var(--ink-muted); }
+.role-matrix tbody th { color: var(--ink); }
+
 /* A block that says something the reader must not skim past. */
 .callout {
   background: var(--surface-2); border: 1px solid var(--line); border-left: 3px solid var(--accent);
@@ -841,6 +853,87 @@ footer a { color: var(--accent-strong); }
          promise above worth anything, and it cannot be edited by the application, including by an
          administrator.</p>
       <p class="hint">Where the records physically live is stated at the bottom of every page.</p>
+    </section>
+
+    <!-- WHAT EACH ROLE ACTUALLY SEES.
+         Added because the platform's own maintainer opened Operations signed in
+         as a citizen, saw 9 of 32 workflows and asked whether features had been
+         removed. If the person who built it cannot tell a narrow role from a
+         shrunken product by looking, nobody can — and the answer belongs where
+         a new user reads about the platform, not in a commit message.
+
+         Every claim below is checked against PLATFORM_PERMISSIONS by
+         `web-role-matrix.test.ts`, so it cannot quietly drift away from what the
+         server enforces. Do not edit a cell without changing the policy table. -->
+    <section class="section" aria-labelledby="h-rm-roles">
+      <h3 id="h-rm-roles">What your role lets you do</h3>
+      <p>Everyone signs in the same way, and what you can do depends on your <strong>role</strong>.
+         Registering yourself gives you <strong>citizen</strong>; the others are assigned. If a control
+         is missing from Operations it is because your role cannot use it — the page now says how many
+         of the workflows you are being shown.</p>
+
+      <div class="table-scroll">
+        <table class="role-matrix">
+          <caption class="sr-only">Which roles may perform which activities</caption>
+          <thead>
+            <tr>
+              <th scope="col">Activity</th>
+              <th scope="col">Citizen</th>
+              <th scope="col">Village committee</th>
+              <th scope="col">NGO coordinator</th>
+              <th scope="col">District officer</th>
+              <th scope="col">Admin</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">Read the public record — villages, severity, recovery, funds</th>
+              <td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Report an issue in a village</th>
+              <td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Sign up as a volunteer</th>
+              <td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Send in a field report</th>
+              <td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Register a village, record damage, set severity</th>
+              <td>No</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Work an issue through to resolution</th>
+              <td>No</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Development plans, goals and milestones</th>
+              <td>No</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row"><strong>The beneficiary register</strong> — names of widows and
+              orphaned children</th>
+              <td>No</td><td>No</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Record aid given, and follow-ups</th>
+              <td>No</td><td>No</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Assign volunteers and log their hours</th>
+              <td>No</td><td>No</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Register an NGO, assign the lead NGO to a village</th>
+              <td>No</td><td>No</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Sanction projects, release funds, run anomaly detection</th>
+              <td>No</td><td>No</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Read the audit trail</th>
+              <td>No</td><td>No</td><td>No</td><td>Yes</td><td>Yes</td></tr>
+            <tr><th scope="row">Read reported bugs and triage them</th>
+              <td>No</td><td>No</td><td>No</td><td>No</td><td>Yes</td></tr>
+            <tr><th scope="row">Mark records as demonstration data</th>
+              <td>No</td><td>No</td><td>No</td><td>No</td><td>Yes</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <p class="hint">Roughly: a <strong>citizen</strong> can do 14 things, a <strong>village
+         committee</strong> member 28, an <strong>NGO coordinator</strong> 40, and a <strong>district
+         officer</strong> everything except the two admin-only rows.</p>
+
+      <p><strong>One thing worth knowing about ownership.</strong> The table is about your role, but
+         you may also edit <em>what you created</em> — a citizen who reports an issue can carry that
+         issue through to resolution, even though the row above says otherwise for issues in general.
+         Rights come from your role <em>or</em> from having made the record.</p>
+
+      <p class="callout"><strong>An administrator is not a role with more permissions — it is a role
+         that is not checked.</strong> Admin appears in none of the rules above; the platform simply
+         does not consult them for an administrator. That is why the list of administrators is kept in
+         version control rather than in a settings page, and why there is deliberately only one today.</p>
     </section>
 
     <!-- ADR 0016. Last in the Read me, because it is what somebody comes back
