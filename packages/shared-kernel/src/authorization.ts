@@ -51,11 +51,62 @@ export function isUserRole(value: unknown): value is UserRole {
   return typeof value === "string" && (USER_ROLES as readonly string[]).includes(value);
 }
 
+/**
+ * Where somebody's role came from — the `role_source` column added by 00010.
+ *
+ * Provenance rather than a sixth role, and the distinction is the whole design.
+ * The platform still has exactly five roles; what this adds is the answer to
+ * "who said so", which is what decides who may appoint whom.
+ *
+ *   grant      asserted by `role_grants`, i.e. by a migration in version
+ *              control. An `admin` from this source is a SUPER ADMIN.
+ *   appointed  set in-app by a super admin.
+ *   self       nobody assigned it — the `citizen` floor from self-registration.
+ */
+export const ROLE_SOURCES = ["grant", "appointed", "self"] as const;
+export type RoleSource = (typeof ROLE_SOURCES)[number];
+
+export function isRoleSource(value: unknown): value is RoleSource {
+  return typeof value === "string" && (ROLE_SOURCES as readonly string[]).includes(value);
+}
+
+/** What a profile with no recorded provenance is treated as. */
+export const DEFAULT_ROLE_SOURCE: RoleSource = "self";
+
 /** Who a request is acting as. Null, at the call sites, means "nobody named". */
 export interface AuthenticatedActor {
   readonly id: string;
   readonly email: string;
   readonly role: UserRole;
+  /**
+   * OPTIONAL, and it must stay optional.
+   *
+   * Every existing caller — forty-odd use cases, the in-memory dev runtime, and
+   * every test that builds an actor by hand — constructs this object without
+   * knowing what a role source is, and none of them should have to. Only the
+   * role-administration route asks.
+   *
+   * ABSENT MEANS NOT A SUPER ADMIN, which is the safe direction: a deployment
+   * that cannot say where a role came from must not conclude the role came from
+   * version control. `isSuperAdmin` below is the only thing that reads it, and
+   * it fails closed by construction rather than by remembering to.
+   */
+  readonly roleSource?: RoleSource;
+}
+
+/**
+ * May this actor change other people's roles?
+ *
+ * TWO CONDITIONS, AND BOTH ARE LOAD-BEARING. Being an `admin` is not enough —
+ * that is the entire point of 00010. An administrator appointed in-app can do
+ * everything an administrator does *except* appoint another one, so the set of
+ * people who can hand out unchecked access stays exactly the set named in the
+ * repository, reviewable in a diff, and cannot grow by somebody clicking.
+ *
+ * Fails closed on a missing `roleSource`: no provenance, no appointment power.
+ */
+export function isSuperAdmin(actor: AuthenticatedActor | null): boolean {
+  return actor !== null && actor.role === "admin" && actor.roleSource === "grant";
 }
 
 // ---------------------------------------------------------------------------

@@ -1269,6 +1269,26 @@ footer a { color: var(--accent-strong); }
     <!-- Workflow forms are generated from the WORKFLOW_GROUPS spec in script §8. -->
     <div class="section hidden" id="workflows" aria-label="Operational workflows"></div>
 
+    <!-- ADR 0018: appointing people.
+         Shown only to an administrator whose role came from the platform's
+         version-controlled grant list. Cosmetic, like every other gate in this
+         page — /admin/users refuses everyone else whatever this shows. -->
+    <div class="section hidden" id="user-admin" aria-labelledby="h-user-admin">
+      <h3 id="h-user-admin">People and their roles</h3>
+      <p class="section-note">Everyone registered with AFRIP. Change somebody's role to give them
+         access to more of the platform — a <strong>district officer</strong> can already use every
+         workflow, so that is usually the role to give, not <strong>administrator</strong>.</p>
+      <p class="callout warn"><strong>An administrator is not checked.</strong> They can read the
+         beneficiary register, the audit trail and everyone's reported bugs. Appoint one only when
+         somebody needs exactly that. An administrator you appoint here cannot appoint anyone else —
+         that stays with the accounts named in the platform's source code, so this cannot get away
+         from you.</p>
+      <div class="card">
+        <div id="user-admin-list" aria-live="polite"></div>
+        <div class="msg" id="user-admin-msg" role="status" aria-live="polite"></div>
+      </div>
+    </div>
+
     <!-- ADR 0016, amended: what has already been suggested, readable by every
          signed-in user.
 
@@ -2155,7 +2175,7 @@ function loadView(view) {
   // applyAuthState shows or hides the queue; loading it is separate so that
   // returning to this tab re-reads it rather than showing what was there when
   // the session started.
-  if (view === "ops") { applyAuthState(); loadSuggestions(); loadFeedbackQueue(); return; }
+  if (view === "ops") { applyAuthState(); loadSuggestions(); loadFeedbackQueue(); loadUserAdmin(); return; }
 }
 
 /** Re-reads the current view plus the always-on service indicators. */
@@ -4711,9 +4731,20 @@ async function loadIdentity() {
   state.auth.noAccess = res.status === 401 && state.auth.lastRefusal === "user_unknown";
   if (res.ok && res.data && typeof res.data === "object") {
     state.auth.user = {
+      id: typeof res.data.id === "string" ? res.data.id : null,
       email: typeof res.data.email === "string" ? res.data.email : (known.email || null),
       role: typeof res.data.role === "string" ? res.data.role : null,
-      roleUnavailable: typeof res.data.role !== "string"
+      roleUnavailable: typeof res.data.role !== "string",
+      // ADR 0018. Absent on any revision that does not serve it, and absent is
+      // the safe reading: `canAppoint()` requires "grant" explicitly, so an
+      // older API leaves the appointment panel hidden rather than showing a form
+      // whose every button would 403.
+      //
+      // The warning above applies here with MORE force, not less: this must
+      // never be read out of the token. A role source decoded from a JWT is a
+      // claim the holder wrote about themselves, and this particular field
+      // decides who may hand out unchecked access.
+      roleSource: typeof res.data.roleSource === "string" ? res.data.roleSource : null
     };
     // ADR 0009's permission list, when this revision serves one. Every entry
     // must be a string: a malformed array is no more trustworthy than a missing
@@ -4738,7 +4769,7 @@ async function loadIdentity() {
   // and the moment anyone gates a panel on `state.auth.user.role` it becomes an
   // authorization bug. The role comes from `user_profiles` via /me or it is
   // unknown; the fix for a missing role is to deploy /me, not to trust the token.
-  state.auth.user = { email: known.email || null, role: null, roleUnavailable: true };
+  state.auth.user = { id: null, email: known.email || null, role: null, roleUnavailable: true, roleSource: null };
 }
 
 /* --- Registering with AFRIP ------------------------------------------ */
@@ -7002,6 +7033,11 @@ function applyFeedbackAvailability() {
   const shared = $("#suggestions");
   if (shared) shared.classList.toggle("hidden", !canReport());
 
+  // ADR 0018. Narrower than the admin queue: an administrator appointed in-app
+  // sees the feedback queue and NOT this, because they may not appoint anybody.
+  const people = $("#user-admin");
+  if (people) people.classList.toggle("hidden", !canAppoint());
+
   const panel = $("#feedback-admin");
   if (panel) panel.classList.toggle("hidden", !canReadFeedback());
 
@@ -7157,6 +7193,132 @@ async function submitReport() {
   // the submission having failed despite the message saying otherwise.
   loadSuggestions();
   if (canReadFeedback()) loadFeedbackQueue();
+}
+
+/* ====================================================================
+ * People and their roles (ADR 0018)
+ * ==================================================================== */
+
+/** The five roles, most privileged first — `USER_ROLES` in the shared kernel. */
+const ASSIGNABLE_ROLES = ["admin", "district_officer", "ngo_coordinator", "village_committee", "citizen"];
+
+/** What each role is called, and the one line that says whether to give it. */
+const ROLE_BLURB = {
+  admin: "Everything, unchecked — plus reported bugs and demonstration data.",
+  district_officer: "Every workflow on the platform. Usually the right choice.",
+  ngo_coordinator: "Villages, beneficiaries, aid, volunteers and plans.",
+  village_committee: "Their own village: registration, damage, issues, plans.",
+  citizen: "Read the public record, report issues, volunteer."
+};
+
+/**
+ * True when this account may appoint others — `isSuperAdmin` on the server.
+ *
+ * COSMETIC. Every `/admin` route calls the real thing; this only decides whether
+ * to render a panel whose every button would otherwise 403. Absent provenance
+ * means no — the same direction the server fails in.
+ */
+function canAppoint() {
+  const user = state.auth.user || {};
+  return Boolean(state.token) && !state.auth.noAccess
+    && user.role === "admin" && user.roleSource === "grant";
+}
+
+function roleSourceNote(source) {
+  if (source === "grant") return "set in the platform's source code";
+  if (source === "appointed") return "appointed here";
+  return "registered themselves";
+}
+
+function userRow(user, meId) {
+  const fixed = user.roleSource === "grant";
+  const self = user.id === meId;
+  // Two reasons a row has no buttons, and they are different enough to say
+  // separately: your own row is refused to stop a super admin removing the only
+  // power that could put it back, and a grant-sourced row is refused because the
+  // next deployment would silently undo the change.
+  const why = self
+    ? "This is you. Change your own role in the grant list, not here."
+    : fixed
+      ? "Set in the platform's source code — changing it here would be undone by the next deployment."
+      : "";
+
+  const buttons = self || fixed ? "" : ASSIGNABLE_ROLES
+    .filter(function (role) { return role !== user.role; })
+    .map(function (role) {
+      return '<button type="button" class="tiny secondary" data-action="set-role" '
+        + "data-payload='" + JSON.stringify({ id: user.id, role: role, email: user.email }) + "'>"
+        + "Make " + esc(words(role)) + "</button>";
+    }).join("");
+
+  return '<li><div class="feedback-row">'
+    + '<div class="feedback-row-head">'
+    + '<span class="feedback-summary">' + esc(user.email) + "</span>"
+    + '<span class="tag status" aria-label="Role: ' + esc(words(user.role)) + '">'
+    + esc(words(user.role)) + "</span>"
+    + "</div>"
+    + '<div class="feedback-meta">' + esc(roleSourceNote(user.roleSource))
+    + (user.enrolledAt ? " · joined " + esc(when(user.enrolledAt)) : "") + "</div>"
+    + (why ? '<div class="feedback-meta">' + esc(why) + "</div>" : "")
+    + (buttons ? '<div class="feedback-actions">' + buttons + "</div>" : "")
+    + "</div></li>";
+}
+
+async function loadUserAdmin() {
+  if (!canAppoint()) return;
+  const out = $("#user-admin-list");
+  const msg = $("#user-admin-msg");
+  if (!out) return;
+  out.innerHTML = '<p class="hint">Loading…</p>';
+
+  const res = await api("/admin/users");
+  if (res.network || !res.ok) {
+    out.innerHTML = "";
+    const why = res.data && res.data.error ? esc(String(res.data.error)) : "the service did not answer";
+    setMsg(msg, "error", "The list of people could not be read.", why);
+    return;
+  }
+  setMsg(msg, null);
+
+  const users = res.data && Array.isArray(res.data.users) ? res.data.users : [];
+  const meId = (state.auth.user || {}).id;
+  out.innerHTML = users.length === 0
+    ? '<p class="hint">Nobody else has registered yet.</p>'
+    : '<ul class="feedback-list">' + users.map(function (u) { return userRow(u, meId); }).join("")
+      + "</ul>"
+      + '<p class="hint" style="margin-top:12px">'
+      + ASSIGNABLE_ROLES.map(function (r) {
+          return "<strong>" + esc(words(r)) + "</strong> — " + esc(ROLE_BLURB[r]);
+        }).join("<br>")
+      + "</p>";
+}
+
+async function setUserRole(id, role, email) {
+  // Confirmed because it is irreversible in the sense that matters: the person
+  // holds the access from the moment they next load a page, and taking it back
+  // does not un-see what they saw.
+  const label = words(role);
+  if (!window.confirm("Make " + email + " " + (role === "admin" ? "an " : "a ") + label + "?"
+      + (role === "admin"
+          ? "\n\nAn administrator can read the beneficiary register, the audit trail and every "
+            + "reported bug. They will NOT be able to appoint anybody else."
+          : ""))) {
+    return;
+  }
+
+  const res = await api("/admin/users/" + encodeURIComponent(id) + "/role",
+    { method: "PATCH", body: { role: role } });
+
+  if (res.network || !res.ok) {
+    const why = res.data && res.data.error ? esc(String(res.data.error)) : "the service did not answer";
+    setMsg($("#user-admin-msg"), "error", "That role was not changed.", why);
+    loadUserAdmin();
+    return;
+  }
+  setMsg($("#user-admin-msg"), "ok", "Role changed",
+    esc(email) + " is now " + (role === "admin" ? "an " : "a ") + esc(label)
+    + ". It takes effect the next time they load the page, and the change is in the audit trail.");
+  loadUserAdmin();
 }
 
 /* --- What has already been suggested (every signed-in user) ---------- */
@@ -7366,6 +7528,7 @@ document.addEventListener("click", function (event) {
   if (action === "amend") { openAmendment(payload.panel); return; }
   if (action === "ngo") { state.ngoId = payload.ngoId || state.ngoId; goto("ngo", state.ngoId); return; }
   if (action === "feedback-status") { setFeedbackStatus(payload.id, payload.status); return; }
+  if (action === "set-role") { setUserRole(payload.id, payload.role, payload.email); return; }
   if (VIEWS.indexOf(action) !== -1) goto(action);
 });
 

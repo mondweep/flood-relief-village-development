@@ -225,6 +225,15 @@ export const AUDIT_SUBJECTS: Readonly<Record<string, SubjectRule>> = {
   // the one cross-context event whose natural subject really is the village.
   "recovery.score-calculated.v1": { subjectType: "village", idKey: "villageId" },
 
+  // user administration (ADR 0018). NOT a bounded context — see
+  // `routes/admin-users.ts` for why roles are not modelled as one — but the
+  // event belongs in the trail like any other attributed change, and the
+  // subject is the person whose access changed. `GET /audit/subjects/user/:id`
+  // therefore answers "how did this account come to hold what it holds", which
+  // is the question an auditor asks first about a platform holding a register
+  // of vulnerable people.
+  "user.role-changed.v1": { subjectType: "user", idKey: "userId" },
+
   // village-registry
   "village.damage-assessed.v1": { subjectType: "village", idKey: "villageId" },
   "village.marked-as-demonstration.v1": { subjectType: "village", idKey: "villageId" },

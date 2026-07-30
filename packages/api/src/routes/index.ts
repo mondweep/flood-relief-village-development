@@ -1,4 +1,5 @@
 import { Router } from "../router.js";
+import { registerAdminUserRoutes } from "./admin-users.js";
 import { registerAuditRoutes } from "./audit.js";
 import { registerBeneficiaryRoutes } from "./beneficiaries.js";
 import { registerDashboardRoutes } from "./dashboard.js";
@@ -36,6 +37,7 @@ export function buildRouter(deps: RouteDeps): Router {
   registerSignalRoutes(router, deps);
   registerAuditRoutes(router, deps);
   registerFeedbackRoutes(router, deps);
+  registerAdminUserRoutes(router, deps);
   registerGeocodeRoutes(router, deps);
   registerMapRoutes(router, deps, deps.fetchTile === undefined ? {} : { fetchTile: deps.fetchTile });
   registerPublicRoutes(router, deps);

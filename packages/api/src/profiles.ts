@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { AFRIP_SCHEMA } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, DEFAULT_ROLE_SOURCE, isRoleSource } from "@afrip/shared-kernel";
 import {
   DEFAULT_ROLE,
   isUserRole,
@@ -21,6 +21,7 @@ interface ProfileRow {
   readonly id: unknown;
   readonly email: unknown;
   readonly role: unknown;
+  readonly role_source: unknown;
 }
 
 /**
@@ -47,7 +48,7 @@ export class SupabaseProfileDirectory implements ProfileDirectory {
     const result = await this.client
       .schema(this.schema)
       .from(USER_PROFILES_TABLE)
-      .select("id,email,role")
+      .select("id,email,role,role_source")
       .eq("id", claims.sub)
       .limit(1);
 
@@ -82,6 +83,16 @@ export class SupabaseProfileDirectory implements ProfileDirectory {
     // role may do; this file only refuses to invent authority it cannot name.
     const role = isUserRole(row.role) ? row.role : DEFAULT_ROLE;
 
-    return { id, email, role };
+    // WHERE THE ROLE CAME FROM (00010), and the reason an unreadable value
+    // becomes `self` rather than an error: `self` is the source with no
+    // authority attached, so a column this build does not understand costs
+    // somebody their ability to appoint others and costs nobody any protection.
+    // The opposite default would hand out appointment rights on a bad read.
+    //
+    // Absent entirely — a deployment still on 00009 — is the same answer, for
+    // the same reason. `isSuperAdmin` requires "grant" explicitly.
+    const roleSource = isRoleSource(row.role_source) ? row.role_source : DEFAULT_ROLE_SOURCE;
+
+    return { id, email, role, roleSource };
   }
 }

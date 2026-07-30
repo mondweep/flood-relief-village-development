@@ -1,4 +1,4 @@
-import { AFRIP_SCHEMA } from "@afrip/shared-kernel";
+import { AFRIP_SCHEMA, isSuperAdmin } from "@afrip/shared-kernel";
 import { describe, expect, it, vi } from "vitest";
 import type { VerifiedClaims } from "../src/auth.js";
 import { SupabaseProfileDirectory, USER_PROFILES_TABLE } from "../src/profiles.js";
@@ -25,6 +25,9 @@ describe("SupabaseProfileDirectory", () => {
       id: SUB,
       email: "officer@darbhanga.gov.in",
       role: "district_officer",
+      // 00010. A row with no `role_source` reads as "self" — nobody assigned
+      // this, so no appointment power attaches to it.
+      roleSource: "self",
     });
   });
 
@@ -40,7 +43,12 @@ describe("SupabaseProfileDirectory", () => {
       claims({ email: "spoofed@example.com", payload: { role: "admin" } }),
     );
 
-    expect(actor).toEqual({ id: SUB, email: "real@example.org", role: "citizen" });
+    expect(actor).toEqual({
+      id: SUB,
+      email: "real@example.org",
+      role: "citizen",
+      roleSource: "self",
+    });
   });
 
   it("reads user_profiles in the AFRIP schema, not public", async () => {
@@ -86,5 +94,62 @@ describe("SupabaseProfileDirectory", () => {
     const { directory } = profiles([{ id: SUB, email: "a@b.c", role: "superuser" }]);
 
     expect(await directory.resolve(claims())).toMatchObject({ role: "citizen" });
+  });
+});
+
+/**
+ * Where the role came from (00010), which is what decides who may appoint others.
+ *
+ * The failure this guards against is not subtle but it is silent: read the
+ * column wrong, or not at all, and an administrator either loses the ability to
+ * appoint anyone (visible, annoying) or GAINS it without being named in version
+ * control (invisible, and the entire point of the design gone).
+ */
+describe("SupabaseProfileDirectory reads where the role came from", () => {
+  it("carries a grant-sourced role through as a super admin", async () => {
+    const { directory } = profiles([
+      { id: SUB, email: "owner@example.org", role: "admin", role_source: "grant" },
+    ]);
+    const actor = await directory.resolve(claims());
+    expect(actor).toMatchObject({ role: "admin", roleSource: "grant" });
+    expect(isSuperAdmin(actor)).toBe(true);
+  });
+
+  it("carries an appointed admin through as NOT a super admin", async () => {
+    // The distinction the whole feature rests on: same role, different source,
+    // and only one of them may appoint anybody else.
+    const { directory } = profiles([
+      { id: SUB, email: "deputy@example.org", role: "admin", role_source: "appointed" },
+    ]);
+    const actor = await directory.resolve(claims());
+    expect(actor).toMatchObject({ role: "admin", roleSource: "appointed" });
+    expect(isSuperAdmin(actor)).toBe(false);
+  });
+
+  /**
+   * A column this build cannot read must cost somebody their appointment
+   * rights, never grant them. `self` is the source with no authority attached,
+   * so an unrecognised value fails in the direction that protects the platform.
+   */
+  it.each([
+    ["an unrecognised value", "root"],
+    ["a missing column — a deployment still on 00009", undefined],
+    ["null", null],
+  ])("falls back to self for %s", async (_label, value) => {
+    const row: Record<string, unknown> = { id: SUB, email: "a@b.c", role: "admin" };
+    if (value !== undefined) row["role_source"] = value;
+    const { directory } = profiles([row as never]);
+    const actor = await directory.resolve(claims());
+    expect(actor).toMatchObject({ roleSource: "self" });
+    expect(isSuperAdmin(actor)).toBe(false);
+  });
+
+  it("asks the database for the column at all", async () => {
+    // A `select` that omits `role_source` returns undefined for every row, so
+    // every administrator silently stops being a super admin — the platform
+    // still works, and nobody can appoint anybody ever again.
+    const { fake, directory } = profiles([{ id: SUB, email: "a@b.c", role: "admin" }]);
+    await directory.resolve(claims());
+    expect(fake.queriesTo(USER_PROFILES_TABLE)[0]?.columns).toContain("role_source");
   });
 });

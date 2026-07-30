@@ -24,6 +24,11 @@ import type { ApiConfig, PersistenceMode } from "./config.js";
 import { attachAuditLog, InMemoryAuditLog, SupabaseAuditLog, type AuditLog, type AuditLogSubscriber } from "./audit.js";
 import { SupabaseEnrolmentService, type EnrolmentService } from "./enrolment.js";
 import { InMemoryFeedbackStore, SupabaseFeedbackStore, type FeedbackStore } from "./feedback.js";
+import {
+  InMemoryUserDirectory,
+  SupabaseUserDirectory,
+  type UserDirectory,
+} from "./user-administration.js";
 import { SupabaseOwnershipRegistry } from "./ownership.js";
 import { SupabaseProfileDirectory } from "./profiles.js";
 import { OSM_USER_AGENT } from "./routes/map.js";
@@ -138,6 +143,17 @@ export interface PlatformRuntime {
    */
   readonly feedback: FeedbackStore;
   /**
+   * Who is registered with AFRIP and what role they hold (ADR 0018).
+   *
+   * Always present, like `feedback` and for the same reason — but in memory mode
+   * it is EMPTY, and that is not an oversight. The in-memory auth path pins
+   * everyone to `citizen` and there is no `user_profiles` table behind it, so
+   * there is nobody to appoint; seeding a fake super admin would make the
+   * development server disagree with every real deployment about the one thing
+   * this feature is careful about.
+   */
+  readonly users: UserDirectory;
+  /**
    * Where village-name lookups go (ADR 0012 §3). Absent when nothing is
    * configured, and `GET /geocode/villages` then answers 501 rather than an
    * empty candidate list — "the geocoder found nothing" and "there is no
@@ -180,6 +196,8 @@ export function createMemoryRuntime(overrides: PlatformOverrides = {}): Platform
     // does not have to know that feedback ids come from somewhere else. `now` is
     // left at its default; only the store's own tests need to pin the clock.
     feedback: new InMemoryFeedbackStore(undefined, overrides.idGenerator?.("feedback")),
+    // Empty, deliberately — see the field's own note.
+    users: new InMemoryUserDirectory(),
     beneficiaryDirectory: new BeneficiaryDirectory(platform.bus),
     // `mode: "memory"` already says every context is volatile; repeating four of
     // them under a "partial" heading would imply the other six are durable.
@@ -247,6 +265,11 @@ export function createSupabaseRuntimeFromClient(
     // Same client, same schema as every other adapter: reports are stored beside
     // the data they complain about rather than in a second place that can drift.
     feedback: new SupabaseFeedbackStore(client, schema, overrides.idGenerator?.("feedback")),
+    // Same client, same schema. Reads and writes `user_profiles`, which is the
+    // table `SupabaseProfileDirectory` reads on every request — one table, so a
+    // role change takes effect on the appointee's next request rather than
+    // needing a second store to be kept in step.
+    users: new SupabaseUserDirectory(client, schema),
     // The adapter requires an explicit User-Agent and offers no default, which is
     // the right call: Nominatim's usage policy identifies callers by it, and an
     // anonymous or generic one gets the IP banned — with every village lookup

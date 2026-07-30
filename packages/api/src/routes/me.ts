@@ -30,6 +30,8 @@ export interface MeResponse {
    * to grant them.
    */
   readonly permissions: readonly string[];
+  /** Absent when the deployment cannot say. See `meBody`. */
+  readonly roleSource?: string;
 }
 
 /**
@@ -140,5 +142,20 @@ function meBody(actor: ActorContext): MeResponse {
     email: actor.email,
     role: actor.role,
     permissions: permissionsFor(actor.role),
+    /*
+     * WHERE THE ROLE CAME FROM (ADR 0018), so the page can show the appointment
+     * panel to the people who may use it.
+     *
+     * COSMETIC, exactly like `permissions`. The gate that matters is
+     * `isSuperAdmin` in front of every /admin route; this is here so an
+     * administrator who cannot appoint is not shown a panel whose every button
+     * returns 403. Flipping it in devtools reveals a form and changes nothing
+     * about what the server will accept.
+     *
+     * Emitted only when it is known — an actor resolved by the in-memory
+     * directory has no provenance, and a fabricated "self" would be this file
+     * inventing a fact rather than reporting one.
+     */
+    ...(actor.roleSource === undefined ? {} : { roleSource: actor.roleSource }),
   };
 }

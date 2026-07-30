@@ -19,6 +19,7 @@
 | [0015](0015-ending-a-session.md) | Ending a session: deliberate, reachable, and automatic | Accepted |
 | [0016](0016-in-app-feedback.md) | In-app feedback: reports from the people using it, with the context attached | Accepted — amended |
 | [0017](0017-migration-rehearsal-instead-of-a-staging-environment.md) | Rehearse the migrations, rather than build a staging environment | Accepted |
+| [0018](0018-appointing-administrators.md) | More than one administrator: provenance, not a sixth role | Accepted |
 
 0008–0011 form one coherent change — identity, what identities may do, how identity reaches the
 code that needs it, and what gets recorded. All four are built and their migrations are applied.
@@ -27,6 +28,10 @@ assumed was safe. 0012 is independent of all of them.
 
 0015 covers the other end of a session: the sign-out ADR 0008 built but left reachable from only one
 of five views, plus an idle timeout for the tab nobody closes.
+
+0018 answers "one administrator does not scale" without handing out an unchecked credential that
+cannot be taken back: roles gain provenance, and only an administrator named in version control may
+appoint another. It extends 0009 rather than amending it — the role set is unchanged.
 
 0016 and 0017 both follow the version 1 release and answer the same question from opposite ends —
 how a fault gets reported, and how one is stopped from shipping. 0017 also says plainly what it does

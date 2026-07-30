@@ -19,9 +19,9 @@ Built and maintained by [Mondweep Chakravorty](https://www.linkedin.com/in/mondw
 | **[docs/DESIGN.md](docs/DESIGN.md)** | **System design**: context / container / component views, domain flows, eventing, persistence, security model, failure modes, known limitations |
 | **[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)** | **How to deploy**: Supabase provisioning, Cloud Run, verification, rollback, troubleshooting |
 | [docs/PRD.md](docs/PRD.md) | Product requirements, domain-driven: ubiquitous language, bounded contexts, aggregates and invariants, phased requirements |
-| [docs/adr/](docs/adr/) | **ADRs 0001–0017** — every architectural decision, including the ones that turned out to be wrong and were amended |
+| [docs/adr/](docs/adr/) | **ADRs 0001–0018** — every architectural decision, including the ones that turned out to be wrong and were amended |
 | [docs/incidents/](docs/incidents/) | Post-mortems. Currently one: an id collision that destroyed a village record and misattributed its children |
-| [supabase/](supabase/) | Schema migrations 00001–00009, RLS policies, public transparency views |
+| [supabase/](supabase/) | Schema migrations 00001–00010, RLS policies, public transparency views |
 
 ## Layout
 
@@ -51,7 +51,7 @@ Only `packages/api` is a running process; everything else is a library.
 
 ```bash
 npm install
-npm test          # the regression pack — 1,510 tests across 118 files at time of writing
+npm test          # the regression pack — 1,633 tests across 123 files at time of writing
 npm run typecheck # tsc --noEmit, strict
 npm run build     # esbuild bundle; NOT exercised by npm test — see below
 npm run dev       # build + serve on http://localhost:8080, in-memory persistence
@@ -225,6 +225,7 @@ The assessment stands for when it is built:
 | Identity | Supabase Auth (GoTrue). Email/password and Google. JWTs verified locally against JWKS; the API never issues a token (ADR 0008) |
 | Membership | **Explicit.** A valid token is not membership — the Supabase project is shared with unrelated applications, so a profile is created only by deliberate registration (ADR 0014) |
 | Authorization | Five roles, enforced at the use-case boundary. A citizen cannot reach the beneficiary register (ADR 0009) |
+| Appointment | Roles have **provenance**. An admin named in version control may appoint others; an admin appointed in-app may not appoint a third (ADR 0018) |
 | Ownership | You may edit what you created. Recorded off the creation event, so a use case cannot save a record without registering who made it (ADR 0009) |
 | Audit | Every domain event persisted with its actor, append-only — `update`/`delete` revoked from `service_role` itself (ADR 0011) |
 | Sessions | Access token in memory, refresh token in `sessionStorage`; closing the tab ends the session. 30-minute idle sign-out (ADR 0015) |
@@ -250,6 +251,11 @@ recovery scores, funds, volunteers, plans, signals, geocoding, and `POST /feedba
 **Admin or district officer:** `GET /audit`, `GET /audit/subjects/:type/:id`, `GET /audit/actors/:id`.
 
 **Admin only:** `POST /villages/:id/demonstration`, and reading the feedback queue.
+
+**Super admin only** — an `admin` whose role came from `role_grants`, i.e. from a migration in this
+repository: `GET /admin/users`, `PATCH /admin/users/:id/role`. An administrator appointed through
+that second endpoint can do everything an administrator does *except* appoint another one, so the set
+of people holding unchecked access stays exactly the set named here (ADR 0018).
 
 Amounts are **rupees** (major units) throughout the API — `sanctionedInr`, `amountInr` — with the
 symbol added by the client and `currency` carried as a separate field. Storage remains integer paise,
